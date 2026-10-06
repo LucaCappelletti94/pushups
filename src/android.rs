@@ -20,7 +20,7 @@ use parking_lot::Mutex;
 use crate::dispatch::DISPATCHER;
 use crate::queue::{Entry, QueueFile};
 use crate::session::{Route, Session};
-use crate::{Config, Error, Event, Message, Permission, Token};
+use crate::{Config, Error, Event, Message, Notification, Permission, Token};
 
 /// What `Native.init` hands over, once per process.
 struct Runtime {
@@ -90,6 +90,18 @@ pub(crate) async fn request_permission() -> Result<Permission, Error> {
             "the permission request ended without an answer".to_owned(),
         )),
     }
+}
+
+pub(crate) fn in_service_worker() -> bool {
+    false
+}
+
+pub(crate) fn serve_service_worker<H, F>(_handler: H) -> Result<(), Error>
+where
+    H: Fn(Message) -> F + 'static,
+    F: Future<Output = Notification> + 'static,
+{
+    Err(Error::NotInServiceWorker)
 }
 
 /// Binds the UI session to the handler just set, and hands it the queue if the session was

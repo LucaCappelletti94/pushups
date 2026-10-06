@@ -11,38 +11,51 @@ mod config;
 mod dispatch;
 mod error;
 mod event;
+mod notification;
 mod permission;
 #[cfg(any(target_os = "android", test))]
 mod queue;
 #[cfg(any(target_os = "android", test))]
 mod session;
 mod token;
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(
+    target_os = "android",
+    all(target_arch = "wasm32", target_os = "unknown")
+)))]
 mod unsupported;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+mod web;
+#[cfg(any(all(target_arch = "wasm32", target_os = "unknown"), test))]
+mod web_parts;
 
 use std::sync::Arc;
 
 #[cfg(target_os = "android")]
 use android as platform;
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(
+    target_os = "android",
+    all(target_arch = "wasm32", target_os = "unknown")
+)))]
 use unsupported as platform;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+use web as platform;
 
 pub use android_context::AndroidContext;
-pub use config::Config;
+pub use config::{Config, WebPushConfig};
 use dispatch::DISPATCHER;
 pub use error::Error;
 pub use event::{Event, Message};
+pub use notification::Notification;
 pub use permission::Permission;
 pub use pushups_macros::{background_handler, firebase_config};
 pub use token::{Token, WebPushKeys};
-
 /// Connects the app to the platform's push service, before the toolkit's event loop starts.
 ///
 /// # Errors
 ///
-/// [`Error::Unsupported`] on a target without a push backend, and
+/// [`Error::Unsupported`] on a target without a push backend or a browser without the Push API,
 /// [`Error::AndroidModuleMissing`] on Android when the app does not include the crate's Gradle
-/// module.
+/// module, and [`Error::NotConfigured`] on the web without a [`WebPushConfig`].
 pub fn install(config: Config) -> Result<(), Error> {
     platform::install(config)
 }
@@ -91,4 +104,25 @@ pub fn events() -> impl futures_core::Stream<Item = Event> + Send + Unpin {
     let events = DISPATCHER.events();
     platform::handler_set();
     events
+}
+
+/// Whether this code runs in the app's service worker, where `main` should call
+/// [`serve_service_worker`] instead of starting its UI.
+#[must_use]
+pub fn in_service_worker() -> bool {
+    platform::in_service_worker()
+}
+
+/// Builds the notification for every push the service worker receives, from the app's own
+/// Rust, for an app that set [`WebPushConfig::rust_handler`].
+///
+/// # Errors
+///
+/// [`Error::NotInServiceWorker`] outside the service worker.
+pub fn serve_service_worker<H, F>(handler: H) -> Result<(), Error>
+where
+    H: Fn(Message) -> F + 'static,
+    F: Future<Output = Notification> + 'static,
+{
+    platform::serve_service_worker(handler)
 }

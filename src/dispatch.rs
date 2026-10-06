@@ -47,7 +47,11 @@ impl Dispatcher {
     }
 
     #[cfg_attr(
-        not(any(test, target_os = "android")),
+        not(any(
+            test,
+            target_os = "android",
+            all(target_arch = "wasm32", target_os = "unknown")
+        )),
         expect(
             dead_code,
             reason = "platform backends emit events, and this target has none"

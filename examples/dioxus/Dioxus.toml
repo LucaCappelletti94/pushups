@@ -1,5 +1,7 @@
 [application]
 name = "pushups-dioxus-example"
+# Serves js/pushups-sw.js at /pushups-sw.js, the static worker's default path.
+public_dir = "../../js"
 
 [bundle]
 identifier = "rs.pushups.example"

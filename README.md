@@ -67,9 +67,39 @@ fn on_push(context: AndroidContext, message: Message) {
 
 The payload is the FCM `data` map as a JSON object. A notification message that FCM shows itself reaches the app when the user taps it.
 
+## Web
+
+The web target needs the app's VAPID public key. Every push shows a notification, as browsers require, and a payload in the [Declarative Web Push](https://webkit.org/blog/16535/meet-declarative-web-push/) shape (`"web_push": 8030`) is shown as it is. Pushes that arrive with no page open wait in `IndexedDB` for the next page's handler.
+
+By default the app serves `js/pushups-sw.js` from this crate at `/pushups-sw.js`, a service worker with no wasm in it. An app that needs Rust to build the notification, to decrypt an end-to-end encrypted payload for instance, sets `rust_handler`. Its own wasm then runs as the service worker, with no second build, and its `main` serves the handler there.
+
+```rust
+use pushups::{Config, Message, Notification, WebPushConfig};
+
+async fn notification_for(message: Message) -> Notification {
+    Notification::new("New message")
+        .body(format!("{} bytes", message.payload.len()))
+        .navigate("/inbox")
+}
+
+fn main() {
+    if pushups::in_service_worker() {
+        pushups::serve_service_worker(notification_for).expect("in the service worker");
+        return;
+    }
+    let vapid_public_key = [4; 65];
+    let config = Config::new().web(WebPushConfig::new(vapid_public_key).rust_handler());
+    if let Err(error) = pushups::install(config) {
+        eprintln!("no push on this target: {error}");
+    }
+}
+```
+
+Web Push needs HTTPS, or `localhost` while developing. On iOS it works only in web apps added to the home screen, which never get `pushsubscriptionchange`, so the page should call `register` on every load. Webviews expose no Push API, so an app in a webview uses its platform's native backend.
+
 | Platform | Push service | Backend |
 |---|---|---|
 | Android | FCM | available |
 | iOS, macOS | APNs | in development |
 | Windows | WNS | in development |
-| Web | Web Push | in development |
+| Web | Web Push | available |

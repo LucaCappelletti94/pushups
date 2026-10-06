@@ -1,13 +1,19 @@
 //! Receives pushes through `pushups` and logs every step with its wall-clock time, under the
-//! logcat tag `pushups-example`, so a device proof can time send to delivery.
+//! logcat tag `pushups-example` on Android and in the console on the web, so a device proof can
+//! time send to delivery.
+//!
+//! On the web, `PUSHUPS_VAPID_PUBLIC_KEY` (base64url) at build time sets the VAPID key, and
+//! `PUSHUPS_WEB_WORKER=static` registers the static worker in place of the Rust handler.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use dioxus::prelude::*;
 use futures_util::StreamExt;
-use pushups::{AndroidContext, Event, Message, Permission};
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use pushups::{AndroidContext, Config, Event, Message, Notification, Permission, WebPushConfig};
 
 #[cfg(target_os = "android")]
 #[manganis::ffi("../../android")]
@@ -22,10 +28,40 @@ pushups::firebase_config!("google-services.json");
 const CATCH_UP: &str = "127.0.0.1:8787";
 
 fn main() {
-    if let Err(error) = pushups::install(pushups::Config::new()) {
+    if pushups::in_service_worker() {
+        if let Err(error) = pushups::serve_service_worker(notification_for) {
+            log(&format!("serving the service worker failed: {error}"));
+        }
+        return;
+    }
+    if let Err(error) = pushups::install(config()) {
         log(&format!("install failed: {error}"));
     }
     dioxus::launch(App);
+}
+
+fn config() -> Config {
+    let key = option_env!("PUSHUPS_VAPID_PUBLIC_KEY")
+        .and_then(|key| URL_SAFE_NO_PAD.decode(key).ok())
+        .and_then(|key| <[u8; 65]>::try_from(key).ok());
+    let Some(key) = key else {
+        return Config::new();
+    };
+    let web = WebPushConfig::new(key);
+    Config::new().web(match option_env!("PUSHUPS_WEB_WORKER") {
+        Some("static") => web,
+        _ => web.rust_handler(),
+    })
+}
+
+/// Runs in the service worker for every push, and decides what the user sees.
+async fn notification_for(message: Message) -> Notification {
+    let at = now_ms();
+    let line = timing(&message, at);
+    log(&format!("worker push at_ms={at} {line}"));
+    Notification::new("pushups from Rust")
+        .body(format!("built in the service worker, {line}"))
+        .navigate("/")
 }
 
 #[component]
@@ -70,6 +106,14 @@ fn App() -> Element {
 fn describe(event: &Event) -> String {
     let at = now_ms();
     match event {
+        Event::Token(token @ pushups::Token::WebPush { endpoint, .. }) => {
+            let keys = token.web_push_keys().expect("a Web Push token has keys");
+            let subscription = serde_json::json!({
+                "endpoint": endpoint,
+                "keys": { "p256dh": keys.p256dh, "auth": keys.auth },
+            });
+            format!("ui token at_ms={at} subscription={subscription}")
+        }
         Event::Token(token) => format!("ui token at_ms={at} {token:?}"),
         Event::RegistrationFailed(error) => format!("ui registration failed at_ms={at} {error}"),
         Event::Message(message) => format!(
@@ -121,10 +165,20 @@ fn catch_up() -> String {
     attempt().unwrap_or_else(|error| format!("failed: {error}"))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn now_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_millis())
+}
+
+/// `SystemTime` has no clock on `wasm32-unknown-unknown`.
+#[cfg(target_arch = "wasm32")]
+fn now_ms() -> u128 {
+    let ms = js_sys::Date::now();
+    // Milliseconds since 1970 are positive and far below 2^53, so the conversion is exact.
+    debug_assert!(ms.is_finite() && ms >= 0.0, "Date.now() is a time");
+    ms as u128
 }
 
 #[cfg(target_os = "android")]
@@ -146,7 +200,12 @@ fn log(line: &str) {
     }
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(target_arch = "wasm32")]
+fn log(line: &str) {
+    web_sys::console::log_1(&format!("pushups-example {line}").into());
+}
+
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 fn log(line: &str) {
     println!("pushups-example {line}");
 }

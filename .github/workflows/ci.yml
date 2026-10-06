@@ -201,3 +201,23 @@ jobs:
         working-directory: examples/dioxus
         # The runner image exports its NDK path as a shell variable, which `env` cannot read.
         run: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" dx build --android --target aarch64-linux-android
+
+  example-web:
+    name: Example web build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add --toolchain stable wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: dioxus-cli@0.7.10
+      - run: cp tests/fixtures/google-services.json examples/dioxus/google-services.json
+      - name: Build the web app in both worker modes
+        working-directory: examples/dioxus
+        run: |
+          dx build --web --release --no-default-features --features web
+          PUSHUPS_WEB_WORKER=static dx build --web --release --no-default-features --features web
+          test -f target/dx/pushups-dioxus-example/release/web/public/pushups-sw.js

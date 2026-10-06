@@ -27,6 +27,12 @@ thiserror = "2"
 futures-channel = { version = "0.3", default-features = false, features = ["std"] }
 jni = "0.22"
 
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Navigator", "Notification", "RegistrationOptions", "ServiceWorkerContainer", "ServiceWorkerRegistration", "Window", "console"] }
+
 [dev-dependencies]
 futures-executor = "0.3"
 tempfile = "3"
