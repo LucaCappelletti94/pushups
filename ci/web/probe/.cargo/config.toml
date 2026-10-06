@@ -1,0 +1,6 @@
+[build]
+target = "wasm32-unknown-unknown"
+
+[target.wasm32-unknown-unknown]
+# minicov is the profiler runtime, and the linker must keep the counters nothing references.
+rustflags = ["-Zno-profiler-runtime", "-Clink-args=--no-gc-sections"]

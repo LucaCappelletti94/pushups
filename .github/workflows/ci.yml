@@ -143,9 +143,48 @@ jobs:
             target/android-${{ matrix.api }}-kotlin.xml
           if-no-files-found: error
 
+  web-coverage:
+    name: Web in Chrome and Firefox
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the probe's toolchain and its wasm-bindgen
+        id: tools
+        run: |
+          rustup toolchain install nightly --profile minimal --component llvm-tools,clippy,rustfmt --target wasm32-unknown-unknown
+          version=$(grep -A1 '^name = "wasm-bindgen"$' ci/web/probe/Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
+          echo "wasm-bindgen=$version" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ steps.tools.outputs.wasm-bindgen }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ci/web/package-lock.json
+      - run: npm ci
+        working-directory: ci/web
+      - name: Lint the probe
+        working-directory: ci/web/probe
+        run: |
+          cargo fmt --check
+          cargo clippy -- -D warnings
+      - run: ci/web/build.sh
+      - name: Chrome, through Firebase Cloud Messaging
+        run: node ci/web/harness.mjs chrome target/web
+      - name: Firefox, through Mozilla autopush
+        run: FIREFOX_PATH="$(command -v firefox)" node ci/web/harness.mjs firefox target/web
+      - run: ci/web/report.sh target/web target/web-rust.lcov target/web-shim.lcov
+      - uses: actions/upload-artifact@v7
+        with:
+          name: web-coverage
+          path: target/web-*.lcov
+          if-no-files-found: error
+
   coverage:
     name: Coverage and Sonar
-    needs: android-coverage
+    needs: [android-coverage, web-coverage]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Neither a fork's pull request nor a Dependabot run can read CODECOV_TOKEN or SONAR_TOKEN.
@@ -164,13 +203,13 @@ jobs:
       - run: cargo +nightly llvm-cov --workspace --all-features --doc --no-clean --lcov --output-path target/coverage.lcov
       - uses: actions/download-artifact@v8
         with:
-          pattern: "android-*-coverage"
+          pattern: "*-coverage"
           merge-multiple: true
           path: target
       - uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: target/coverage.lcov,target/android-29-rust.lcov,target/android-35-rust.lcov,target/android-29-kotlin.xml,target/android-35-kotlin.xml
+          files: target/coverage.lcov,target/android-29-rust.lcov,target/android-35-rust.lcov,target/android-29-kotlin.xml,target/android-35-kotlin.xml,target/web-rust.lcov,target/web-shim.lcov
           fail_ci_if_error: true
       # The Sonar analyzer runs clippy itself.
       - run: rustup toolchain install stable --profile minimal --component clippy

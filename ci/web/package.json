@@ -1,0 +1,14 @@
+{
+  "name": "pushups-web-harness",
+  "private": true,
+  "type": "module",
+  "description": "Drives the probe through pushups in real browsers with real pushes, and reports coverage",
+  "dependencies": {
+    "istanbul-lib-coverage": "^3.2.2",
+    "istanbul-lib-instrument": "^6.0.3",
+    "istanbul-lib-report": "^3.0.1",
+    "istanbul-reports": "^3.2.0",
+    "puppeteer-core": "^25.12.0",
+    "web-push": "^3.6.7"
+  }
+}
