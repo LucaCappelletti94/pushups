@@ -1,0 +1,6 @@
+[application]
+name = "pushups-dioxus-example"
+
+[bundle]
+identifier = "rs.pushups.example"
+publisher = "pushups"

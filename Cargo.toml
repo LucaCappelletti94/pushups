@@ -13,14 +13,23 @@ categories = ["api-bindings", "os", "wasm"]
 [features]
 stream = ["dep:futures-channel", "dep:futures-core"]
 
+[workspace]
+members = ["pushups-macros"]
+
 [dependencies]
 futures-channel = { version = "0.3", optional = true, default-features = false, features = ["std"] }
 futures-core = { version = "0.3", optional = true, default-features = false }
 parking_lot = "0.12"
+pushups-macros = { version = "0.1.0", path = "pushups-macros" }
 thiserror = "2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+futures-channel = { version = "0.3", default-features = false, features = ["std"] }
+jni = "0.22"
 
 [dev-dependencies]
 futures-executor = "0.3"
+tempfile = "3"
 
 [package.metadata.docs.rs]
 all-features = true

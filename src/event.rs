@@ -9,6 +9,9 @@ pub enum Event {
     RegistrationFailed(Error),
     /// A push arrived.
     Message(Message),
+    /// The push service dropped pushes it could not deliver, so the app should fetch what it
+    /// missed from its server.
+    MessagesDropped,
 }
 
 /// A received push.

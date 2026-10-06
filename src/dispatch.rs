@@ -47,7 +47,7 @@ impl Dispatcher {
     }
 
     #[cfg_attr(
-        not(test),
+        not(any(test, target_os = "android")),
         expect(
             dead_code,
             reason = "platform backends emit events, and this target has none"
@@ -57,6 +57,31 @@ impl Dispatcher {
         let mut state = self.state.lock();
         state.queue.push_back(event);
         self.deliver(state);
+    }
+
+    /// Queues `event` behind the ones before it without delivering, for a caller holding a lock
+    /// the handler may need. [`flush`](Self::flush) delivers.
+    #[cfg_attr(
+        not(any(test, target_os = "android")),
+        expect(
+            dead_code,
+            reason = "the Android backend queues under its own lock, and this target has none"
+        )
+    )]
+    pub(crate) fn enqueue(&self, event: Event) {
+        self.state.lock().queue.push_back(event);
+    }
+
+    /// Delivers the queued events, if a handler is set.
+    #[cfg_attr(
+        not(any(test, target_os = "android")),
+        expect(
+            dead_code,
+            reason = "the Android backend queues under its own lock, and this target has none"
+        )
+    )]
+    pub(crate) fn flush(&self) {
+        self.deliver(self.state.lock());
     }
 
     /// Replaces the handler with one feeding the returned receiver.
@@ -252,6 +277,21 @@ mod tests {
                 .collect();
             assert_eq!(sequences, (0..PER_THREAD).collect::<Vec<_>>());
         }
+    }
+
+    #[test]
+    fn enqueued_events_wait_for_flush_and_keep_their_place() {
+        let dispatcher = Dispatcher::new();
+        let (seen, handler) = recorder();
+        dispatcher.set_handler(handler);
+        dispatcher.enqueue(message(1));
+        dispatcher.enqueue(message(2));
+        assert!(seen.lock().is_empty());
+        dispatcher.emit(message(3));
+        assert_eq!(*seen.lock(), [message(1), message(2), message(3)]);
+        dispatcher.enqueue(message(4));
+        dispatcher.flush();
+        assert_eq!(seen.lock().len(), 4);
     }
 
     #[cfg(feature = "stream")]
