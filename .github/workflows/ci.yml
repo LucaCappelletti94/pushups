@@ -134,6 +134,5 @@ jobs:
       - run: cp tests/fixtures/google-services.json examples/dioxus/google-services.json
       - name: Build the APK, Gradle module included
         working-directory: examples/dioxus
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
-        run: dx build --android --target aarch64-linux-android
+        # The runner image exports its NDK path as a shell variable, which `env` cannot read.
+        run: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" dx build --android --target aarch64-linux-android
