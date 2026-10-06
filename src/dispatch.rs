@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::mem;
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
 
 use parking_lot::{Mutex, MutexGuard};
@@ -16,7 +16,8 @@ pub(crate) static DISPATCHER: Dispatcher = Dispatcher::new();
 /// Events wait in the queue until a handler is set. The thread that finds events queued while
 /// nobody is delivering delivers until the queue is empty, so the handler never runs
 /// concurrently with itself, and an event emitted during a delivery, by the handler or by any
-/// other thread, queues behind the events emitted before it.
+/// other thread, queues behind the events emitted before it. A handler that panics loses only
+/// the event it was given, and the panic reaches the delivering caller once the queue is empty.
 pub(crate) struct Dispatcher {
     state: Mutex<State>,
 }
@@ -74,6 +75,7 @@ impl Dispatcher {
             return;
         }
         state.delivering = true;
+        let mut first_panic = None;
         loop {
             let Some(handler) = state.handler.clone() else {
                 break;
@@ -82,21 +84,16 @@ impl Dispatcher {
                 break;
             };
             drop(state);
-            let unwinding = StopDeliveringOnUnwind(self);
-            handler(event);
-            mem::forget(unwinding);
+            if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| handler(event))) {
+                first_panic.get_or_insert(payload);
+            }
             state = self.state.lock();
         }
         state.delivering = false;
-    }
-}
-
-/// Lets the next emitter take over delivery when the handler panics.
-struct StopDeliveringOnUnwind<'a>(&'a Dispatcher);
-
-impl Drop for StopDeliveringOnUnwind<'_> {
-    fn drop(&mut self) {
-        self.0.state.lock().delivering = false;
+        drop(state);
+        if let Some(payload) = first_panic {
+            panic::resume_unwind(payload);
+        }
     }
 }
 
@@ -193,6 +190,29 @@ mod tests {
         assert!(replay.is_err());
         dispatcher.emit(message(3));
         assert_eq!(*seen.lock(), [message(2), message(3)]);
+    }
+
+    #[test]
+    fn events_queued_while_a_handler_panics_are_still_delivered() {
+        let dispatcher = Arc::new(Dispatcher::new());
+        dispatcher.emit(message(1));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let handler = {
+            let seen = Arc::clone(&seen);
+            let dispatcher = Arc::clone(&dispatcher);
+            move |event: Event| {
+                if event == message(1) {
+                    dispatcher.emit(message(2));
+                    panic!("handler failure");
+                }
+                seen.lock().push(event);
+            }
+        };
+        let replay = catch_unwind(AssertUnwindSafe(|| {
+            dispatcher.set_handler(Arc::new(handler));
+        }));
+        assert!(replay.is_err());
+        assert_eq!(*seen.lock(), [message(2)]);
     }
 
     #[test]
