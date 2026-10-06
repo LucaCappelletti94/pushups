@@ -133,10 +133,13 @@ impl QueueFile {
     pub(crate) fn append(&self, entry: &Entry) -> io::Result<()> {
         let mut file = OpenOptions::new()
             .create(true)
+            .read(true)
             .append(true)
             .open(&self.path)?;
         let mut record = Vec::new();
-        if file.metadata()?.len() == 0 {
+        if !starts_with_header(&mut file)? {
+            // A first append cut inside the header leaves a prefix no reader accepts.
+            file.set_len(0)?;
             record.extend_from_slice(HEADER);
         }
         entry.encode(&mut record)?;
@@ -161,6 +164,15 @@ impl QueueFile {
 fn empty(file: &File) -> io::Result<()> {
     file.set_len(0)?;
     file.sync_data()
+}
+
+fn starts_with_header(file: &mut File) -> io::Result<bool> {
+    let mut start = [0; HEADER.len()];
+    match file.read_exact(&mut start) {
+        Ok(()) => Ok(&start == HEADER),
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]
@@ -264,5 +276,21 @@ mod tests {
         assert_eq!(reopened.take_all().unwrap(), []);
         reopened.append(&Entry::MessagesDropped).unwrap();
         assert_eq!(queue.take_all().unwrap(), [Entry::MessagesDropped]);
+    }
+
+    #[test]
+    fn an_append_after_a_header_cut_short_is_kept() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue");
+        for cut in 1..HEADER.len() {
+            std::fs::write(&path, &HEADER[..cut]).unwrap();
+            let queue = QueueFile::new(path.clone());
+            queue.append(&Entry::MessagesDropped).unwrap();
+            assert_eq!(
+                queue.take_all().unwrap(),
+                [Entry::MessagesDropped],
+                "cut at {cut}"
+            );
+        }
     }
 }
