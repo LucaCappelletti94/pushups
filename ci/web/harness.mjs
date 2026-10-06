@@ -22,6 +22,8 @@ const WAIT_MS = 30_000;
 // A fresh Chrome profile checks in with Google before its first subscription, which took 33 s.
 const SUBSCRIBE_MS = 120_000;
 const PUSH_TIMEOUT_MS = 15_000;
+// FCM answered 410 to a subscription made a quarter second earlier in 4 of 12 tries, and 201 three seconds later.
+const PUSH_GONE_RETRY_MS = 30_000;
 
 const vapid = webpush.generateVAPIDKeys();
 webpush.setVapidDetails("mailto:pushups-ci@users.noreply.github.com", vapid.publicKey, vapid.privateKey);
@@ -100,10 +102,21 @@ async function saveWorkers(browser, label) {
   }
 }
 
+/** Sends one push, retrying a 410 for a while, since FCM gives it for a subscription it has not propagated yet. */
 async function push(token, payload) {
   const subscription = { endpoint: token.endpoint, keys: { p256dh: token.p256dh, auth: token.auth } };
-  const sent = await webpush.sendNotification(subscription, payload, { TTL: 300, timeout: PUSH_TIMEOUT_MS });
-  log(`sent ${JSON.stringify(payload)}: HTTP ${sent.statusCode}`);
+  const deadline = performance.now() + PUSH_GONE_RETRY_MS;
+  for (;;) {
+    try {
+      const sent = await webpush.sendNotification(subscription, payload, { TTL: 300, timeout: PUSH_TIMEOUT_MS });
+      log(`sent ${JSON.stringify(payload)}: HTTP ${sent.statusCode}`);
+      return;
+    } catch (error) {
+      if (error.statusCode !== 410 || performance.now() > deadline) throw error;
+      log(`sending ${JSON.stringify(payload)}: HTTP 410, retrying`);
+      await sleep(1000);
+    }
+  }
 }
 
 class Probe {
