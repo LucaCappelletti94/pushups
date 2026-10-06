@@ -1,4 +1,4 @@
-# Instruments `pushups` alone, so the counters stay out of wasm-bindgen's own crates.
+# Instruments `pushups` and the probe, whose copies of `pushups`' generic functions count too, and leaves wasm-bindgen's own crates alone.
 cargo-features = ["profile-rustflags"]
 
 [package]
@@ -29,6 +29,9 @@ allow_attributes = "deny"
 allow_attributes_without_reason = "deny"
 
 [profile.dev.package.pushups]
+rustflags = ["-Cinstrument-coverage"]
+
+[profile.dev.package.pushups-web-probe]
 rustflags = ["-Cinstrument-coverage"]
 
 [workspace]

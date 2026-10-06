@@ -30,3 +30,21 @@ where
 {
     Err(Error::Unsupported)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{Error, Message, Notification};
+
+    async fn notification_for(_message: Message) -> Notification {
+        Notification::new("never shown")
+    }
+
+    #[test]
+    fn no_target_without_a_backend_is_a_service_worker() {
+        assert!(!crate::in_service_worker());
+        assert_eq!(
+            crate::serve_service_worker(notification_for),
+            Err(Error::Unsupported)
+        );
+    }
+}
