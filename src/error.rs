@@ -15,7 +15,8 @@ pub enum Error {
     /// The web target needs a [`WebPushConfig`](crate::WebPushConfig) in [`Config`](crate::Config).
     #[error("Web Push needs a WebPushConfig")]
     NotConfigured,
-    /// [`serve_service_worker`](crate::serve_service_worker) ran outside a service worker.
+    /// [`serve_service_worker`](crate::serve_service_worker) ran in a web page, outside the
+    /// service worker.
     #[error("not running in a service worker")]
     NotInServiceWorker,
 }

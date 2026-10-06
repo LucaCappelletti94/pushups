@@ -118,7 +118,7 @@ pub fn in_service_worker() -> bool {
 ///
 /// # Errors
 ///
-/// [`Error::NotInServiceWorker`] outside the service worker.
+/// [`Error::Unsupported`] off the web, and [`Error::NotInServiceWorker`] in a web page.
 pub fn serve_service_worker<H, F>(handler: H) -> Result<(), Error>
 where
     H: Fn(Message) -> F + 'static,

@@ -101,7 +101,7 @@ where
     H: Fn(Message) -> F + 'static,
     F: Future<Output = Notification> + 'static,
 {
-    Err(Error::NotInServiceWorker)
+    Err(Error::Unsupported)
 }
 
 /// Binds the UI session to the handler just set, and hands it the queue if the session was

@@ -126,7 +126,10 @@ async function onNotificationClick(event) {
     for (const window of windows) window.postMessage({ pushups: "drain" });
     return;
   }
-  if (typeof data.pushups === "number") await markStartedApp(data.pushups);
+  if (typeof data.pushups === "number") {
+    await markStartedApp(data.pushups).catch((error) =>
+      console.error("pushups: marking the push failed", error));
+  }
   await scope.clients.openWindow(data.navigate ?? new URL("/", scope.location.origin).href);
 }
 

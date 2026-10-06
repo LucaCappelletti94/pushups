@@ -28,5 +28,5 @@ where
     H: Fn(Message) -> F + 'static,
     F: Future<Output = Notification> + 'static,
 {
-    Err(Error::NotInServiceWorker)
+    Err(Error::Unsupported)
 }
