@@ -64,19 +64,19 @@ object ProcessState : Application.ActivityLifecycleCallbacks {
         }
     }
 
-    override fun onActivityStarted(activity: Activity) {}
+    override fun onActivityStarted(activity: Activity) = Unit
 
-    override fun onActivityResumed(activity: Activity) {}
+    override fun onActivityResumed(activity: Activity) = Unit
 
-    override fun onActivityPaused(activity: Activity) {}
+    override fun onActivityPaused(activity: Activity) = Unit
 
-    override fun onActivityStopped(activity: Activity) {}
+    override fun onActivityStopped(activity: Activity) = Unit
 
-    override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+    override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
 
     /**
-     * Records this push and reports whether the app was started for it: the first push of a
-     * process that never created an Activity.
+     * Records this push and reports whether it started the app, which holds for the first push
+     * of a process that never created an Activity.
      */
     fun pushStartedApp(): Boolean = synchronized(lock) {
         val startedApp = pushesSeen == 0 && !everCreatedActivity

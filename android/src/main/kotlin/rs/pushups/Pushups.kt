@@ -20,7 +20,6 @@ object Pushups {
     /** Asks Firebase for a token, which arrives through [Native.onRegistered]. */
     @JvmStatic
     fun register() {
-        val appContext = context ?: return
         try {
             FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
                 if (task.isSuccessful) {
