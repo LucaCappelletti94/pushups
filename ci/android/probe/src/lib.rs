@@ -13,9 +13,14 @@ use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{JClass, JString};
 use jni::sys::jboolean;
 use parking_lot::Mutex;
-use pushups::{AndroidContext, Config, Event, Message, Token};
+use pushups::{Config, Event, Message, Token};
 
+#[cfg(feature = "config-real")]
 pushups::firebase_config!("google-services.json");
+#[cfg(feature = "config-fixture")]
+pushups::firebase_config!("../../../tests/fixtures/google-services.json");
+#[cfg(feature = "config-mismatched")]
+pushups::firebase_config!("mismatched-services.json");
 
 /// Every event the handler received, one line each, in order.
 static EVENTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -29,8 +34,9 @@ unsafe extern "C" {
     fn __llvm_profile_write_file() -> c_int;
 }
 
+#[cfg(feature = "background-handler")]
 #[pushups::background_handler]
-fn on_push(_context: AndroidContext, message: Message) {
+fn on_push(_context: pushups::AndroidContext, message: Message) {
     HANDLED.lock().push(describe_message(&message));
 }
 

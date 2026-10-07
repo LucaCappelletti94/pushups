@@ -2,6 +2,7 @@ package rs.pushups.ci
 
 import android.app.Activity
 import android.content.Context
+import android.os.Build
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -24,9 +25,9 @@ import org.junit.FixMethodOrder
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.runners.MethodSorters
-import java.io.File
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import rs.pushups.PushupsMessagingService
 
 /**
  * Walks one process through the plan's Android delivery table with real FCM pushes. The steps
@@ -38,7 +39,6 @@ import java.util.concurrent.TimeUnit
 class PushupsTest {
 
     companion object {
-        private const val DELIVERY_MS = 90_000L
         private const val UI_MS = 30_000L
 
         private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
@@ -57,9 +57,9 @@ class PushupsTest {
 
         @AfterClass
         @JvmStatic
-        fun writeCoverage() {
+        fun finish() {
             scenario?.close()
-            assertTrue(Probe.writeCoverage(File(context.filesDir, "pushups.profraw").path))
+            writeCoverage()
         }
 
         /** A fresh id for the push named [name], remembered for later steps. */
@@ -69,13 +69,6 @@ class PushupsTest {
         private fun sendData(id: String) {
             Pushes.send(context, id, JSONObject().put("token", token).put("data", JSONObject().put("id", id)))
         }
-
-        private fun lines(text: String) = if (text.isEmpty()) emptyList() else text.split("\n")
-
-        /** The line of [source] carrying [id], waiting for it up to [boundMs]. */
-        private fun awaitLine(source: () -> String, id: String, boundMs: Long = DELIVERY_MS): String =
-            waitFor(boundMs) { lines(source()).firstOrNull { it.contains(id) } }
-                ?: error("no line with $id within ${boundMs / 1000} s, got:\n${source()}")
 
         private fun openUi() {
             scenario = ActivityScenario.launch(TapActivity::class.java)
@@ -140,6 +133,12 @@ class PushupsTest {
 
     @Test
     fun a05_thePromptAnswerIsReported() {
+        if (Build.VERSION.SDK_INT < 33) {
+            // Before Android 13 notifications need no runtime permission, so no prompt shows.
+            Probe.startPermission()
+            assertEquals("Granted", awaitPermission())
+            return
+        }
         Probe.startPermission()
         answerPrompt("permission_deny_button")
         assertEquals("Denied", awaitPermission())
@@ -168,6 +167,9 @@ class PushupsTest {
     @Test
     fun a07_aTapDeliversTheDataOnce() {
         closeUi()
+        // A corrupt tap history starts afresh, and the tap still arrives.
+        context.getSharedPreferences("pushups", Context.MODE_PRIVATE).edit()
+            .putString("delivered_message_ids", "not a list").commit()
         val id = id("tap")
         val title = "pushups tap $id"
         Pushes.send(
@@ -197,5 +199,14 @@ class PushupsTest {
         instrumentation.runOnMainSync {
             ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).forEach { it.finish() }
         }
+    }
+
+    @Test
+    fun a08_droppedMessagesReachTheHandler() {
+        openUi()
+        Probe.setHandler()
+        // FCM calls this after discarding pushes it held too long, which no test can provoke.
+        PushupsMessagingService().onDeletedMessages()
+        awaitLine(Probe::events, "dropped", UI_MS)
     }
 }

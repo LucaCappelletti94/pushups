@@ -16,3 +16,14 @@ futures-executor = "0.3"
 jni = "0.22"
 parking_lot = "0.12"
 pushups = { path = "../../.." }
+
+# What the app compiles in, chosen per run.sh variant: one Firebase configuration or none, and
+# the background handler or not.
+[features]
+background-handler = []
+# The example's real configuration.
+config-real = []
+# The repository's fixture, whose package matches and whose keys Firebase rejects.
+config-fixture = []
+# Two clients, neither for the test package.
+config-mismatched = []

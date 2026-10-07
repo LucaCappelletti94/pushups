@@ -1,7 +1,6 @@
 package rs.pushups.ci
 
 import android.content.Context
-import android.os.SystemClock
 import org.json.JSONObject
 import java.io.File
 
@@ -23,15 +22,5 @@ object Pushes {
         val answer = waitFor(ANSWER_MS) { status.takeIf { it.exists() }?.readText() }
             ?: error("the host did not send push $id within ${ANSWER_MS / 1000} s")
         check(answer.startsWith("$id 200")) { "FCM refused push $id: $answer" }
-    }
-}
-
-/** Polls [probe] until it returns non-null or [boundMs] passes on the monotonic clock. */
-fun <T> waitFor(boundMs: Long, probe: () -> T?): T? {
-    val deadline = SystemClock.elapsedRealtime() + boundMs
-    while (true) {
-        probe()?.let { return it }
-        if (SystemClock.elapsedRealtime() >= deadline) return null
-        SystemClock.sleep(250)
     }
 }

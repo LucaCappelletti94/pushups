@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- No pushups.lib_name, so PushupsProvider falls back to the Activity's
+             android.app.lib_name, the key android-activity and dx set. -->
+        <activity
+            android:name="rs.pushups.ci.TapActivity"
+            android:exported="false">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="pushups_probe" />
+        </activity>
+    </application>
+</manifest>

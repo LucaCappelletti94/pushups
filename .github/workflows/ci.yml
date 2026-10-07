@@ -85,9 +85,14 @@ jobs:
           RUSTDOCFLAGS: --cfg docsrs -D warnings
 
   android-coverage:
-    name: Android on an emulator
+    name: Android ${{ matrix.api }} on an emulator
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # 29 asks for no notification permission, 35 shows the Android 13 prompt.
+        api: [29, 35]
     # Neither a fork's pull request nor a Dependabot run can read the Firebase secrets.
     if: >-
       github.event_name == 'push' ||
@@ -114,26 +119,28 @@ jobs:
         run: |
           printf '%s' "$GOOGLE_SERVICES_JSON" > ci/android/probe/google-services.json
           printf '%s' "$FCM_SERVICE_ACCOUNT" > "$RUNNER_TEMP/fcm-service-account.json"
-      - name: Lint the probe
+      - name: Lint the probe under every configuration it is built with
         working-directory: ci/android/probe
         run: |
           cargo fmt --check
-          cargo clippy --target x86_64-linux-android -- -D warnings
+          for features in "" config-real "config-real background-handler" config-fixture config-mismatched; do
+            cargo clippy --target x86_64-linux-android ${features:+--features "$features"} -- -D warnings
+          done
       - name: Instrumented tests, through Firebase Cloud Messaging
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: ${{ matrix.api }}
           target: google_apis
           arch: x86_64
           disable-animations: true
           # The runner image exports its NDK path as a shell variable, which `env` cannot read.
-          script: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" ci/android/run.sh x86_64 "$RUNNER_TEMP/fcm-service-account.json"
+          script: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" ci/android/run.sh x86_64 "$RUNNER_TEMP/fcm-service-account.json" android-${{ matrix.api }}
       - uses: actions/upload-artifact@v7
         with:
-          name: android-coverage
+          name: android-${{ matrix.api }}-coverage
           path: |
-            target/android-rust.lcov
-            target/android-kotlin.xml
+            target/android-${{ matrix.api }}-rust.lcov
+            target/android-${{ matrix.api }}-kotlin.xml
           if-no-files-found: error
 
   coverage:
@@ -157,12 +164,13 @@ jobs:
       - run: cargo +nightly llvm-cov --workspace --all-features --doc --no-clean --lcov --output-path target/coverage.lcov
       - uses: actions/download-artifact@v8
         with:
-          name: android-coverage
+          pattern: "android-*-coverage"
+          merge-multiple: true
           path: target
       - uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: target/coverage.lcov,target/android-rust.lcov,target/android-kotlin.xml
+          files: target/coverage.lcov,target/android-29-rust.lcov,target/android-35-rust.lcov,target/android-29-kotlin.xml,target/android-35-kotlin.xml
           fail_ci_if_error: true
       # The Sonar analyzer runs clippy itself.
       - run: rustup toolchain install stable --profile minimal --component clippy

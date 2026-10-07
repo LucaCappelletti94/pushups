@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "123456789012",
+    "project_id": "pushups-mismatched",
+    "storage_bucket": "pushups-mismatched.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:123456789012:android:1111111111111111",
+        "android_client_info": {
+          "package_name": "rs.pushups.other.one"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyMismatchedMismatchedMismatched1"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:123456789012:android:2222222222222222",
+        "android_client_info": {
+          "package_name": "rs.pushups.other.two"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyMismatchedMismatchedMismatched2"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
