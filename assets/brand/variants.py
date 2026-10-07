@@ -37,6 +37,8 @@ svg("mark.svg", W + 2 * pad, H + 2 * pad, f"{gradient}\n  {mark}", f"{X0 - pad} 
 svg("icon.svg", 1024, 1024, f'<rect width="1024" height="1024" fill="{NAVY}"/>\n  {placed(1024, 0.66)}')
 # Apple's macOS icon grid, an 824 square with a 185 radius on a 1024 canvas.
 svg("icon-macos.svg", 1024, 1024, f'<rect x="100" y="100" width="824" height="824" rx="185" fill="{NAVY}"/>\n  {placed(1024, 0.48)}')
+# A maskable web icon, full bleed, with the mark inside the 80% circle Android crops to.
+svg("icon-maskable.svg", 1024, 1024, f'<rect width="1024" height="1024" fill="{NAVY}"/>\n  {placed(1024, 0.56)}')
 svg("favicon.svg", 64, 64, f'<rect width="64" height="64" rx="14" fill="{NAVY}"/>\n  {placed(64, 0.78)}')
 svg(
     "social.svg",
