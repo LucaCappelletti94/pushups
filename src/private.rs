@@ -149,6 +149,14 @@ pub mod android {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub use linkme;
+
+/// The app's background handler, which `#[background_handler]` adds on Linux and Windows.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[linkme::distributed_slice]
+pub static BACKGROUND_HANDLERS: [fn(crate::Context, crate::Message)];
+
 #[cfg(test)]
 mod tests {
     use super::*;

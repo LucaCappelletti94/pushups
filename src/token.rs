@@ -70,7 +70,7 @@ impl Token {
 }
 
 /// RFC 4648 base64 with the URL and filename safe alphabet and no padding.
-fn base64url(bytes: &[u8]) -> String {
+pub(crate) fn base64url(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let symbol = |index: u8| char::from(ALPHABET[usize::from(index)]);
     let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);

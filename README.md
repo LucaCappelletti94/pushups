@@ -7,7 +7,7 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.85-blue)](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/LucaCappelletti94/pushups/blob/main/LICENSE)
 
-Push notifications in Rust, one rep per platform. APNs on iOS and macOS, FCM on Android, WNS on Windows and Web Push in the browser, behind one API that works with tao, winit or any other toolkit.
+Push notifications in Rust, one rep per platform. APNs on iOS and macOS, FCM on Android, WNS on Windows, UnifiedPush on Linux and Web Push in the browser, behind one API that works with tao, winit or any other toolkit.
 
 The app installs the crate before its toolkit's event loop starts, sets one handler, and asks for a token. The handler receives the token to send to the app's server, and every push, including the one that started the app before the handler existed.
 
@@ -120,9 +120,26 @@ fn main() {
 
 Web Push needs HTTPS, or `localhost` while developing. On iOS it works only in web apps added to the home screen, and there a push reaches the handler when the app is next shown or started, even if it is open when the push arrives, since iOS gives the service worker no way to reach the open page ([WebKit bug 268797](https://bugs.webkit.org/show_bug.cgi?id=268797)). Safari never fires `pushsubscriptionchange`, so the page should call `register` on every load, which also moves a returning user to the new VAPID key after the app changes it. Webviews expose no Push API, so an app in a webview uses its platform's native backend.
 
+## Linux
+
+Linux has no push service of its own, so the crate speaks [UnifiedPush](https://unifiedpush.org) over the D-Bus session bus, through whichever distributor the user runs, such as KDE's. The app gives its reverse-DNS id, its name on the bus, and the VAPID public key of its server. The token is a Web Push subscription, so the server sends with any Web Push library.
+
+```rust
+use pushups::{Config, LinuxConfig, UnifiedPushConfig};
+
+let vapid_public_key = [4; 65];
+let config = Config::new()
+    .linux(LinuxConfig::new("org.example.App"))
+    .unified_push(UnifiedPushConfig::new(vapid_public_key));
+# let _ = config;
+```
+
+`install` writes a D-Bus activation file to `~/.local/share/dbus-1/services`, unless the system already ships one for the app, so a push to a closed app starts it. A process started that way never returns from `install`. It hands the push to the background handler, keeps it on disk for the next window's handler, and exits once idle, so the app's window never opens for a push. There is no permission prompt, and `request_permission` answers whether a distributor runs.
+
 | Platform | Push service | Backend |
 |---|---|---|
 | Android | FCM | available |
 | iOS, macOS | APNs | in development |
+| Linux | UnifiedPush over D-Bus | in development |
 | Windows | WNS | in development |
 | Web | Web Push | available |

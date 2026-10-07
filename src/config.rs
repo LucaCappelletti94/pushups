@@ -1,11 +1,13 @@
 /// What [`install`](crate::install) needs beyond the platform's own configuration.
 ///
 /// Each push service that needs values from the app gets its own part, set with its own
-/// method, so the same setup code compiles on every target. Apple and Android need none:
-/// Android reads Firebase's values through [`firebase_config!`](crate::firebase_config).
+/// method, so the same setup code compiles on every target. Apple and Android's FCM need none,
+/// since Android reads Firebase's values through [`firebase_config!`](crate::firebase_config).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Config {
     pub(crate) web: Option<WebPushConfig>,
+    pub(crate) unified_push: Option<UnifiedPushConfig>,
+    pub(crate) linux: Option<LinuxConfig>,
 }
 
 impl Config {
@@ -20,6 +22,55 @@ impl Config {
     pub fn web(mut self, web: WebPushConfig) -> Self {
         self.web = Some(web);
         self
+    }
+
+    /// Sets the UnifiedPush part, used on Linux and by UnifiedPush on Android.
+    #[must_use]
+    pub fn unified_push(mut self, unified_push: UnifiedPushConfig) -> Self {
+        self.unified_push = Some(unified_push);
+        self
+    }
+
+    /// Sets the Linux part, which the Linux target requires.
+    #[must_use]
+    pub fn linux(mut self, linux: LinuxConfig) -> Self {
+        self.linux = Some(linux);
+        self
+    }
+}
+
+/// The UnifiedPush part of [`Config`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnifiedPushConfig {
+    pub(crate) vapid_public_key: [u8; 65],
+}
+
+impl UnifiedPushConfig {
+    /// A configuration for the VAPID public key of the app's server, an uncompressed P-256 point.
+    ///
+    /// Distributors that deliver through FCM refuse a registration without it.
+    #[must_use]
+    pub fn new(vapid_public_key: [u8; 65]) -> Self {
+        Self { vapid_public_key }
+    }
+}
+
+/// The Linux part of [`Config`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinuxConfig {
+    pub(crate) app_id: String,
+}
+
+impl LinuxConfig {
+    /// A configuration for the app's reverse-DNS id, such as `org.example.App`.
+    ///
+    /// The id is the app's name on the D-Bus session bus, so a distributor can deliver to it and
+    /// start it for a push.
+    #[must_use]
+    pub fn new(app_id: impl Into<String>) -> Self {
+        Self {
+            app_id: app_id.into(),
+        }
     }
 }
 

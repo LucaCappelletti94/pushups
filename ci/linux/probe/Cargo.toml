@@ -1,0 +1,23 @@
+[package]
+name = "pushups-linux-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Built only by ci/linux/run.sh, the probe with `-Cinstrument-coverage`, so it stays out of the crate's workspace.
+[workspace]
+
+[[bin]]
+name = "pushups-linux-probe"
+path = "src/main.rs"
+
+# Sends a Web Push with the `web-push` crate, an implementation independent of the one under test.
+[[bin]]
+name = "send"
+path = "src/send.rs"
+
+[dependencies]
+pushups = { path = "../../.." }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt", "time"] }
+web-push = "0.11"

@@ -1,4 +1,4 @@
-//! The file where Android keeps events until a UI handler takes them.
+//! The file where Android and Linux keep events until a UI handler takes them.
 //!
 //! The file starts with [`HEADER`] and holds records appended one by one. A record is a tag
 //! byte followed by its fields, and lengths are little-endian `u32`.
@@ -8,6 +8,8 @@
 //! | 1 | message | `started_app` (0 or 1), payload length, payload |
 //! | 2 | FCM token | length, UTF-8 token |
 //! | 3 | messages dropped | none |
+//! | 4 | Web Push token | endpoint length, UTF-8 endpoint, 65-byte `p256dh`, 16-byte `auth` |
+//! | 5 | registration failed | length, UTF-8 reason |
 //!
 //! A process killed mid-append leaves a short last record, which reading ignores.
 
@@ -15,7 +17,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
-use crate::{Event, Message, Token};
+use crate::{Error, Event, Message, Token};
 
 /// Names the format and its version.
 pub(crate) const HEADER: &[u8; 8] = b"PUSHUPS\x01";
@@ -23,6 +25,8 @@ pub(crate) const HEADER: &[u8; 8] = b"PUSHUPS\x01";
 const MESSAGE: u8 = 1;
 const FCM_TOKEN: u8 = 2;
 const MESSAGES_DROPPED: u8 = 3;
+const WEB_PUSH_TOKEN: u8 = 4;
+const REGISTRATION_FAILED: u8 = 5;
 
 /// An event waiting in the queue.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +34,12 @@ pub(crate) enum Entry {
     Message(Message),
     FcmToken(String),
     MessagesDropped,
+    WebPushToken {
+        endpoint: String,
+        p256dh: [u8; 65],
+        auth: [u8; 16],
+    },
+    RegistrationFailed(String),
 }
 
 impl Entry {
@@ -38,6 +48,17 @@ impl Entry {
             Self::Message(message) => Event::Message(message),
             Self::FcmToken(token) => Event::Token(Token::Fcm(token)),
             Self::MessagesDropped => Event::MessagesDropped,
+            Self::WebPushToken {
+                endpoint,
+                p256dh,
+                auth,
+            } => Event::Token(Token::WebPush {
+                endpoint,
+                p256dh,
+                auth,
+                expires: None,
+            }),
+            Self::RegistrationFailed(reason) => Event::RegistrationFailed(Error::Platform(reason)),
         }
     }
 
@@ -56,6 +77,21 @@ impl Entry {
             Self::MessagesDropped => {
                 out.push(MESSAGES_DROPPED);
                 Ok(())
+            }
+            Self::WebPushToken {
+                endpoint,
+                p256dh,
+                auth,
+            } => {
+                out.push(WEB_PUSH_TOKEN);
+                push_bytes(out, endpoint.as_bytes())?;
+                out.extend_from_slice(p256dh);
+                out.extend_from_slice(auth);
+                Ok(())
+            }
+            Self::RegistrationFailed(reason) => {
+                out.push(REGISTRATION_FAILED);
+                push_bytes(out, reason.as_bytes())
             }
         }
     }
@@ -105,6 +141,23 @@ fn decode_one(bytes: &[u8]) -> Option<(Entry, &[u8])> {
             Some((Entry::FcmToken(token), rest))
         }
         MESSAGES_DROPPED => Some((Entry::MessagesDropped, rest)),
+        WEB_PUSH_TOKEN => {
+            let (endpoint, rest) = take_bytes(rest)?;
+            let endpoint = String::from_utf8(endpoint.to_vec()).ok()?;
+            let (p256dh, rest) = rest.split_first_chunk::<65>()?;
+            let (auth, rest) = rest.split_first_chunk::<16>()?;
+            let entry = Entry::WebPushToken {
+                endpoint,
+                p256dh: *p256dh,
+                auth: *auth,
+            };
+            Some((entry, rest))
+        }
+        REGISTRATION_FAILED => {
+            let (reason, rest) = take_bytes(rest)?;
+            let reason = String::from_utf8(reason.to_vec()).ok()?;
+            Some((Entry::RegistrationFailed(reason), rest))
+        }
         _ => None,
     }
 }
@@ -181,7 +234,15 @@ fn starts_with_header(file: &mut File) -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Event, Message, Token};
+    use crate::{Error, Event, Message, Token};
+
+    fn web_push_token(endpoint: &str) -> Entry {
+        Entry::WebPushToken {
+            endpoint: endpoint.to_owned(),
+            p256dh: [4; 65],
+            auth: [7; 16],
+        }
+    }
 
     fn message(payload: &[u8], started_app: bool) -> Entry {
         Entry::Message(Message {
@@ -204,6 +265,8 @@ mod tests {
             Entry::FcmToken("token-1".to_owned()),
             message(br#"{"seq":"1"}"#, true),
             Entry::MessagesDropped,
+            web_push_token("https://ntfy.sh/up123?up=1"),
+            Entry::RegistrationFailed("unregistered by the distributor".to_owned()),
             message(b"", false),
         ];
         assert_eq!(decode(&encoded(&entries)), entries);
@@ -212,13 +275,18 @@ mod tests {
     #[test]
     fn a_record_cut_short_by_a_killed_process_is_dropped_and_the_rest_kept() {
         let complete = [Entry::FcmToken("t".to_owned()), message(b"abc", false)];
-        let mut bytes = encoded(&complete);
-        let full = bytes.len();
-        message(b"never fully written", true)
-            .encode(&mut bytes)
-            .unwrap();
-        for cut in full..bytes.len() {
-            assert_eq!(decode(&bytes[..cut]), complete, "cut at {cut}");
+        let unfinished = [
+            message(b"never fully written", true),
+            web_push_token("https://push.example/never-fully-written"),
+            Entry::RegistrationFailed("never fully written".to_owned()),
+        ];
+        for last in unfinished {
+            let mut bytes = encoded(&complete);
+            let full = bytes.len();
+            last.encode(&mut bytes).unwrap();
+            for cut in full..bytes.len() {
+                assert_eq!(decode(&bytes[..cut]), complete, "{last:?} cut at {cut}");
+            }
         }
     }
 
@@ -262,6 +330,19 @@ mod tests {
             })
         );
         assert_eq!(Entry::MessagesDropped.into_event(), Event::MessagesDropped);
+        assert_eq!(
+            web_push_token("https://ntfy.sh/up1?up=1").into_event(),
+            Event::Token(Token::WebPush {
+                endpoint: "https://ntfy.sh/up1?up=1".to_owned(),
+                p256dh: [4; 65],
+                auth: [7; 16],
+                expires: None,
+            })
+        );
+        assert_eq!(
+            Entry::RegistrationFailed("gone".to_owned()).into_event(),
+            Event::RegistrationFailed(Error::Platform("gone".to_owned()))
+        );
     }
 
     #[test]

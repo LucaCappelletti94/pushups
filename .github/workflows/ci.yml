@@ -184,9 +184,29 @@ jobs:
           path: target/web-*.lcov
           if-no-files-found: error
 
+  linux-coverage:
+    name: Linux through a UnifiedPush distributor
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal --component llvm-tools,clippy,rustfmt
+      - name: Lint the probe
+        working-directory: ci/linux/probe
+        run: |
+          cargo fmt --check
+          cargo clippy -- -D warnings
+      # KDE's distributor in a Debian testing container, with real pushes through ntfy.sh.
+      - run: ci/linux/run.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-coverage
+          path: target/linux-rust.lcov
+          if-no-files-found: error
+
   coverage:
     name: Coverage and Sonar
-    needs: [android-coverage, web-coverage]
+    needs: [android-coverage, linux-coverage, web-coverage]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Neither a fork's pull request nor a Dependabot run can read CODECOV_TOKEN or SONAR_TOKEN.
@@ -211,7 +231,7 @@ jobs:
       - uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: target/coverage.lcov,target/android-29-rust.lcov,target/android-35-rust.lcov,target/android-29-kotlin.xml,target/android-35-kotlin.xml,target/web-rust.lcov,target/web-shim.lcov
+          files: target/coverage.lcov,target/android-29-rust.lcov,target/android-35-rust.lcov,target/android-29-kotlin.xml,target/android-35-kotlin.xml,target/linux-rust.lcov,target/web-rust.lcov,target/web-shim.lcov
           fail_ci_if_error: true
       # The Sonar analyzer runs clippy itself.
       - run: rustup toolchain install stable --profile minimal --component clippy

@@ -12,8 +12,10 @@ pub enum Error {
     /// `ContentProvider` never handed the process to Rust.
     #[error("the pushups Android module is not in the app")]
     AndroidModuleMissing,
-    /// The web target needs a [`WebPushConfig`](crate::WebPushConfig) in [`Config`](crate::Config).
-    #[error("Web Push needs a WebPushConfig")]
+    /// The target's part of [`Config`](crate::Config) is missing, a
+    /// [`WebPushConfig`](crate::WebPushConfig) on the web or a [`LinuxConfig`](crate::LinuxConfig)
+    /// on Linux.
+    #[error("Config lacks the part this target needs")]
     NotConfigured,
     /// [`serve_service_worker`](crate::serve_service_worker) ran in a web page, outside the
     /// service worker.

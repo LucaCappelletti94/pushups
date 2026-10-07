@@ -3,7 +3,7 @@ name = "pushups"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Receive push notifications in a Rust app: APNs on iOS and macOS, FCM on Android, WNS on Windows, Web Push in the browser, under any toolkit"
+description = "Receive push notifications in a Rust app: APNs on iOS and macOS, FCM on Android, WNS on Windows, UnifiedPush on Linux, Web Push in the browser, under any toolkit"
 repository = "https://github.com/LucaCappelletti94/pushups"
 license = "MIT"
 readme = "README.md"
@@ -42,6 +42,17 @@ objc2-ui-kit = { version = "0.3", default-features = false, features = ["std", "
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSResponder"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+aes-gcm = "0.11"
+getrandom = "0.4"
+hkdf = "0.13"
+p256 = { version = "0.14", features = ["ecdh"] }
+sha2 = "0.11"
+zbus = "5"
+
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+linkme = "0.3"
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 js-sys = "0.3"

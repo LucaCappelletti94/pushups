@@ -51,6 +51,7 @@ impl Dispatcher {
             test,
             target_os = "android",
             target_os = "ios",
+            target_os = "linux",
             target_os = "macos",
             all(target_arch = "wasm32", target_os = "unknown")
         )),
@@ -68,10 +69,16 @@ impl Dispatcher {
     /// Queues `event` behind the ones before it without delivering, for a caller holding a lock
     /// the handler may need. [`flush`](Self::flush) delivers.
     #[cfg_attr(
-        not(any(test, target_os = "android", target_os = "ios", target_os = "macos")),
+        not(any(
+            test,
+            target_os = "android",
+            target_os = "ios",
+            target_os = "linux",
+            target_os = "macos"
+        )),
         expect(
             dead_code,
-            reason = "the Android and Apple backends queue under their own lock, and this target has none"
+            reason = "the Android, Apple and Linux backends queue under their own lock, and this target has none"
         )
     )]
     pub(crate) fn enqueue(&self, event: Event) {
@@ -80,10 +87,16 @@ impl Dispatcher {
 
     /// Delivers the queued events, if a handler is set.
     #[cfg_attr(
-        not(any(test, target_os = "android", target_os = "ios", target_os = "macos")),
+        not(any(
+            test,
+            target_os = "android",
+            target_os = "ios",
+            target_os = "linux",
+            target_os = "macos"
+        )),
         expect(
             dead_code,
-            reason = "the Android and Apple backends queue under their own lock, and this target has none"
+            reason = "the Android, Apple and Linux backends queue under their own lock, and this target has none"
         )
     )]
     pub(crate) fn flush(&self) {

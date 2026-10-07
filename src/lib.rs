@@ -19,26 +19,40 @@ mod delivered;
 mod dispatch;
 mod error;
 mod event;
+#[cfg(target_os = "linux")]
+mod linux;
 mod notification;
 mod permission;
-#[cfg(any(target_os = "android", target_os = "ios", target_os = "macos", test))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "macos",
+    test
+))]
 mod queue;
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", target_os = "linux", test))]
 mod session;
 #[cfg(any(target_os = "ios", target_os = "macos", test))]
 mod started;
 mod token;
-#[cfg(not(any(
-    target_os = "android",
-    target_os = "ios",
-    target_os = "macos",
-    all(target_arch = "wasm32", target_os = "unknown")
-)))]
+#[cfg(any(
+    not(any(
+        target_os = "android",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+        all(target_arch = "wasm32", target_os = "unknown")
+    )),
+    test
+))]
 mod unsupported;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 mod web;
 #[cfg(any(all(target_arch = "wasm32", target_os = "unknown"), test))]
 mod web_parts;
+#[cfg(target_os = "linux")]
+mod webpush_crypto;
 
 use std::sync::Arc;
 
@@ -46,9 +60,12 @@ use std::sync::Arc;
 use android as platform;
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 use apple as platform;
+#[cfg(target_os = "linux")]
+use linux as platform;
 #[cfg(not(any(
     target_os = "android",
     target_os = "ios",
+    target_os = "linux",
     target_os = "macos",
     all(target_arch = "wasm32", target_os = "unknown")
 )))]
@@ -56,7 +73,7 @@ use unsupported as platform;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use web as platform;
 
-pub use config::{Config, WebPushConfig};
+pub use config::{Config, LinuxConfig, UnifiedPushConfig, WebPushConfig};
 pub use context::Context;
 use dispatch::DISPATCHER;
 pub use error::Error;
@@ -67,11 +84,17 @@ pub use pushups_macros::{background_handler, firebase_config};
 pub use token::{Token, WebPushKeys};
 /// Connects the app to the platform's push service, before the toolkit's event loop starts.
 ///
+/// On Linux a process the session bus started for a push, through the activation file `install`
+/// writes, never returns from `install`. It persists the pushes, runs the
+/// [`background_handler`], and exits once idle, so the app's window never opens for it.
+///
 /// # Errors
 ///
 /// [`Error::Unsupported`] on a target without a push backend or a browser without the Push API,
 /// [`Error::AndroidModuleMissing`] on Android when the app does not include the crate's Gradle
-/// module, and [`Error::NotConfigured`] on the web without a [`WebPushConfig`].
+/// module, [`Error::NotConfigured`] on the web without a [`WebPushConfig`] and on Linux without a
+/// [`LinuxConfig`], and [`Error::Platform`] on Linux without a session bus or when another
+/// process of the app owns its bus name.
 pub fn install(config: Config) -> Result<(), Error> {
     platform::install(config)
 }

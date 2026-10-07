@@ -97,6 +97,8 @@ pub fn firebase_config(input: TokenStream) -> TokenStream {
 /// the `pushups` messaging service calls for every push that reaches a process without a live UI.
 /// On iOS and macOS it exports `__pushups_background_handler`, which the crate finds at runtime
 /// and runs off the main thread for every push the system delivers, within Apple's 30 seconds.
+/// On Linux and Windows it adds the function to a `linkme` slice the crate reads, since an
+/// executable there exports no symbol the crate could look up.
 ///
 /// # Example
 ///
@@ -170,6 +172,17 @@ pub fn background_handler(args: TokenStream, item: TokenStream) -> TokenStream {
         #[used]
         static __PUSHUPS_BACKGROUND_HANDLER_KEPT: unsafe extern "C" fn(*const u8, usize, bool) =
             __pushups_background_handler;
+
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        #[::pushups::__private::linkme::distributed_slice(::pushups::__private::BACKGROUND_HANDLERS)]
+        #[linkme(crate = ::pushups::__private::linkme)]
+        static __PUSHUPS_BACKGROUND_HANDLER: fn(::pushups::Context, ::pushups::Message) = #name;
+
+        // Makes a second handler a duplicate symbol at link time, as on the other targets.
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        #[unsafe(no_mangle)]
+        #[used]
+        static __PUSHUPS_ONE_BACKGROUND_HANDLER: u8 = 0;
     }
     .into()
 }

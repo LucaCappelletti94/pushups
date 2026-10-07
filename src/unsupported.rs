@@ -33,17 +33,25 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{Error, Message, Notification};
+    use super::*;
+    use crate::{Config, Error, Message, Notification};
 
     async fn notification_for(_message: Message) -> Notification {
         Notification::new("never shown")
     }
 
     #[test]
-    fn no_target_without_a_backend_is_a_service_worker() {
-        assert!(!crate::in_service_worker());
+    fn a_target_without_a_backend_refuses_everything() {
+        assert_eq!(install(Config::new()), Err(Error::Unsupported));
+        assert_eq!(register(), Err(Error::Unsupported));
         assert_eq!(
-            crate::serve_service_worker(notification_for),
+            futures_executor::block_on(request_permission()),
+            Err(Error::Unsupported)
+        );
+        handler_set();
+        assert!(!in_service_worker());
+        assert_eq!(
+            serve_service_worker(notification_for),
             Err(Error::Unsupported)
         );
     }
