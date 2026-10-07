@@ -82,28 +82,69 @@ fn App() -> Element {
         }
     });
     rsx! {
-        div { style: "font-family: sans-serif; padding: 16px;",
-            h3 { "pushups example" }
-            button {
-                onclick: move |_| async move {
-                    let answer = match pushups::request_permission().await {
-                        Ok(Permission::Granted) => "granted".to_owned(),
-                        Ok(Permission::Denied) => "denied".to_owned(),
-                        Ok(other) => format!("{other:?}"),
-                        Err(error) => format!("failed: {error}"),
-                    };
-                    log(&format!("permission {answer}"));
-                    permission.set(Some(answer));
-                },
-                "Allow notifications"
+        div { style: "font-family: -apple-system, system-ui, sans-serif; padding: 16px; max-width: 640px; margin: 0 auto; box-sizing: border-box;",
+            h3 { style: "margin: 0 0 12px;", "pushups example" }
+            div { style: "display: flex; gap: 8px; flex-wrap: wrap;",
+                button {
+                    style: BUTTON,
+                    onclick: move |_| async move {
+                        let answer = match pushups::request_permission().await {
+                            Ok(Permission::Granted) => {
+                                // Safari subscribes only once the user allowed notifications, so the token comes now.
+                                if let Err(error) = pushups::register() {
+                                    log(&format!("register failed: {error}"));
+                                }
+                                "granted".to_owned()
+                            }
+                            Ok(Permission::Denied) => "denied".to_owned(),
+                            Ok(other) => format!("{other:?}"),
+                            Err(error) => format!("failed: {error}"),
+                        };
+                        log(&format!("permission {answer}"));
+                        permission.set(Some(answer));
+                    },
+                    "Allow notifications"
+                }
+                if cfg!(target_arch = "wasm32") {
+                    button { style: BUTTON, onclick: move |_| reload_page(), "Reload" }
+                    button {
+                        style: BUTTON,
+                        onclick: move |_| copy_text(&lines.read().join("\n")),
+                        "Copy log"
+                    }
+                }
             }
             p { "permission: " {permission.read().clone().unwrap_or_default()} }
             for line in lines.read().iter() {
-                p { "{line}" }
+                p { style: LINE, "{line}" }
             }
         }
     }
 }
+
+const BUTTON: &str = "font-size: 16px; padding: 10px 14px; border-radius: 10px; border: 1px solid #c7c7cc; background: #f2f2f7;";
+
+/// Event lines wrap anywhere, since tokens and endpoints are long unbroken strings.
+const LINE: &str = "font-family: ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; background: #f4f4f5; padding: 8px; border-radius: 8px; margin: 8px 0;";
+
+/// Reloads the page, the only way to restart a home-screen web app on iOS from inside it.
+#[cfg(target_arch = "wasm32")]
+fn reload_page() {
+    let _ = js_sys::Function::new_no_args("location.reload()").call0(&js_sys::global());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn reload_page() {}
+
+/// Puts `text` on the clipboard, so a phone can paste the log into a message.
+#[cfg(target_arch = "wasm32")]
+fn copy_text(text: &str) {
+    let copy = js_sys::Function::new_with_args("text", "navigator.clipboard.writeText(text)");
+    let _ = copy.call1(&js_sys::global(), &js_sys::JsString::from(text));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn copy_text(_text: &str) {}
 
 fn describe(event: &Event) -> String {
     let at = now_ms();
