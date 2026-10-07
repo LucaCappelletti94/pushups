@@ -263,6 +263,40 @@ async function denied(origin) {
   });
 }
 
+/** A push the page missed while suspended, stored as the worker stores it, reaches the handler once the page is shown again. */
+async function resumed(origin) {
+  await withBrowser(origin, "granted", async (browser) => {
+    const probe = await Probe.open(browser, origin);
+    await probe.install(false);
+    await probe.page.evaluate(async () => {
+      const db = await new Promise((resolve, reject) => {
+        const request = indexedDB.open("pushups", 1);
+        request.onupgradeneeded = () => {
+          request.result.createObjectStore("queue", { autoIncrement: true });
+          request.result.createObjectStore("options");
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      await new Promise((resolve, reject) => {
+        const transaction = db.transaction("queue", "readwrite");
+        const payload = new TextEncoder().encode("missed-while-suspended");
+        transaction.objectStore("queue").add({ kind: "message", payload, startedApp: false });
+        transaction.oncomplete = resolve;
+        transaction.onerror = () => reject(transaction.error);
+      });
+      db.close();
+    });
+    // Nothing else drains it, since no worker message announces it.
+    await sleep(1500);
+    probe.events.push(...(await probe.page.evaluate(() => window.probe.takeEvents())));
+    expect(!probe.events.some((event) => event.payload === "missed-while-suspended"), "no drain before the page is shown");
+    await probe.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await probe.message("missed-while-suspended");
+    await probe.close("resumed");
+  });
+}
+
 /** A push with the page open, a declarative push, then a push with no page, drained later. */
 async function staticWorker(origin) {
   await withBrowser(origin, "granted", async (browser) => {
@@ -330,7 +364,7 @@ mkdirSync(join(out, "rust"), { recursive: true });
 mkdirSync(join(out, "js"), { recursive: true });
 const { server, origin } = await serve();
 try {
-  const scenarios = [misuse, denied, staticWorker, rustWorker];
+  const scenarios = [misuse, denied, resumed, staticWorker, rustWorker];
   for (const scenario of scenarios.filter(({ name }) => only.length === 0 || only.includes(name))) {
     log(`scenario ${scenario.name}`);
     await scenario(origin);

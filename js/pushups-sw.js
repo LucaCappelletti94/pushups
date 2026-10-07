@@ -197,4 +197,11 @@ export function onDrainRequest(callback) {
   navigator.serviceWorker?.addEventListener("message", (event) => {
     if (event.data?.pushups === "drain") callback();
   });
+  // A suspended page misses the worker's message, so it also drains when it is shown again.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") callback();
+  });
+  scope.addEventListener("pageshow", (event) => {
+    if (event.persisted) callback();
+  });
 }
