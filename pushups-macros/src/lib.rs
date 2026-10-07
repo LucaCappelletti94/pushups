@@ -86,23 +86,25 @@ pub fn firebase_config(input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Mark a free function as the Android background handler.
+/// Mark a free function as the background handler.
 ///
-/// The function must take `pushups::AndroidContext` and `pushups::Message`, be synchronous, be
+/// The function must take `pushups::Context` and `pushups::Message`, be synchronous, be
 /// non-generic and have no `self`. The function is kept unchanged. On every target the expansion
 /// type-checks the signature, so a wrong one fails with a clear type error. A second handler in
 /// one binary is a duplicate symbol at link time.
 ///
 /// On Android the expansion additionally exports `Java_rs_pushups_BackgroundHandler_handle`, which
 /// the `pushups` messaging service calls for every push that reaches a process without a live UI.
+/// On iOS and macOS it exports `__pushups_background_handler`, which the crate finds at runtime
+/// and runs off the main thread for every push the system delivers, within Apple's 30 seconds.
 ///
 /// # Example
 ///
 /// ```ignore
-/// use pushups::{AndroidContext, Message};
+/// use pushups::{Context, Message};
 ///
 /// #[pushups::background_handler]
-/// fn on_push(context: AndroidContext, message: Message) {
+/// fn on_push(context: Context, message: Message) {
 ///     // deliver the message
 /// }
 /// ```
@@ -126,7 +128,7 @@ pub fn background_handler(args: TokenStream, item: TokenStream) -> TokenStream {
     let name = &input.sig.ident;
     quote! {
         #item
-        const _: fn(::pushups::AndroidContext, ::pushups::Message) = #name;
+        const _: fn(::pushups::Context, ::pushups::Message) = #name;
 
         #[cfg(target_os = "android")]
         #[unsafe(no_mangle)]
@@ -149,6 +151,25 @@ pub fn background_handler(args: TokenStream, item: TokenStream) -> TokenStream {
                 )
             }
         }
+
+        #[cfg(any(target_os = "ios", target_os = "macos"))]
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn __pushups_background_handler(
+            payload: *const u8,
+            len: usize,
+            started_app: bool,
+        ) {
+            // SAFETY: the Apple backend passes a payload of `len` bytes alive for the call.
+            unsafe {
+                ::pushups::__private::apple::run_background_handler(payload, len, started_app, #name)
+            }
+        }
+
+        // Keeps the export through the linker's dead-strip, since only `dlsym` names it.
+        #[cfg(any(target_os = "ios", target_os = "macos"))]
+        #[used]
+        static __PUSHUPS_BACKGROUND_HANDLER_KEPT: unsafe extern "C" fn(*const u8, usize, bool) =
+            __pushups_background_handler;
     }
     .into()
 }

@@ -25,6 +25,34 @@ pub fn select_client<'a>(
         })
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+pub mod apple {
+    use crate::{Context, Message};
+
+    /// Runs the app's background handler for one push, from the symbol the Apple backend finds with `dlsym`.
+    ///
+    /// A panic in the handler is caught here, since it must not unwind into the caller.
+    ///
+    /// # Safety
+    ///
+    /// `payload` points to `len` readable bytes, valid until this call returns.
+    pub unsafe fn run_background_handler(
+        payload: *const u8,
+        len: usize,
+        started_app: bool,
+        handler: fn(Context, Message),
+    ) {
+        // SAFETY: the caller passes a live payload of `len` bytes.
+        let payload = unsafe { std::slice::from_raw_parts(payload, len) }.to_vec();
+        let message = Message {
+            payload,
+            started_app,
+        };
+        // The panic hook already reported a panic, and the push stays queued or delivered.
+        let _ = std::panic::catch_unwind(|| handler(Context { _private: () }, message));
+    }
+}
+
 #[cfg(target_os = "android")]
 pub mod android {
     use jni::EnvUnowned;
@@ -33,7 +61,7 @@ pub mod android {
     pub use jni::sys::{JNIEnv, jboolean, jbyteArray, jclass, jobject, jobjectArray, jstring};
 
     pub use super::FirebaseClient;
-    use crate::{AndroidContext, Message};
+    use crate::{Context, Message};
 
     /// Returns the four values of the client [`select_client`](super::select_client) picks as a
     /// `String[]`, or `null` when none fits.
@@ -81,7 +109,7 @@ pub mod android {
 
     /// Runs the app's background handler for one push.
     ///
-    /// The handler gets a copy of the payload and the raw `JavaVM` and `Context`, which stay
+    /// The handler gets a copy of the payload and a [`Context`] holding the raw `JavaVM` and `Context`, which stay
     /// owned by the JVM and valid until this call returns. A JNI failure or a panic in the
     /// handler throws a `RuntimeException` back to the service.
     ///
@@ -94,7 +122,7 @@ pub mod android {
         context: jobject,
         payload: jbyteArray,
         started_app: jboolean,
-        handler: fn(AndroidContext, Message),
+        handler: fn(Context, Message),
     ) {
         // SAFETY: the JVM passed `env` to the native method running now.
         let mut unowned = unsafe { EnvUnowned::from_raw(env) };
@@ -104,7 +132,7 @@ pub mod android {
                 let payload = unsafe { JByteArray::from_raw(env, payload) };
                 let payload = env.convert_byte_array(&payload)?;
                 let vm = env.get_java_vm()?;
-                let context = AndroidContext {
+                let context = Context {
                     vm: vm.get_raw().cast(),
                     context: context.cast(),
                 };

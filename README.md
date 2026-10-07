@@ -48,6 +48,25 @@ let keys = web.web_push_keys().unwrap();
 assert_eq!(keys.auth, "BwcHBwcHBwcHBwcHBwcHBw");
 ```
 
+## iOS and macOS
+
+`install` runs in `main`, on the main thread, before the toolkit starts. The crate adds its push methods to whatever app delegate the toolkit installs, and installs its own when there is none, so tao and winit need no change. It also handles the notification center's delegate, so a push arriving while the app is in front shows as a banner and a tap on a notification reaches the handler. Every push reaches the handler once, including one whose notification is tapped later.
+
+The app bundle needs the push entitlement and, on iOS, the `remote-notification` background mode. A `dx` app sets both in `Dioxus.toml`.
+
+```toml
+[ios.entitlements]
+aps-environment = "development"
+
+[macos.entitlements]
+"com.apple.developer.aps-environment" = "development"
+
+[background]
+remote-notifications = true
+```
+
+A push that wakes the app in the background runs the background handler below off the main thread, and the system gets its answer when the handler returns, or after 25 seconds, within the 30 seconds Apple allows. The push also waits on disk for the app's handler, as on Android.
+
 ## Android
 
 The crate ships a Gradle module in `android/` holding the FCM service. A `dx` app bundles it with `#[manganis::ffi("<path to the pushups crate>/android")]` on an `extern "Kotlin" { pub type Pushups; }` block, the path relative to the app's manifest directory, as `examples/dioxus` does. A Tauri app includes it as a Gradle project. cargo-apk and xbuild have no way to bundle it yet.
@@ -55,13 +74,15 @@ The crate ships a Gradle module in `android/` holding the FCM service. A `dx` ap
 The app compiles its Firebase configuration in, from the `google-services.json` the Firebase console gives, with no Google services Gradle plugin. A process the push started with no UI can run Rust at once through a background handler. The push also waits on disk for the app's handler, which gets it when the UI opens.
 
 ```rust
-use pushups::{AndroidContext, Message};
+use pushups::{Context, Message};
 
 pushups::firebase_config!("tests/fixtures/google-services.json");
 
 #[pushups::background_handler]
-fn on_push(context: AndroidContext, message: Message) {
-    let _ = (context.vm(), context.context(), message.payload);
+fn on_push(context: Context, message: Message) {
+    #[cfg(target_os = "android")]
+    let _ = (context.android_vm(), context.android_context());
+    let _ = (context, message.payload);
 }
 ```
 

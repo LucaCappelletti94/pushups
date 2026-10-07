@@ -13,7 +13,7 @@ use dioxus::prelude::*;
 use futures_util::StreamExt;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use pushups::{AndroidContext, Config, Event, Message, Notification, Permission, WebPushConfig};
+use pushups::{Config, Context, Event, Message, Notification, Permission, WebPushConfig};
 
 #[cfg(target_os = "android")]
 #[manganis::ffi("../../android")]
@@ -34,8 +34,9 @@ fn main() {
         }
         return;
     }
-    if let Err(error) = pushups::install(config()) {
-        log(&format!("install failed: {error}"));
+    match pushups::install(config()) {
+        Ok(()) => log(&format!("installed at_ms={}", now_ms())),
+        Err(error) => log(&format!("install failed: {error}")),
     }
     dioxus::launch(App);
 }
@@ -69,6 +70,7 @@ fn App() -> Element {
     let mut lines = use_signal(Vec::<String>::new);
     let mut permission = use_signal(|| None::<String>);
     use_future(move || async move {
+        log(&format!("ui mounted at_ms={}", now_ms()));
         let mut events = pushups::events();
         if let Err(error) = pushups::register() {
             lines.write().push(format!("register failed: {error}"));
@@ -127,7 +129,7 @@ fn describe(event: &Event) -> String {
 
 /// Runs in the process the push woke, before any UI exists.
 #[pushups::background_handler]
-fn on_push(_context: AndroidContext, message: Message) {
+fn on_push(_context: Context, message: Message) {
     let entered = now_ms();
     let started = Instant::now();
     let fetched = catch_up();
@@ -205,7 +207,14 @@ fn log(line: &str) {
     web_sys::console::log_1(&format!("pushups-example {line}").into());
 }
 
+/// Prints the line, and appends it to `pushups-example.log` in the temporary directory, which outlives a process the system launched for a push or a tap with nothing reading its output.
 #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 fn log(line: &str) {
-    println!("pushups-example {line}");
+    let line = format!("pushups-example {line}");
+    println!("{line}");
+    let path = std::env::temp_dir().join("pushups-example.log");
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        // One write per line, so lines from the handler thread and the UI never interleave.
+        let _ = file.write_all(format!("{line}\n").as_bytes());
+    }
 }

@@ -27,6 +27,21 @@ thiserror = "2"
 futures-channel = { version = "0.3", default-features = false, features = ["std"] }
 jni = "0.22"
 
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+block2 = "0.6"
+dispatch2 = { version = "0.3", default-features = false, features = ["std", "block2"] }
+futures-channel = { version = "0.3", default-features = false, features = ["std"] }
+libc = "0.2"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSArray", "NSBundle", "NSData", "NSDictionary", "NSError", "NSFileManager", "NSJSONSerialization", "NSKeyValueObserving", "NSNotification", "NSObject", "NSOperation", "NSPathUtilities", "NSString", "NSURL", "NSValue"] }
+objc2-user-notifications = { version = "0.3", default-features = false, features = ["std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationSettings", "UNUserNotificationCenter"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-ui-kit = { version = "0.3", default-features = false, features = ["std", "block2", "UIApplication", "UIResponder"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSResponder"] }
+
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 js-sys = "0.3"
 wasm-bindgen = "0.2"

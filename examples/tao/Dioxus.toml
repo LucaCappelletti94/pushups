@@ -1,0 +1,16 @@
+# `dx` bundles and signs this plain tao app for macOS and iOS.
+[application]
+name = "pushups-tao-example"
+
+[bundle]
+identifier = "rs.pushups.example"
+publisher = "pushups"
+
+[ios.entitlements]
+aps-environment = "development"
+
+[macos.entitlements]
+"com.apple.developer.aps-environment" = "development"
+
+[background]
+remote-notifications = true

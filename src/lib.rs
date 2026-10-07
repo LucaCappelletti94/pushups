@@ -6,20 +6,28 @@
 pub mod __private;
 #[cfg(target_os = "android")]
 mod android;
-mod android_context;
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+mod apple;
 mod config;
+mod context;
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
+mod delivered;
 mod dispatch;
 mod error;
 mod event;
 mod notification;
 mod permission;
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", target_os = "ios", target_os = "macos", test))]
 mod queue;
 #[cfg(any(target_os = "android", test))]
 mod session;
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
+mod started;
 mod token;
 #[cfg(not(any(
     target_os = "android",
+    target_os = "ios",
+    target_os = "macos",
     all(target_arch = "wasm32", target_os = "unknown")
 )))]
 mod unsupported;
@@ -32,16 +40,20 @@ use std::sync::Arc;
 
 #[cfg(target_os = "android")]
 use android as platform;
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+use apple as platform;
 #[cfg(not(any(
     target_os = "android",
+    target_os = "ios",
+    target_os = "macos",
     all(target_arch = "wasm32", target_os = "unknown")
 )))]
 use unsupported as platform;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use web as platform;
 
-pub use android_context::AndroidContext;
 pub use config::{Config, WebPushConfig};
+pub use context::Context;
 use dispatch::DISPATCHER;
 pub use error::Error;
 pub use event::{Event, Message};

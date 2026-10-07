@@ -1,0 +1,14 @@
+[package]
+name = "pushups-winit-example"
+description = "A winit app receiving pushes through pushups, used for the device proofs"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+futures-executor = "0.3"
+pushups = { path = "../.." }
+winit = "=0.31.0-beta.3"
+
+[workspace]

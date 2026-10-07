@@ -1,0 +1,18 @@
+[package]
+name = "pushups-tao-example"
+description = "A plain tao app receiving pushes through pushups, used for the device proofs with and without tao#1364"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+futures-executor = "0.3"
+pushups = { path = "../.." }
+tao = "0.37"
+
+[features]
+# Logs the push events tao#1364 adds, built with tao patched to that pull request.
+tao-1364 = []
+
+[workspace]
