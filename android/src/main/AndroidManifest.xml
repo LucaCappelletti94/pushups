@@ -13,6 +13,21 @@
             </intent-filter>
         </service>
 
+        <!-- The connector library binds this for every UnifiedPush event, after decrypting messages. -->
+        <service
+            android:name="rs.pushups.PushupsPushService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
+            </intent-filter>
+        </service>
+
+        <activity
+            android:name="rs.pushups.DistributorActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true" />
+
         <provider
             android:name="rs.pushups.PushupsProvider"
             android:authorities="${applicationId}.pushups"

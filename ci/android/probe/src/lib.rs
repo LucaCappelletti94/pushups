@@ -13,7 +13,7 @@ use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{JClass, JString};
 use jni::sys::jboolean;
 use parking_lot::Mutex;
-use pushups::{Config, Event, Message, Token};
+use pushups::{Config, Event, Message, Token, UnifiedPushConfig};
 
 #[cfg(feature = "config-real")]
 pushups::firebase_config!("google-services.json");
@@ -43,6 +43,10 @@ fn on_push(_context: pushups::Context, message: Message) {
 fn describe(event: &Event) -> String {
     match event {
         Event::Token(Token::Fcm(token)) => format!("token {token}"),
+        Event::Token(token @ Token::WebPush { endpoint, .. }) => match token.web_push_keys() {
+            Some(keys) => format!("webpush {endpoint} {} {}", keys.p256dh, keys.auth),
+            None => format!("token {token:?}"),
+        },
         Event::Token(other) => format!("token {other:?}"),
         Event::RegistrationFailed(error) => format!("failed {error}"),
         Event::Message(message) => describe_message(message),
@@ -85,6 +89,35 @@ pub extern "system" fn Java_rs_pushups_ci_Probe_install<'caller>(
             .err()
             .map(|error| error.to_string()),
     )
+}
+
+/// `Probe.installWithVapid(vapidHex)`: `null`, or the error of `pushups::install` with a
+/// UnifiedPush part for the VAPID public key in hex.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_pushups_ci_Probe_installWithVapid<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    vapid_hex: JString<'caller>,
+) -> JString<'caller> {
+    let vapid = unowned
+        .with_env(|env| -> jni::errors::Result<String> { vapid_hex.try_to_string(env) })
+        .resolve::<ThrowRuntimeExAndDefault>();
+    let error = match hex_key(&vapid) {
+        Some(key) => pushups::install(Config::new().unified_push(UnifiedPushConfig::new(key)))
+            .err()
+            .map(|error| error.to_string()),
+        None => Some(format!("{vapid:?} is not a 65-byte hex key")),
+    };
+    java_string(unowned, error)
+}
+
+/// The 65 bytes a hex string spells, or `None`.
+fn hex_key(hex: &str) -> Option<[u8; 65]> {
+    let bytes: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(hex.get(index..index + 2)?, 16).ok())
+        .collect::<Option<_>>()?;
+    bytes.try_into().ok()
 }
 
 /// `Probe.setHandler()`: records every event from now on.

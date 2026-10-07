@@ -24,6 +24,12 @@ object Native {
     external fun onRegistered(token: String?, error: String?)
 
     @JvmStatic
+    external fun onWebPushToken(endpoint: String, p256dh: ByteArray, auth: ByteArray)
+
+    @JvmStatic
+    external fun onUnregistered()
+
+    @JvmStatic
     external fun onPermissionResult(requestId: Long, granted: Boolean)
 }
 

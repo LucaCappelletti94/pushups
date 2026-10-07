@@ -6,6 +6,10 @@ object Probe {
     @JvmStatic
     external fun install(): String?
 
+    /** `null`, or the error of `pushups::install` with a UnifiedPush part for the hex VAPID key. */
+    @JvmStatic
+    external fun installWithVapid(vapidHex: String): String?
+
     /** Sets a handler that records every event as a line. */
     @JvmStatic
     external fun setHandler()

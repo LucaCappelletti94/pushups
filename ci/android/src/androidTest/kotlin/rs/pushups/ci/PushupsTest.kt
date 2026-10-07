@@ -39,8 +39,6 @@ import rs.pushups.PushupsMessagingService
 class PushupsTest {
 
     companion object {
-        private const val UI_MS = 30_000L
-
         private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
         private val context: Context get() = instrumentation.targetContext
         private val device: UiDevice get() = UiDevice.getInstance(instrumentation)
@@ -74,22 +72,11 @@ class PushupsTest {
             scenario = ActivityScenario.launch(TapActivity::class.java)
         }
 
-        /**
-         * Ends the UI session. The session lasts while any Activity of the process lives, the
-         * test framework's own launch Activities included, so this waits until none is left.
-         */
+        /** Ends the UI session. */
         private fun closeUi() {
             scenario?.close()
             scenario = null
-            val live = listOf(Stage.PRE_ON_CREATE, Stage.CREATED, Stage.STARTED, Stage.RESUMED, Stage.PAUSED, Stage.STOPPED, Stage.RESTARTED)
-            waitFor(UI_MS) {
-                var alive = 0
-                instrumentation.runOnMainSync {
-                    val monitor = ActivityLifecycleMonitorRegistry.getInstance()
-                    alive = live.sumOf { monitor.getActivitiesInStage(it).size }
-                }
-                if (alive == 0) Unit else null
-            } ?: error("an Activity was still alive ${UI_MS / 1000} s after closing the UI")
+            awaitNoActivity()
         }
 
         private fun awaitPermission(): String =

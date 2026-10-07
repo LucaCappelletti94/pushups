@@ -1,11 +1,12 @@
-"""Sends the FCM messages the instrumented tests ask for.
+"""Sends the pushes the instrumented tests ask for.
 
-The tests write `<id>.json`, an FCM HTTP v1 `message` object, into `files/pushups-ci` of the test
-package. This script polls that directory over adb, sends each message with the service account
-key, which stays on the host, and writes the answer to `<id>.status` as `<id> <HTTP status> <body>`.
-It stops after `--bound` seconds on the monotonic clock, or when killed by run.sh.
+The tests write `<id>.json` into `files/pushups-ci` of the test package, either an FCM HTTP v1
+`message` object or `{"webpush": <subscription>, "payload": <text>}`. This script polls that
+directory over adb, sends each push with keys that stay on the host, the FCM service account or the
+VAPID private key, and writes the answer to `<id>.status` as `<id> <HTTP status> <body>`. It stops
+after `--bound` seconds on the monotonic clock, or when killed by run.sh.
 
-Usage: python3 send.py <service account json> [--bound seconds]
+Usage: python3 send.py <service account json> [--webpush-sender path --vapid pem] [--bound seconds]
 """
 
 import argparse
@@ -96,9 +97,25 @@ def send(key: dict, token: str, message: dict) -> str:
         time.sleep(3)
 
 
+def send_web_push(sender: Path, vapid: Path, request: dict) -> str:
+    """Sends through the `web-push` crate's sender, which retries transient answers itself."""
+    with tempfile.NamedTemporaryFile("w", suffix=".json") as subscription:
+        json.dump(request["webpush"], subscription)
+        subscription.flush()
+        done = subprocess.run(
+            [str(sender), subscription.name, str(vapid), request["payload"]],
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+    return f"200 {done.stdout.strip()}" if done.returncode == 0 else f"502 {done.stdout.strip()} {done.stderr.strip()}"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("key", type=Path)
+    parser.add_argument("--webpush-sender", type=Path)
+    parser.add_argument("--vapid", type=Path)
     parser.add_argument("--bound", type=float, default=1800)
     args = parser.parse_args()
     key = json.loads(args.key.read_text())
@@ -118,8 +135,14 @@ def main() -> None:
             request_id = name.removesuffix(".json")
             if request_id in answered:
                 continue
-            message = json.loads(run_as(f"cat {DIR}/{name}"))
-            status = send(key, token, message)
+            request = json.loads(run_as(f"cat {DIR}/{name}"))
+            if "webpush" in request:
+                if args.webpush_sender is None or args.vapid is None:
+                    status = "500 send.py has no --webpush-sender and --vapid"
+                else:
+                    status = send_web_push(args.webpush_sender, args.vapid, request)
+            else:
+                status = send(key, token, request)
             print(f"push {request_id}: {status.splitlines()[0][:120]}", flush=True)
             # Renamed into place, so the test never reads a status still being written.
             part = f"{DIR}/{request_id}.status.part"

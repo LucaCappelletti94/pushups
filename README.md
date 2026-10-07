@@ -71,7 +71,7 @@ A push that wakes the app in the background runs the background handler below of
 
 ## Android
 
-The crate ships a Gradle module in `android/` holding the FCM service. A `dx` app bundles it with `#[manganis::ffi("<path to the pushups crate>/android")]` on an `extern "Kotlin" { pub type Pushups; }` block, the path relative to the app's manifest directory, as `examples/dioxus` does. A Tauri app includes it as a Gradle project. cargo-apk and xbuild have no way to bundle it yet.
+The crate ships a Gradle module in `android/` holding the FCM and UnifiedPush services. A `dx` app bundles it with `#[manganis::ffi("<path to the pushups crate>/android")]` on an `extern "Kotlin" { pub type Pushups; }` block, the path relative to the app's manifest directory, as `examples/dioxus` does. A Tauri app includes it as a Gradle project. cargo-apk and xbuild have no way to bundle it yet.
 
 The app compiles its Firebase configuration in, from the `google-services.json` the Firebase console gives, with no Google services Gradle plugin. A process the push started with no UI can run Rust at once through a background handler. The push also waits on disk for the app's handler, which gets it when the UI opens.
 
@@ -89,6 +89,8 @@ fn on_push(context: Context, message: Message) {
 ```
 
 The payload is the FCM `data` map as a JSON object. A notification message that FCM shows itself reaches the app when the user taps it.
+
+An app whose `Config` has a `UnifiedPushConfig` gets its pushes through a [UnifiedPush](https://unifiedpush.org) distributor, such as ntfy, when the device has one, and through FCM otherwise. The first `register` with several distributors installed asks the user to pick one. The app holds one token at a time, so on UnifiedPush it is a Web Push subscription, and the payload is the message body the server sent.
 
 ## Web
 
@@ -138,7 +140,7 @@ let config = Config::new()
 
 | Platform | Push service | Backend |
 |---|---|---|
-| Android | FCM | available |
+| Android | FCM or UnifiedPush | available |
 | iOS, macOS | APNs | in development |
 | Linux | UnifiedPush over D-Bus | in development |
 | Windows | WNS | in development |

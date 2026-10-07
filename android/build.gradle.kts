@@ -29,6 +29,8 @@ kotlin {
 dependencies {
     implementation(platform("com.google.firebase:firebase-bom:34.19.0"))
     implementation("com.google.firebase:firebase-messaging")
+    // The newest connector whose stdlib a Kotlin 2.0 build reads, 2.0 being what `dx` 0.7 generates.
+    implementation("org.unifiedpush.android:connector:3.0.10")
     implementation("androidx.core:core-ktx:1.13.1")
 }
 

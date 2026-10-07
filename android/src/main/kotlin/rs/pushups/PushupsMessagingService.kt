@@ -13,25 +13,19 @@ import java.nio.charset.StandardCharsets
 class PushupsMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
+        // Firebase makes a token at start on its own, which an app on UnifiedPush does not use.
+        val context = Pushups.context ?: return
+        if (Transport.get(context) == Transport.UNIFIED_PUSH) {
+            Log.i(TAG, "FCM token dropped, the app's pushes come through UnifiedPush")
+            return
+        }
         invokeNative("onToken") { Native.onToken(token) }
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
         Log.d(TAG, "message ${message.messageId} received, priority ${message.priority}")
-        if (!ProcessState.loaded) {
-            Log.w(TAG, "message received before the native library loaded, dropping it")
-            return
-        }
-        val payload = JSONObject(message.data).toString().toByteArray(StandardCharsets.UTF_8)
-        val startedApp = ProcessState.pushStartedApp()
-        invokeNative("onMessage") { Native.onMessage(payload, startedApp) }
-        try {
-            BackgroundHandler.handle(applicationContext, payload, startedApp)
-        } catch (e: UnsatisfiedLinkError) {
-            Log.i(TAG, "no background handler, the queue keeps the push")
-        } catch (e: RuntimeException) {
-            Log.e(TAG, "background handler", e)
-        }
+        val context = Pushups.context ?: return
+        deliverPush(context, JSONObject(message.data).toString().toByteArray(StandardCharsets.UTF_8))
     }
 
     override fun onDeletedMessages() {

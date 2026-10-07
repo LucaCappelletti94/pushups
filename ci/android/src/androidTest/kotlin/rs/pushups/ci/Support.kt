@@ -2,6 +2,8 @@ package rs.pushups.ci
 
 import android.os.SystemClock
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import org.junit.Assert.assertTrue
 import java.io.File
 
@@ -25,6 +27,25 @@ const val DELIVERY_MS = 90_000L
 fun awaitLine(source: () -> String, needle: String, boundMs: Long = DELIVERY_MS): String =
     waitFor(boundMs) { lines(source()).firstOrNull { it.contains(needle) } }
         ?: error("no line with $needle within ${boundMs / 1000} s, got:\n${source()}")
+
+/** How long the UI may take to open or close, or a prompt to show. */
+const val UI_MS = 30_000L
+
+/**
+ * Waits until no Activity of the process lives, which ends the UI session. The session lasts while
+ * any lives, the test framework's own launch Activities included.
+ */
+fun awaitNoActivity() {
+    val live = listOf(Stage.PRE_ON_CREATE, Stage.CREATED, Stage.STARTED, Stage.RESUMED, Stage.PAUSED, Stage.STOPPED, Stage.RESTARTED)
+    waitFor(UI_MS) {
+        var alive = 0
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            val monitor = ActivityLifecycleMonitorRegistry.getInstance()
+            alive = live.sumOf { monitor.getActivitiesInStage(it).size }
+        }
+        if (alive == 0) Unit else null
+    } ?: error("an Activity was still alive ${UI_MS / 1000} s after closing the UI")
+}
 
 /** Writes the Rust coverage profile where run.sh pulls it from. */
 fun writeCoverage() {

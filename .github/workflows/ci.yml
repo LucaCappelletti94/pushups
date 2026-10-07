@@ -128,7 +128,7 @@ jobs:
           for features in "" config-real "config-real background-handler" config-fixture config-mismatched; do
             cargo clippy --target x86_64-linux-android ${features:+--features "$features"} -- -D warnings
           done
-      - name: Instrumented tests, through Firebase Cloud Messaging
+      - name: Instrumented tests, through Firebase Cloud Messaging and through ntfy for UnifiedPush
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api }}

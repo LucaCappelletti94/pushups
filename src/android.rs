@@ -1,4 +1,4 @@
-//! The FCM backend, driven by the Kotlin module in `android/`.
+//! The FCM and UnifiedPush backend, driven by the Kotlin module in `android/`.
 //!
 //! `PushupsProvider` loads the app's library at process start and calls `Native.init`, which
 //! hands Rust the `JavaVM` and the module's `Pushups` class. Kotlin reports every push and
@@ -20,6 +20,7 @@ use parking_lot::Mutex;
 use crate::dispatch::DISPATCHER;
 use crate::queue::{Entry, QueueFile};
 use crate::session::{Route, Session};
+use crate::token::base64url;
 use crate::{Config, Error, Event, Message, Notification, Permission, Token};
 
 /// What `Native.init` hands over, once per process.
@@ -38,6 +39,9 @@ struct State {
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
+/// The app server's VAPID public key, base64url, when `install` got a `UnifiedPushConfig`.
+static VAPID: OnceLock<String> = OnceLock::new();
+
 /// Permission requests waiting for `Native.onPermissionResult`, by request id.
 static PERMISSIONS: Mutex<BTreeMap<jlong, oneshot::Sender<bool>>> = Mutex::new(BTreeMap::new());
 static NEXT_PERMISSION: AtomicI64 = AtomicI64::new(0);
@@ -48,7 +52,11 @@ fn runtime() -> Result<&'static Runtime, Error> {
     RUNTIME.get().ok_or(Error::AndroidModuleMissing)
 }
 
-pub(crate) fn install(_config: Config) -> Result<(), Error> {
+pub(crate) fn install(config: Config) -> Result<(), Error> {
+    if let Some(unified_push) = config.unified_push {
+        // A second `install` keeps the first key, as it keeps the first runtime.
+        let _ = VAPID.set(base64url(&unified_push.vapid_public_key));
+    }
     runtime().map(|_| ())
 }
 
@@ -57,8 +65,17 @@ pub(crate) fn register() -> Result<(), Error> {
     runtime
         .vm
         .attach_current_thread(|env| -> jni::errors::Result<()> {
-            env.call_static_method(&runtime.pushups, jni_str!("register"), jni_sig!("()V"), &[])?
-                .v()
+            let vapid = match VAPID.get() {
+                Some(vapid) => JObject::from(env.new_string(vapid)?),
+                None => JObject::null(),
+            };
+            env.call_static_method(
+                &runtime.pushups,
+                jni_str!("register"),
+                jni_sig!("(Ljava/lang/String;)V"),
+                &[JValue::Object(&vapid)],
+            )?
+            .v()
         })
         .map_err(|error| Error::Platform(error.to_string()))
 }
@@ -235,6 +252,47 @@ pub extern "system" fn Java_rs_pushups_Native_onMessagesDropped<'caller>(
     _class: JClass<'caller>,
 ) {
     receive(Entry::MessagesDropped);
+}
+
+/// `Native.onWebPushToken(endpoint, p256dh, auth)`, from a UnifiedPush endpoint.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_pushups_Native_onWebPushToken<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    endpoint: JString<'caller>,
+    p256dh: JByteArray<'caller>,
+    auth: JByteArray<'caller>,
+) {
+    unowned
+        .with_env(|env| -> jni::errors::Result<()> {
+            let endpoint = endpoint.try_to_string(env)?;
+            let p256dh = env.convert_byte_array(&p256dh)?;
+            let auth = env.convert_byte_array(&auth)?;
+            let entry = match (<[u8; 65]>::try_from(p256dh), <[u8; 16]>::try_from(auth)) {
+                (Ok(p256dh), Ok(auth)) => Entry::WebPushToken {
+                    endpoint,
+                    p256dh,
+                    auth,
+                },
+                _ => Entry::RegistrationFailed(
+                    "the distributor's endpoint has no valid Web Push keys".to_owned(),
+                ),
+            };
+            receive(entry);
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>();
+}
+
+/// `Native.onUnregistered()`, when the UnifiedPush distributor dropped the registration.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_pushups_Native_onUnregistered<'caller>(
+    _unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) {
+    receive(Entry::RegistrationFailed(
+        "the distributor unregistered the app".to_owned(),
+    ));
 }
 
 /// `Native.onRegistered(token, error)`, the answer to [`register`]. Exactly one is non-null.
