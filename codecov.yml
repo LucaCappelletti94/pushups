@@ -1,0 +1,9 @@
+coverage:
+  status:
+    # Emulator and browser runs leave defensive paths, such as a library that fails to load, unreached.
+    project:
+      default:
+        target: 85%
+    patch:
+      default:
+        target: 85%
