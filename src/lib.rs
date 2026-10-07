@@ -19,6 +19,13 @@ mod delivered;
 mod dispatch;
 mod error;
 mod event;
+#[cfg(any(
+    target_os = "android",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "macos"
+))]
+mod inbox;
 #[cfg(target_os = "linux")]
 mod linux;
 mod notification;
@@ -31,7 +38,13 @@ mod permission;
     test
 ))]
 mod queue;
-#[cfg(any(target_os = "android", target_os = "linux", test))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "macos",
+    test
+))]
 mod session;
 #[cfg(any(target_os = "ios", target_os = "macos", test))]
 mod started;

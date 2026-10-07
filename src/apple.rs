@@ -21,17 +21,18 @@ use parking_lot::Mutex;
 
 use crate::delivered::Delivered;
 use crate::dispatch::DISPATCHER;
+use crate::inbox::Inbox;
 use crate::queue::{Entry, QueueFile};
+use crate::session::Session;
 use crate::started::{Arrival, Started};
 use crate::{Config, Error, Event, Message, Notification, Permission, Token};
 
 /// The routing state and the files it writes to, behind one lock so a drain and a concurrent push keep their order.
 struct State {
-    /// `set_handler` was called in this process.
-    bound: bool,
+    /// One UI session for the whole process, bound once `set_handler` was called.
+    inbox: Inbox,
     /// The activation state `started_app` is read from.
     started: Started,
-    queue: QueueFile,
     delivered: Delivered,
 }
 
@@ -54,9 +55,11 @@ pub(crate) fn install(_config: Config) -> Result<(), Error> {
     }
     let directory = data_directory()?;
     let state = State {
-        bound: false,
+        inbox: Inbox::new(
+            Session::Headless.on_session(true),
+            QueueFile::new(directory.join("queue")),
+        ),
         started: Started::default(),
-        queue: QueueFile::new(directory.join("queue")),
         delivered: Delivered::new(directory.join("delivered")),
     };
     if STATE.set(Mutex::new(state)).is_err() {
@@ -129,22 +132,10 @@ where
 
 /// Binds the process to the handler just set, and hands it the queue.
 pub(crate) fn handler_set() {
-    let Some(state) = STATE.get() else {
-        return;
-    };
-    {
-        let mut state = state.lock();
-        if !state.bound {
-            // A queue that cannot be read stays on disk and the process stays unbound, so the next handler tries again.
-            if let Ok(entries) = state.queue.take_all() {
-                state.bound = true;
-                for entry in entries {
-                    DISPATCHER.enqueue(entry.into_event());
-                }
-            }
-        }
+    if let Some(state) = STATE.get() {
+        state.lock().inbox.handler_set();
+        DISPATCHER.flush();
     }
-    DISPATCHER.flush();
 }
 
 /// The Application Support directory of this app, where the queue and the delivered set live.
@@ -180,11 +171,7 @@ fn receive(payload: Vec<u8>, arrival: Arrival) -> Option<Message> {
             payload,
             started_app,
         };
-        let entry = Entry::Message(message.clone());
-        // A queue that cannot be written still leaves the event in memory, where a handler of this process gets it.
-        if state.bound || state.queue.append(&entry).is_err() {
-            DISPATCHER.enqueue(entry.into_event());
-        }
+        state.inbox.receive(Entry::Message(message.clone()));
         message
     };
     DISPATCHER.flush();

@@ -23,8 +23,9 @@ use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::zvariant::{OwnedValue, Value};
 
 use crate::dispatch::DISPATCHER;
+use crate::inbox::Inbox;
 use crate::queue::{Entry, QueueFile};
-use crate::session::{Route, Session};
+use crate::session::Session;
 use crate::token::base64url;
 use crate::webpush_crypto::Keys;
 use crate::{Config, Context, Error, Message, Notification, Permission};
@@ -50,11 +51,10 @@ struct Runtime {
     activity: Mutex<Activity>,
 }
 
-/// The routing state, the queue and the registration, behind one lock so a drain and a
-/// concurrent push keep their order.
+/// The routing, the queue and the registration, behind one lock so a drain and a concurrent push
+/// keep their order.
 struct State {
-    session: Session,
-    queue: QueueFile,
+    inbox: Inbox,
     keys: Keys,
     token: String,
     /// The next message started the app, true in a headless process until its first message.
@@ -111,8 +111,7 @@ pub(crate) fn install(config: Config) -> Result<(), Error> {
             .unified_push
             .map(|unified_push| base64url(&unified_push.vapid_public_key)),
         state: Mutex::new(State {
-            session,
-            queue: QueueFile::new(dir.join("queue")),
+            inbox: Inbox::new(session, QueueFile::new(dir.join("queue"))),
             keys,
             token,
             started_app: headless,
@@ -247,26 +246,10 @@ pub(crate) fn request_permission() -> Ready<Result<Permission, Error>> {
 /// Binds the UI session to the handler just set, and hands it the queue if the session was
 /// waiting for one.
 pub(crate) fn handler_set() {
-    let Some(runtime) = RUNTIME.get() else {
-        return;
-    };
-    {
-        let mut state = runtime.state.lock();
-        let (bound, drain) = state.session.on_handler_set();
-        if drain {
-            // A queue that cannot be read stays on disk and the session stays unbound, so the
-            // next handler tries again.
-            if let Ok(entries) = state.queue.take_all() {
-                state.session = bound;
-                for entry in entries {
-                    DISPATCHER.enqueue(entry.into_event());
-                }
-            }
-        } else {
-            state.session = bound;
-        }
+    if let Some(runtime) = RUNTIME.get() {
+        runtime.state.lock().inbox.handler_set();
+        DISPATCHER.flush();
     }
-    DISPATCHER.flush();
 }
 
 pub(crate) fn in_service_worker() -> bool {
@@ -279,20 +262,6 @@ where
     F: Future<Output = Notification> + 'static,
 {
     Err(Error::Unsupported)
-}
-
-/// Persists or emits an event under the state lock, by the session's route.
-fn receive(state: &State, entry: Entry) {
-    match state.session.route() {
-        Route::Emit => DISPATCHER.enqueue(entry.into_event()),
-        // A queue that cannot be written still leaves the event in memory, where a handler of
-        // this process gets it.
-        Route::Persist => {
-            if state.queue.append(&entry).is_err() {
-                DISPATCHER.enqueue(entry.into_event());
-            }
-        }
-    }
 }
 
 /// Counts a call from the distributor as activity for as long as it lives.
@@ -354,7 +323,7 @@ impl Connector {
                 started_app: state.started_app,
             };
             state.started_app = false;
-            receive(&state, Entry::Message(message.clone()));
+            state.inbox.receive(Entry::Message(message.clone()));
             message
         };
         DISPATCHER.flush();
@@ -380,7 +349,7 @@ impl Connector {
                     p256dh: state.keys.public_key(),
                     auth: state.keys.auth(),
                 };
-                receive(&state, entry);
+                state.inbox.receive(entry);
             }
         }
         DISPATCHER.flush();
@@ -397,7 +366,7 @@ impl Connector {
             let state = call.0.state.lock();
             if known_token(&state, &args) {
                 let reason = "the distributor unregistered the app".to_owned();
-                receive(&state, Entry::RegistrationFailed(reason));
+                state.inbox.receive(Entry::RegistrationFailed(reason));
             }
         }
         DISPATCHER.flush();

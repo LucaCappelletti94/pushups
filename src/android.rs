@@ -18,8 +18,9 @@ use jni::{EnvUnowned, JavaVM, jni_sig, jni_str};
 use parking_lot::Mutex;
 
 use crate::dispatch::DISPATCHER;
+use crate::inbox::Inbox;
 use crate::queue::{Entry, QueueFile};
-use crate::session::{Route, Session};
+use crate::session::Session;
 use crate::token::base64url;
 use crate::{Config, Error, Event, Message, Notification, Permission, Token};
 
@@ -27,14 +28,8 @@ use crate::{Config, Error, Event, Message, Notification, Permission, Token};
 struct Runtime {
     vm: JavaVM,
     pushups: Global<JClass<'static>>,
-    state: Mutex<State>,
-}
-
-/// The routing state and the queue it writes to, behind one lock so a drain and a concurrent
-/// push keep their order.
-struct State {
-    session: Session,
-    queue: QueueFile,
+    /// Behind one lock, so a drain and a concurrent push keep their order.
+    inbox: Mutex<Inbox>,
 }
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -124,46 +119,17 @@ where
 /// Binds the UI session to the handler just set, and hands it the queue if the session was
 /// waiting for one.
 pub(crate) fn handler_set() {
-    let Some(runtime) = RUNTIME.get() else {
-        return;
-    };
-    {
-        let mut state = runtime.state.lock();
-        let (bound, drain) = state.session.on_handler_set();
-        if drain {
-            // A queue that cannot be read stays on disk and the session stays unbound, so
-            // the next handler tries again.
-            if let Ok(entries) = state.queue.take_all() {
-                state.session = bound;
-                for entry in entries {
-                    DISPATCHER.enqueue(entry.into_event());
-                }
-            }
-        } else {
-            state.session = bound;
-        }
+    if let Some(runtime) = RUNTIME.get() {
+        runtime.inbox.lock().handler_set();
+        DISPATCHER.flush();
     }
-    DISPATCHER.flush();
 }
 
 /// Persists or emits an event from the platform, by the session's route.
 fn receive(entry: Entry) {
-    let Some(runtime) = RUNTIME.get() else {
-        DISPATCHER.emit(entry.into_event());
-        return;
-    };
-    {
-        let state = runtime.state.lock();
-        match state.session.route() {
-            Route::Emit => DISPATCHER.enqueue(entry.into_event()),
-            // A queue that cannot be written still leaves the event in memory, where a
-            // handler of this process gets it.
-            Route::Persist => {
-                if state.queue.append(&entry).is_err() {
-                    DISPATCHER.enqueue(entry.into_event());
-                }
-            }
-        }
+    match RUNTIME.get() {
+        Some(runtime) => runtime.inbox.lock().receive(entry),
+        None => DISPATCHER.enqueue(entry.into_event()),
     }
     DISPATCHER.flush();
 }
@@ -187,10 +153,10 @@ pub extern "system" fn Java_rs_pushups_Native_init<'caller>(
             let _ = RUNTIME.set(Runtime {
                 vm,
                 pushups,
-                state: Mutex::new(State {
-                    session: Session::default(),
-                    queue: QueueFile::new(files_dir.join(QUEUE_FILE)),
-                }),
+                inbox: Mutex::new(Inbox::new(
+                    Session::default(),
+                    QueueFile::new(files_dir.join(QUEUE_FILE)),
+                )),
             });
             Ok(())
         })
@@ -205,8 +171,7 @@ pub extern "system" fn Java_rs_pushups_Native_onSession<'caller>(
     active: jboolean,
 ) {
     if let Some(runtime) = RUNTIME.get() {
-        let mut state = runtime.state.lock();
-        state.session = state.session.on_session(active);
+        runtime.inbox.lock().on_session(active);
     }
 }
 
