@@ -28,13 +28,17 @@ target_env=$(echo "$target" | tr '[:lower:]-' '[:upper:]_')
 rm -rf "$out"
 mkdir -p "$out" "$root/target"
 
-# The screen stays on and unlocked, since install checks, the prompt and the shade show on it.
-adb shell input keyevent KEYCODE_WAKEUP
-adb shell wm dismiss-keyguard
+# The screen stays on and unlocked while the tests run, since install checks, the prompt and the
+# shade show on it. A variant's build takes minutes, so each one wakes the device again.
+wake() {
+  adb shell input keyevent KEYCODE_WAKEUP
+  adb shell wm dismiss-keyguard
+}
+adb shell svc power stayon true
 
 python3 "$ci/send.py" "$key" &
 sender=$!
-trap 'kill $sender 2>/dev/null || true' EXIT
+trap 'kill $sender 2>/dev/null || true; adb shell svc power stayon false || true' EXIT
 
 # One app configuration: the probe built with <features>, the test manifest <manifest>, and the test
 # class <class>, with <expect> passed to it. Each runs in a fresh install, so the notification
@@ -53,6 +57,7 @@ run_variant() {
   cp "$ci/probe/target/$target/debug/libpushups_probe.so" "$out/$variant.so"
   (cd "$ci" && ./gradlew --no-daemon --quiet -Ppushups.manifest="$manifest" assembleDebugAndroidTest)
 
+  wake
   adb uninstall "$package" >/dev/null 2>&1 || true
   adb install -t "$build/pushups/outputs/apk/androidTest/debug/pushups-debug-androidTest.apk" >/dev/null
   timeout 900 adb shell am instrument -w -e class "rs.pushups.ci.$class" ${expect:+-e expect "'$expect'"} \
