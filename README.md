@@ -50,6 +50,17 @@ let keys = web.web_push_keys().unwrap();
 assert_eq!(keys.auth, "BwcHBwcHBwcHBwcHBwcHBw");
 ```
 
+## Dioxus
+
+The `dioxus` feature lets `dx` bundle what the crate ships, the Android module and the web's static service worker, with no path into the crate in the app.
+
+```toml
+[dependencies]
+pushups = { version = "0.1", features = ["dioxus", "stream"] }
+```
+
+The app installs the crate in `main` before `dioxus::launch`, and a `use_future` in its root component reads `pushups::events()` into its signals, as `examples/dioxus` does. Apple's push entitlement and background mode go in `Dioxus.toml`. The feature builds with the Rust version Dioxus 0.7 needs, newer than the crate's own.
+
 ## iOS and macOS
 
 `install` runs in `main`, on the main thread, before the toolkit starts. The crate adds its push methods to whatever app delegate the toolkit installs, and installs its own when there is none, so tao and winit need no change. It also handles the notification center's delegate, so a push arriving while the app is in front shows as a banner and a tap on a notification reaches the handler. Every push reaches the handler once, including one whose notification is tapped later.
@@ -71,7 +82,7 @@ A push that wakes the app in the background runs the background handler below of
 
 ## Android
 
-The crate ships a Gradle module in `android/` holding the FCM and UnifiedPush services. A `dx` app bundles it with `#[manganis::ffi("<path to the pushups crate>/android")]` on an `extern "Kotlin" { pub type Pushups; }` block, the path relative to the app's manifest directory, as `examples/dioxus` does. A Tauri app includes it as a Gradle project. cargo-apk and xbuild have no way to bundle it yet.
+The crate ships a Gradle module in `android/` holding the FCM and UnifiedPush services. A `dx` app bundles it through the `dioxus` feature. A Tauri app includes it as a Gradle project. cargo-apk and xbuild have no way to bundle it yet.
 
 The app compiles its Firebase configuration in, from the `google-services.json` the Firebase console gives, with no Google services Gradle plugin. A process the push started with no UI can run Rust at once through a background handler. The push also waits on disk for the app's handler, which gets it when the UI opens.
 
@@ -96,7 +107,7 @@ An app whose `Config` has a `UnifiedPushConfig` gets its pushes through a [Unifi
 
 The web target needs the app's VAPID public key. Every push shows a notification, as browsers require, and a payload in the [Declarative Web Push](https://webkit.org/blog/16535/meet-declarative-web-push/) shape (`"web_push": 8030`) is shown as it is. Pushes that arrive with no page open wait in `IndexedDB` for the next page's handler.
 
-By default the app serves `js/pushups-sw.js` from this crate at `/pushups-sw.js`, a service worker with no wasm in it. An app that needs Rust to build the notification, to decrypt an end-to-end encrypted payload for instance, sets `rust_handler`. Its own wasm then runs as the service worker, with no second build, and its `main` serves the handler there.
+By default the app serves `js/pushups-sw.js` from this crate at `/pushups-sw.js`, a service worker with no wasm in it, and with the `dioxus` feature `dx` serves it from the app's assets. An app that needs Rust to build the notification, to decrypt an end-to-end encrypted payload for instance, sets `rust_handler`. Its own wasm then runs as the service worker, with no second build, and its `main` serves the handler there.
 
 ```rust
 use pushups::{Config, Message, Notification, WebPushConfig};

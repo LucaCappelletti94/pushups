@@ -70,10 +70,11 @@ jobs:
       - run: |
           rustup toolchain install 1.85 --profile minimal
           rustup target add --toolchain 1.85 aarch64-linux-android aarch64-apple-ios aarch64-apple-darwin
-      - run: cargo +1.85 check --workspace --all-features
-      - run: cargo +1.85 check --workspace --all-features --target aarch64-linux-android
-      - run: cargo +1.85 check --workspace --all-features --target aarch64-apple-ios
-      - run: cargo +1.85 check --workspace --all-features --target aarch64-apple-darwin
+      # Every feature but `dioxus`, which needs the Rust version Dioxus 0.7 apps already need.
+      - run: cargo +1.85 check --workspace --features stream
+      - run: cargo +1.85 check --workspace --features stream --target aarch64-linux-android
+      - run: cargo +1.85 check --workspace --features stream --target aarch64-apple-ios
+      - run: cargo +1.85 check --workspace --features stream --target aarch64-apple-darwin
 
   docs:
     name: Docs

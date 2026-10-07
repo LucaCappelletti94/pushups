@@ -18,6 +18,14 @@ mod context;
 #[cfg(any(target_os = "ios", target_os = "macos", test))]
 mod delivered;
 mod dispatch;
+#[cfg(all(
+    feature = "dioxus",
+    any(
+        target_os = "android",
+        all(target_arch = "wasm32", target_os = "unknown")
+    )
+))]
+mod dx;
 mod error;
 mod event;
 #[cfg(any(

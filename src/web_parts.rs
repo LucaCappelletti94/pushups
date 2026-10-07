@@ -23,6 +23,16 @@ pub(crate) fn worker_script_url(script: &str, mode: WorkerMode) -> String {
     format!("{script}{separator}pushups={mode}")
 }
 
+/// The static worker's script: the app's own path, else the one `dx` bundled from this crate,
+/// else [`WebPushConfig::DEFAULT_SERVICE_WORKER_PATH`](crate::WebPushConfig::DEFAULT_SERVICE_WORKER_PATH).
+pub(crate) fn static_worker_path(configured: Option<&str>, bundled: Option<String>) -> String {
+    match (configured, bundled) {
+        (Some(path), _) => path.to_owned(),
+        (None, Some(bundled)) => bundled,
+        (None, None) => crate::WebPushConfig::DEFAULT_SERVICE_WORKER_PATH.to_owned(),
+    }
+}
+
 /// The token of a push subscription, from its endpoint, keys and expiry in milliseconds.
 pub(crate) fn web_push_token(
     endpoint: String,
@@ -81,6 +91,18 @@ mod tests {
         assert_eq!(
             worker_script_url("/sw.js?v=3", WorkerMode::Static),
             "/sw.js?v=3&pushups=static"
+        );
+    }
+
+    #[test]
+    fn the_static_worker_is_the_apps_path_then_the_bundled_one_then_the_default() {
+        let bundled = || Some("/assets/pushups-sw.js".to_owned());
+        assert_eq!(static_worker_path(Some("/sw.js"), bundled()), "/sw.js");
+        assert_eq!(static_worker_path(None, bundled()), "/assets/pushups-sw.js");
+        assert_eq!(static_worker_path(None, None), "/pushups-sw.js");
+        assert_eq!(
+            static_worker_path(Some("/pushups-sw.js"), bundled()),
+            "/pushups-sw.js"
         );
     }
 

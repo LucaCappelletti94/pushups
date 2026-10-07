@@ -15,12 +15,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use pushups::{Config, Context, Event, Message, Notification, Permission, WebPushConfig};
 
-#[cfg(target_os = "android")]
-#[manganis::ffi("../../android")]
-extern "Kotlin" {
-    pub type Pushups;
-}
-
 pushups::firebase_config!("google-services.json");
 
 /// Where the background handler sends its request, forwarded to the host by

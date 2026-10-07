@@ -103,13 +103,14 @@ impl WnsConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebPushConfig {
     pub(crate) vapid_public_key: [u8; 65],
-    pub(crate) service_worker_path: String,
+    pub(crate) service_worker_path: Option<String>,
     pub(crate) rust_handler: bool,
 }
 
 impl WebPushConfig {
-    /// The service worker path used unless [`service_worker_path`](Self::service_worker_path)
-    /// sets another.
+    /// The path of the static service worker unless [`service_worker_path`](Self::service_worker_path)
+    /// sets another. With the `dioxus` feature the default is the copy `dx` bundles from this
+    /// crate into the app's assets.
     pub const DEFAULT_SERVICE_WORKER_PATH: &str = "/pushups-sw.js";
 
     /// A configuration for the app's VAPID public key, an uncompressed P-256 point.
@@ -117,7 +118,7 @@ impl WebPushConfig {
     pub fn new(vapid_public_key: [u8; 65]) -> Self {
         Self {
             vapid_public_key,
-            service_worker_path: Self::DEFAULT_SERVICE_WORKER_PATH.to_owned(),
+            service_worker_path: None,
             rust_handler: false,
         }
     }
@@ -125,7 +126,7 @@ impl WebPushConfig {
     /// Where the app serves the `js/pushups-sw.js` file this crate ships.
     #[must_use]
     pub fn service_worker_path(mut self, path: impl Into<String>) -> Self {
-        self.service_worker_path = path.into();
+        self.service_worker_path = Some(path.into());
         self
     }
 
