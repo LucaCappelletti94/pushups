@@ -21,8 +21,9 @@ from pathlib import Path
 PACKAGE = "rs.pushups.example"
 DIR = "files/pushups-ci"
 POLL_S = 0.5
-# FCM answers 404 UNREGISTERED for a moment after a token is new, as the web harness found for its 410.
-UNREGISTERED_S = 30
+# How long a push is re-sent while FCM answers with something that passes: 404 UNREGISTERED for a
+# moment after a token is new (the web job's 410), and the 429 and 5xx that FCM asks callers to retry.
+RETRY_S = 60
 
 
 def b64url(data: bytes) -> bytes:
@@ -80,12 +81,17 @@ def post(key: dict, token: str, message: dict) -> str:
         return f"{error.code} {error.read().decode()}"
 
 
+def transient(status: str) -> bool:
+    code = status.split(" ", 1)[0]
+    return (code == "404" and "UNREGISTERED" in status) or code == "429" or code.startswith("5")
+
+
 def send(key: dict, token: str, message: dict) -> str:
-    """Posts the message, re-sending for up to UNREGISTERED_S while FCM calls a new token unregistered."""
-    deadline = time.monotonic() + UNREGISTERED_S
+    """Posts the message, re-sending it for up to RETRY_S while FCM's answer is transient."""
+    deadline = time.monotonic() + RETRY_S
     while True:
         status = post(key, token, message)
-        if not (status.startswith("404 ") and "UNREGISTERED" in status) or time.monotonic() >= deadline:
+        if not transient(status) or time.monotonic() >= deadline:
             return status
         time.sleep(3)
 

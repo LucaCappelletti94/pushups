@@ -96,23 +96,25 @@ class PushupsTest {
             waitFor(UI_MS) { Probe.permission() } ?: error("no permission answer within ${UI_MS / 1000} s")
 
         /**
-         * Clicks what [selector] finds once it shows, within [boundMs]. The screen may redraw
-         * between finding and clicking, so a stale object is found again.
+         * Clicks what [selector] finds until [outcome] returns non-null, within [boundMs]. On a
+         * slow device a click can land while the screen redraws and be lost, so it is repeated.
          */
-        private fun clickWhenShown(selector: BySelector, boundMs: Long): Boolean =
+        private fun <T> clickUntil(selector: BySelector, boundMs: Long, outcome: () -> T?): T? =
             waitFor(boundMs) {
-                try {
-                    device.findObject(selector)?.click()?.let { true }
-                } catch (e: StaleObjectException) {
+                outcome() ?: run {
+                    try {
+                        device.findObject(selector)?.click()
+                    } catch (e: StaleObjectException) {
+                        // Found again on the next poll.
+                    }
                     null
                 }
-            } ?: false
+            }
 
-        /** Answers the system prompt with the button whose resource id ends in [button]. */
-        private fun answerPrompt(button: String) {
-            val selector = By.res("com.android.permissioncontroller", button)
-            assertTrue("the permission prompt did not show $button", clickWhenShown(selector, UI_MS))
-        }
+        /** Answers the system prompt with the button whose resource id ends in [button], and returns the answer. */
+        private fun answerPrompt(button: String): String =
+            clickUntil(By.res("com.android.permissioncontroller", button), UI_MS) { Probe.permission() }
+                ?: error("no answer after pressing $button for ${UI_MS / 1000} s")
     }
 
     @Test
@@ -165,11 +167,9 @@ class PushupsTest {
             return
         }
         Probe.startPermission()
-        answerPrompt("permission_deny_button")
-        assertEquals("Denied", awaitPermission())
+        assertEquals("Denied", answerPrompt("permission_deny_button"))
         Probe.startPermission()
-        answerPrompt("permission_allow_button")
-        assertEquals("Granted", awaitPermission())
+        assertEquals("Granted", answerPrompt("permission_allow_button"))
         // Granted already, so no prompt shows.
         Probe.startPermission()
         assertEquals("Granted", awaitPermission())
@@ -208,9 +208,8 @@ class PushupsTest {
         )
         val monitor = instrumentation.addMonitor(TapActivity::class.java.name, null, false)
         device.openNotification()
-        assertTrue("the notification $title did not show", clickWhenShown(By.text(title), DELIVERY_MS))
-        val activity: Activity = instrumentation.waitForMonitorWithTimeout(monitor, UI_MS)
-            ?: error("the tap did not open TapActivity")
+        val activity: Activity = clickUntil(By.text(title), DELIVERY_MS) { monitor.lastActivity }
+            ?: error("the notification $title did not show, or tapping it did not open TapActivity")
         Probe.setHandler()
         val line = awaitLine(Probe::events, id, UI_MS)
         assertTrue(line, line.startsWith("message started_app=false "))
