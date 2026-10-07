@@ -282,7 +282,8 @@ jobs:
         run: |
           dx build --web --release --no-default-features --features web
           PUSHUPS_WEB_WORKER=static dx build --web --release --no-default-features --features web
-          test -f target/dx/pushups-dioxus-example/release/web/public/pushups-sw.js
+          # The `dioxus` feature has dx copy the worker unchanged into the assets.
+          cmp target/dx/pushups-dioxus-example/release/web/public/assets/pushups-sw.js ../../js/pushups-sw.js
 
   example-apple:
     name: Example apps for iOS and macOS
