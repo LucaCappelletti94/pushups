@@ -7,6 +7,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, future_to_promise, spawn_local};
 use web_sys::ServiceWorkerRegistration;
 
+use crate::backend::Backend;
 use crate::dispatch::DISPATCHER;
 use crate::web_parts::{WorkerMode, permission_from, web_push_token, worker_script_url};
 use crate::{Config, Error, Event, Message, Notification, Permission, WebPushConfig};
@@ -56,66 +57,6 @@ fn js_error(value: &JsValue) -> Error {
         || format!("{value:?}"),
         |error| String::from(error.message()),
     ))
-}
-
-pub(crate) fn in_service_worker() -> bool {
-    shim_in_service_worker()
-}
-
-pub(crate) fn install(config: Config) -> Result<(), Error> {
-    let web = config.web.ok_or(Error::NotConfigured)?;
-    let window = web_sys::window().ok_or(Error::Unsupported)?;
-    let navigator = window.navigator();
-    let has_push = Reflect::has(&window, &JsValue::from_str("PushManager")).unwrap_or(false);
-    if !has_push || !Reflect::has(&navigator, &JsValue::from_str("serviceWorker")).unwrap_or(false)
-    {
-        return Err(Error::Unsupported);
-    }
-    let script = if web.rust_handler {
-        worker_script_url(&GLUE_URL.with(Clone::clone), WorkerMode::Rust)
-    } else {
-        worker_script_url(&web.service_worker_path, WorkerMode::Static)
-    };
-    let options = web_sys::RegistrationOptions::new();
-    options.set_type("module");
-    let registration = navigator
-        .service_worker()
-        .register_with_options(&script, &options);
-    let drain_request = Closure::<dyn Fn()>::new(|| {
-        if PAGE.with_borrow(|page| page.as_ref().is_some_and(|page| page.handler_set)) {
-            spawn_local(drain());
-        }
-    });
-    shim_on_drain_request(drain_request.as_ref().unchecked_ref());
-    // The listener lives as long as the page.
-    drain_request.forget();
-    PAGE.set(Some(Page {
-        config: web,
-        registration,
-        handler_set: false,
-    }));
-    Ok(())
-}
-
-pub(crate) fn register() -> Result<(), Error> {
-    let (registration, key) = PAGE.with_borrow(|page| {
-        page.as_ref()
-            .map(|page| {
-                (
-                    page.registration.clone(),
-                    Uint8Array::from(page.config.vapid_public_key.as_slice()),
-                )
-            })
-            .ok_or(Error::NotConfigured)
-    })?;
-    spawn_local(async move {
-        let event = match subscribe(registration, key).await {
-            Ok(token) => Event::Token(token),
-            Err(error) => Event::RegistrationFailed(error),
-        };
-        DISPATCHER.emit(event);
-    });
-    Ok(())
 }
 
 async fn subscribe(registration: Promise, key: Uint8Array) -> Result<crate::Token, Error> {
@@ -178,24 +119,6 @@ async fn drain() {
     }
 }
 
-pub(crate) fn handler_set() {
-    let bound =
-        PAGE.with_borrow_mut(|page| page.as_mut().map(|page| page.handler_set = true).is_some());
-    if bound {
-        spawn_local(drain());
-    }
-}
-
-pub(crate) async fn request_permission() -> Result<Permission, Error> {
-    let window = web_sys::window().ok_or(Error::Unsupported)?;
-    if !Reflect::has(&window, &JsValue::from_str("Notification")).unwrap_or(false) {
-        return Err(Error::Unsupported);
-    }
-    let asked = web_sys::Notification::request_permission().map_err(|e| js_error(&e))?;
-    let answer = JsFuture::from(asked).await.map_err(|e| js_error(&e))?;
-    permission_from(&answer.as_string().unwrap_or_default())
-}
-
 fn notification_object(notification: &Notification) -> Object {
     let object = Object::new();
     let fields = [
@@ -214,23 +137,106 @@ fn notification_object(notification: &Notification) -> Object {
     object
 }
 
-pub(crate) fn serve_service_worker<H, F>(handler: H) -> Result<(), Error>
-where
-    H: Fn(Message) -> F + 'static,
-    F: Future<Output = Notification> + 'static,
-{
-    if !shim_in_service_worker() {
-        return Err(Error::NotInServiceWorker);
+pub(crate) struct Web;
+
+impl Backend for Web {
+    fn in_service_worker() -> bool {
+        shim_in_service_worker()
     }
-    let handler = Closure::<dyn Fn(Uint8Array) -> Promise>::new(move |payload: Uint8Array| {
-        let shown = handler(Message {
-            payload: payload.to_vec(),
-            started_app: false,
+
+    fn install(config: Config) -> Result<(), Error> {
+        let web = config.web.ok_or(Error::NotConfigured)?;
+        let window = web_sys::window().ok_or(Error::Unsupported)?;
+        let navigator = window.navigator();
+        let has_push = Reflect::has(&window, &JsValue::from_str("PushManager")).unwrap_or(false);
+        if !has_push
+            || !Reflect::has(&navigator, &JsValue::from_str("serviceWorker")).unwrap_or(false)
+        {
+            return Err(Error::Unsupported);
+        }
+        let script = if web.rust_handler {
+            worker_script_url(&GLUE_URL.with(Clone::clone), WorkerMode::Rust)
+        } else {
+            worker_script_url(&web.service_worker_path, WorkerMode::Static)
+        };
+        let options = web_sys::RegistrationOptions::new();
+        options.set_type("module");
+        let registration = navigator
+            .service_worker()
+            .register_with_options(&script, &options);
+        let drain_request = Closure::<dyn Fn()>::new(|| {
+            if PAGE.with_borrow(|page| page.as_ref().is_some_and(|page| page.handler_set)) {
+                spawn_local(drain());
+            }
         });
-        future_to_promise(async move { Ok(notification_object(&shown.await).into()) })
-    });
-    shim_serve(handler.as_ref().unchecked_ref());
-    // The worker keeps the handler for its whole life.
-    handler.forget();
-    Ok(())
+        shim_on_drain_request(drain_request.as_ref().unchecked_ref());
+        // The listener lives as long as the page.
+        drain_request.forget();
+        PAGE.set(Some(Page {
+            config: web,
+            registration,
+            handler_set: false,
+        }));
+        Ok(())
+    }
+
+    fn register() -> Result<(), Error> {
+        let (registration, key) = PAGE.with_borrow(|page| {
+            page.as_ref()
+                .map(|page| {
+                    (
+                        page.registration.clone(),
+                        Uint8Array::from(page.config.vapid_public_key.as_slice()),
+                    )
+                })
+                .ok_or(Error::NotConfigured)
+        })?;
+        spawn_local(async move {
+            let event = match subscribe(registration, key).await {
+                Ok(token) => Event::Token(token),
+                Err(error) => Event::RegistrationFailed(error),
+            };
+            DISPATCHER.emit(event);
+        });
+        Ok(())
+    }
+
+    fn handler_set() {
+        let bound = PAGE
+            .with_borrow_mut(|page| page.as_mut().map(|page| page.handler_set = true).is_some());
+        if bound {
+            spawn_local(drain());
+        }
+    }
+
+    async fn request_permission() -> Result<Permission, Error> {
+        let window = web_sys::window().ok_or(Error::Unsupported)?;
+        if !Reflect::has(&window, &JsValue::from_str("Notification")).unwrap_or(false) {
+            return Err(Error::Unsupported);
+        }
+        let asked = web_sys::Notification::request_permission().map_err(|e| js_error(&e))?;
+        let answer = JsFuture::from(asked).await.map_err(|e| js_error(&e))?;
+        permission_from(&answer.as_string().unwrap_or_default())
+    }
+
+    fn serve_service_worker<H, F>(handler: H) -> Result<(), Error>
+    where
+        H: Fn(Message) -> F + 'static,
+        F: Future<Output = Notification> + 'static,
+    {
+        if !shim_in_service_worker() {
+            return Err(Error::NotInServiceWorker);
+        }
+        let handler = Closure::<dyn Fn(Uint8Array) -> Promise>::new(move |payload: Uint8Array| {
+            let shown = handler(Message {
+                payload: payload.to_vec(),
+                started_app: false,
+            });
+            future_to_promise(async move { Ok(notification_object(&shown.await).into()) })
+        });
+        shim_serve(handler.as_ref().unchecked_ref());
+        // The worker keeps the handler for its whole life.
+        handler.forget();
+        Ok(())
+    }
 }

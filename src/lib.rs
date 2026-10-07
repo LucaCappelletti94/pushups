@@ -12,6 +12,7 @@ pub mod __private;
 mod android;
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod apple;
+mod backend;
 mod config;
 mod context;
 #[cfg(any(target_os = "ios", target_os = "macos", test))]
@@ -73,11 +74,12 @@ mod windows;
 use std::sync::Arc;
 
 #[cfg(target_os = "android")]
-use android as platform;
+use android::Android as Platform;
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-use apple as platform;
+use apple::Apple as Platform;
+use backend::Backend as _;
 #[cfg(target_os = "linux")]
-use linux as platform;
+use linux::Linux as Platform;
 #[cfg(not(any(
     target_os = "android",
     target_os = "ios",
@@ -86,11 +88,11 @@ use linux as platform;
     target_os = "windows",
     all(target_arch = "wasm32", target_os = "unknown")
 )))]
-use unsupported as platform;
+use unsupported::Unsupported as Platform;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-use web as platform;
+use web::Web as Platform;
 #[cfg(target_os = "windows")]
-use windows as platform;
+use windows::Windows as Platform;
 
 pub use config::{Config, LinuxConfig, UnifiedPushConfig, WebPushConfig, WnsConfig};
 pub use context::Context;
@@ -117,7 +119,7 @@ pub use token::{Token, WebPushKeys};
 /// of the app owns its bus name, and on Windows when the `remote_id` is not a GUID or the
 /// runtime does not start.
 pub fn install(config: Config) -> Result<(), Error> {
-    platform::install(config)
+    Platform::install(config)
 }
 
 /// Asks the platform for a push token, which arrives later as [`Event::Token`], or as
@@ -127,7 +129,7 @@ pub fn install(config: Config) -> Result<(), Error> {
 ///
 /// The errors of [`install`], and [`Error::Platform`] when the request cannot be sent.
 pub fn register() -> Result<(), Error> {
-    platform::register()
+    Platform::register()
 }
 
 /// Asks the user to let pushes show notifications, and returns the answer.
@@ -137,7 +139,7 @@ pub fn register() -> Result<(), Error> {
 /// The errors of [`install`], and [`Error::Platform`] when the prompt cannot be shown or ends
 /// without an answer.
 pub async fn request_permission() -> Result<Permission, Error> {
-    platform::request_permission().await
+    Platform::request_permission().await
 }
 
 /// Sets the function that receives every [`Event`], replacing the previous one.
@@ -150,7 +152,7 @@ pub async fn request_permission() -> Result<Permission, Error> {
 /// winit `EventLoopProxy` for instance, is the handler's job.
 pub fn set_handler(handler: impl Fn(Event) + Send + Sync + 'static) {
     DISPATCHER.set_handler(Arc::new(handler));
-    platform::handler_set();
+    Platform::handler_set();
 }
 
 /// Returns every [`Event`] as a stream, in place of a handler.
@@ -162,7 +164,7 @@ pub fn set_handler(handler: impl Fn(Event) + Send + Sync + 'static) {
 #[cfg_attr(docsrs, doc(cfg(feature = "stream")))]
 pub fn events() -> impl futures_core::Stream<Item = Event> + Send + Unpin {
     let events = DISPATCHER.events();
-    platform::handler_set();
+    Platform::handler_set();
     events
 }
 
@@ -170,7 +172,7 @@ pub fn events() -> impl futures_core::Stream<Item = Event> + Send + Unpin {
 /// [`serve_service_worker`] instead of starting its UI.
 #[must_use]
 pub fn in_service_worker() -> bool {
-    platform::in_service_worker()
+    Platform::in_service_worker()
 }
 
 /// Builds the notification for every push the service worker receives, from the app's own
@@ -184,5 +186,5 @@ where
     H: Fn(Message) -> F + 'static,
     F: Future<Output = Notification> + 'static,
 {
-    platform::serve_service_worker(handler)
+    Platform::serve_service_worker(handler)
 }

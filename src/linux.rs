@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::fs::{self, DirBuilder, OpenOptions};
-use std::future::{Ready, ready};
+use std::future::ready;
 use std::io::{self, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -22,13 +22,14 @@ use zbus::blocking::{Connection, connection};
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::zvariant::{OwnedValue, Value};
 
+use crate::backend::Backend;
 use crate::dispatch::DISPATCHER;
 use crate::inbox::Inbox;
 use crate::queue::{Entry, QueueFile};
 use crate::session::Session;
 use crate::token::base64url;
 use crate::webpush_crypto::Keys;
-use crate::{Config, Context, Error, Message, Notification, Permission};
+use crate::{Config, Context, Error, Message, Permission};
 
 const CONNECTOR_PATH: &str = "/org/unifiedpush/Connector";
 const DISTRIBUTOR_PATH: &str = "/org/unifiedpush/Distributor";
@@ -74,85 +75,127 @@ fn platform(error: impl std::fmt::Display) -> Error {
     Error::Platform(error.to_string())
 }
 
-pub(crate) fn install(config: Config) -> Result<(), Error> {
-    let linux = config.linux.ok_or(Error::NotConfigured)?;
-    if RUNTIME.get().is_some() {
-        return Ok(());
-    }
-    let headless = env::var_os(ACTIVATED_ENV).is_some();
-    // The bus comes first, so a process without one leaves no file behind.
-    let connection = connection::Builder::session()
-        .and_then(|builder| builder.serve_at(CONNECTOR_PATH, Connector))
-        .and_then(connection::Builder::build)
-        .map_err(platform)?;
-    let dir = data_dir(
-        env::var_os("XDG_DATA_HOME"),
-        env::var_os("HOME"),
-        &linux.app_id,
-    )
-    .ok_or_else(|| Error::Platform("neither XDG_DATA_HOME nor HOME is set".to_owned()))?;
-    DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&dir)
-        .map_err(platform)?;
-    let keys = load_keys(&dir.join("keys")).map_err(platform)?;
-    let token = load_token(&dir.join("token")).map_err(platform)?;
-    write_activation_file(&linux.app_id).map_err(platform)?;
-    let session = if headless {
-        Session::Headless
-    } else {
-        Session::Headless.on_session(true)
-    };
-    let runtime = Runtime {
-        connection,
-        app_id: linux.app_id,
-        vapid: config
-            .unified_push
-            .map(|unified_push| base64url(&unified_push.vapid_public_key)),
-        state: Mutex::new(State {
-            inbox: Inbox::new(session, QueueFile::new(dir.join("queue"))),
-            keys,
-            token,
-            started_app: headless,
-        }),
-        activity: Mutex::new(Activity {
-            calls: 0,
-            last: Instant::now(),
-            replaced: false,
-        }),
-    };
-    // A concurrent `install` that won the race serves the process, and this one adds nothing.
-    let runtime = match RUNTIME.set(runtime) {
-        Ok(()) => RUNTIME.get(),
-        Err(_) => return Ok(()),
-    }
-    .ok_or_else(|| Error::Platform("the runtime vanished".to_owned()))?;
+pub(crate) struct Linux;
 
-    // The object is served before the name is taken, so a call the bus held for an activation
-    // finds it.
-    let flags = if headless {
-        RequestNameFlags::AllowReplacement.into()
-    } else {
-        RequestNameFlags::ReplaceExisting | RequestNameFlags::DoNotQueue
-    };
-    let reply = runtime
-        .connection
-        .request_name_with_flags(runtime.app_id.as_str(), flags)
-        .map_err(platform)?;
-    if !matches!(
-        reply,
-        RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner
-    ) {
-        return Err(Error::Platform(format!(
-            "another process of {} owns its bus name",
-            runtime.app_id
-        )));
+impl Backend for Linux {
+    fn install(config: Config) -> Result<(), Error> {
+        let linux = config.linux.ok_or(Error::NotConfigured)?;
+        if RUNTIME.get().is_some() {
+            return Ok(());
+        }
+        let headless = env::var_os(ACTIVATED_ENV).is_some();
+        // The bus comes first, so a process without one leaves no file behind.
+        let connection = connection::Builder::session()
+            .and_then(|builder| builder.serve_at(CONNECTOR_PATH, Connector))
+            .and_then(connection::Builder::build)
+            .map_err(platform)?;
+        let dir = data_dir(
+            env::var_os("XDG_DATA_HOME"),
+            env::var_os("HOME"),
+            &linux.app_id,
+        )
+        .ok_or_else(|| Error::Platform("neither XDG_DATA_HOME nor HOME is set".to_owned()))?;
+        DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir)
+            .map_err(platform)?;
+        let keys = load_keys(&dir.join("keys")).map_err(platform)?;
+        let token = load_token(&dir.join("token")).map_err(platform)?;
+        write_activation_file(&linux.app_id).map_err(platform)?;
+        let session = if headless {
+            Session::Headless
+        } else {
+            Session::Headless.on_session(true)
+        };
+        let runtime = Runtime {
+            connection,
+            app_id: linux.app_id,
+            vapid: config
+                .unified_push
+                .map(|unified_push| base64url(&unified_push.vapid_public_key)),
+            state: Mutex::new(State {
+                inbox: Inbox::new(session, QueueFile::new(dir.join("queue"))),
+                keys,
+                token,
+                started_app: headless,
+            }),
+            activity: Mutex::new(Activity {
+                calls: 0,
+                last: Instant::now(),
+                replaced: false,
+            }),
+        };
+        // A concurrent `install` that won the race serves the process, and this one adds nothing.
+        let runtime = match RUNTIME.set(runtime) {
+            Ok(()) => RUNTIME.get(),
+            Err(_) => return Ok(()),
+        }
+        .ok_or_else(|| Error::Platform("the runtime vanished".to_owned()))?;
+
+        // The object is served before the name is taken, so a call the bus held for an activation
+        // finds it.
+        let flags = if headless {
+            RequestNameFlags::AllowReplacement.into()
+        } else {
+            RequestNameFlags::ReplaceExisting | RequestNameFlags::DoNotQueue
+        };
+        let reply = runtime
+            .connection
+            .request_name_with_flags(runtime.app_id.as_str(), flags)
+            .map_err(platform)?;
+        if !matches!(
+            reply,
+            RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner
+        ) {
+            return Err(Error::Platform(format!(
+                "another process of {} owns its bus name",
+                runtime.app_id
+            )));
+        }
+        if headless {
+            serve_headless(runtime);
+        }
+        Ok(())
     }
-    if headless {
-        serve_headless(runtime);
+
+    fn register() -> Result<(), Error> {
+        let runtime = RUNTIME.get().ok_or(Error::NotConfigured)?;
+        let distributor = match find_distributor(&runtime.connection) {
+            Ok(distributor) => distributor,
+            Err(reason) => {
+                DISPATCHER.emit(Entry::RegistrationFailed(reason).into_event());
+                return Ok(());
+            }
+        };
+        // KUnifiedPush holds the reply while it believes the machine is offline, so the call waits on its own thread.
+        thread::Builder::new()
+            .name("pushups register".to_owned())
+            .spawn(move || {
+                if let Err(reason) = send_register(runtime, &distributor) {
+                    DISPATCHER.emit(Entry::RegistrationFailed(reason).into_event());
+                }
+            })
+            .map(drop)
+            .map_err(platform)
     }
-    Ok(())
+
+    fn request_permission() -> impl Future<Output = Result<Permission, Error>> {
+        let permission = match Connection::session() {
+            Ok(connection) if find_distributor(&connection).is_ok() => Permission::Granted,
+            _ => Permission::Denied,
+        };
+        ready(Ok(permission))
+    }
+
+    /// Binds the UI session to the handler just set, and hands it the queue if the session was
+    /// waiting for one.
+    fn handler_set() {
+        if let Some(runtime) = RUNTIME.get() {
+            runtime.state.lock().inbox.handler_set();
+            DISPATCHER.flush();
+        }
+    }
 }
 
 /// Serves the calls a push brought, then exits once idle or replaced by a UI process.
@@ -177,27 +220,6 @@ fn serve_headless(runtime: &'static Runtime) -> ! {
         }
         thread::sleep(IDLE_POLL);
     }
-}
-
-pub(crate) fn register() -> Result<(), Error> {
-    let runtime = RUNTIME.get().ok_or(Error::NotConfigured)?;
-    let distributor = match find_distributor(&runtime.connection) {
-        Ok(distributor) => distributor,
-        Err(reason) => {
-            DISPATCHER.emit(Entry::RegistrationFailed(reason).into_event());
-            return Ok(());
-        }
-    };
-    // KUnifiedPush holds the reply while it believes the machine is offline, so the call waits on its own thread.
-    thread::Builder::new()
-        .name("pushups register".to_owned())
-        .spawn(move || {
-            if let Err(reason) = send_register(runtime, &distributor) {
-                DISPATCHER.emit(Entry::RegistrationFailed(reason).into_event());
-            }
-        })
-        .map(drop)
-        .map_err(platform)
 }
 
 /// Sends `Register` and waits for the answer, with the failure as `RegistrationFailed` describes it.
@@ -233,35 +255,6 @@ fn send_register(runtime: &Runtime, distributor: &str) -> Result<(), String> {
         .and_then(|value| <&str>::try_from(value).ok())
         .unwrap_or("no reason given");
     Err(format!("{distributor} refused the registration: {reason}"))
-}
-
-pub(crate) fn request_permission() -> Ready<Result<Permission, Error>> {
-    let permission = match Connection::session() {
-        Ok(connection) if find_distributor(&connection).is_ok() => Permission::Granted,
-        _ => Permission::Denied,
-    };
-    ready(Ok(permission))
-}
-
-/// Binds the UI session to the handler just set, and hands it the queue if the session was
-/// waiting for one.
-pub(crate) fn handler_set() {
-    if let Some(runtime) = RUNTIME.get() {
-        runtime.state.lock().inbox.handler_set();
-        DISPATCHER.flush();
-    }
-}
-
-pub(crate) fn in_service_worker() -> bool {
-    false
-}
-
-pub(crate) fn serve_service_worker<H, F>(_handler: H) -> Result<(), Error>
-where
-    H: Fn(Message) -> F + 'static,
-    F: Future<Output = Notification> + 'static,
-{
-    Err(Error::Unsupported)
 }
 
 /// Counts a call from the distributor as activity for as long as it lives.

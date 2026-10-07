@@ -54,9 +54,11 @@ use windows::Foundation::TypedEventHandler;
 use windows_core::Interface as _;
 
 #[cfg(target_os = "windows")]
+use crate::backend::Backend;
+#[cfg(target_os = "windows")]
 use crate::dispatch::DISPATCHER;
 #[cfg(target_os = "windows")]
-use crate::{Config, Context, Error, Event, Message, Notification, Permission, Token};
+use crate::{Config, Context, Error, Event, Message, Permission, Token};
 
 /// The 100-nanosecond ticks from 1601 to the Unix epoch, the base of `Windows.Foundation.DateTime`.
 const EPOCH_1601_TO_1970: i64 = 11_644_473_600 * 10_000_000;
@@ -182,79 +184,94 @@ fn run_background_handler(message: Message) {
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn install(config: Config) -> Result<(), Error> {
-    let wns = config.windows.ok_or(Error::NotConfigured)?;
-    let _guard = SETUP.lock();
-    if RUNTIME.get().is_some() {
-        return Ok(());
-    }
-    let remote_id = windows_core::GUID::try_from(wns.remote_id.as_str()).map_err(|_| {
-        Error::Platform(format!(
-            "the Windows remote_id `{}` is not a GUID",
-            wns.remote_id
-        ))
-    })?;
-    // No COM apartment here, as tao's drag and drop needs this thread single-threaded and `windows-core` joins the implicit multithreaded one itself.
-    let initialize = bootstrapper()?;
-    // SAFETY: The 2.5 channel, null tag, zeroed minimum version and NOOP flag are the documented caller values.
-    let status = unsafe {
-        initialize(
-            RUNTIME_CHANNEL,
-            core::ptr::null(),
-            ffi::PackageVersion {
-                major: 0,
-                minor: 0,
-                build: 0,
-                revision: 0,
-            },
-            BOOTSTRAP_OPTIONS,
-        )
-    };
-    if status.is_err() {
-        return Err(Error::Platform(format!(
-            "the Windows App SDK runtime could not be started: {status}"
-        )));
-    }
-    let manager = bindings::PushNotificationManager::Default().map_err(platform)?;
-    if !bindings::PushNotificationManager::IsSupported().map_err(platform)? {
-        return Err(Error::Unsupported);
-    }
-    let handler = TypedEventHandler::<
-        bindings::PushNotificationManager,
-        bindings::PushNotificationReceivedEventArgs,
-    >::new(on_push_received);
-    // The handler must be in before `Register()`, or the runtime throws a COM exception.
-    let _ = manager.PushReceived(&handler).map_err(platform)?;
-    manager.Register().map_err(platform)?;
-    let args = bindings::AppInstance::GetCurrent()
-        .map_err(platform)?
-        .GetActivatedEventArgs()
-        .map_err(platform)?;
-    if args.Kind().map_err(platform)? == bindings::ExtendedActivationKind::Push {
-        let push = args
-            .Data()
-            .map_err(platform)?
-            .cast::<bindings::PushNotificationReceivedEventArgs>()
-            .map_err(platform)?;
-        deliver(&push, true)?;
-    }
-    let _ = RUNTIME.set(Runtime { remote_id });
-    Ok(())
-}
+pub(crate) struct Windows;
 
 #[cfg(target_os = "windows")]
-pub(crate) fn register() -> Result<(), Error> {
-    let Some(runtime) = RUNTIME.get() else {
-        return Err(Error::NotConfigured);
-    };
-    // WNS can take up to fifteen minutes to answer, so the request runs off this thread.
-    thread::spawn(move || {
-        DISPATCHER.emit(match create_channel(runtime.remote_id) {
-            Ok(token) => Event::Token(token),
-            Err(error) => Event::RegistrationFailed(error),
+impl Backend for Windows {
+    fn install(config: Config) -> Result<(), Error> {
+        let wns = config.windows.ok_or(Error::NotConfigured)?;
+        let _guard = SETUP.lock();
+        if RUNTIME.get().is_some() {
+            return Ok(());
+        }
+        let remote_id = windows_core::GUID::try_from(wns.remote_id.as_str()).map_err(|_| {
+            Error::Platform(format!(
+                "the Windows remote_id `{}` is not a GUID",
+                wns.remote_id
+            ))
+        })?;
+        // No COM apartment here, as tao's drag and drop needs this thread single-threaded and `windows-core` joins the implicit multithreaded one itself.
+        let initialize = bootstrapper()?;
+        // SAFETY: The 2.5 channel, null tag, zeroed minimum version and NOOP flag are the documented caller values.
+        let status = unsafe {
+            initialize(
+                RUNTIME_CHANNEL,
+                core::ptr::null(),
+                ffi::PackageVersion {
+                    major: 0,
+                    minor: 0,
+                    build: 0,
+                    revision: 0,
+                },
+                BOOTSTRAP_OPTIONS,
+            )
+        };
+        if status.is_err() {
+            return Err(Error::Platform(format!(
+                "the Windows App SDK runtime could not be started: {status}"
+            )));
+        }
+        let manager = bindings::PushNotificationManager::Default().map_err(platform)?;
+        if !bindings::PushNotificationManager::IsSupported().map_err(platform)? {
+            return Err(Error::Unsupported);
+        }
+        let handler = TypedEventHandler::<
+            bindings::PushNotificationManager,
+            bindings::PushNotificationReceivedEventArgs,
+        >::new(on_push_received);
+        // The handler must be in before `Register()`, or the runtime throws a COM exception.
+        let _ = manager.PushReceived(&handler).map_err(platform)?;
+        manager.Register().map_err(platform)?;
+        let args = bindings::AppInstance::GetCurrent()
+            .map_err(platform)?
+            .GetActivatedEventArgs()
+            .map_err(platform)?;
+        if args.Kind().map_err(platform)? == bindings::ExtendedActivationKind::Push {
+            let push = args
+                .Data()
+                .map_err(platform)?
+                .cast::<bindings::PushNotificationReceivedEventArgs>()
+                .map_err(platform)?;
+            deliver(&push, true)?;
+        }
+        let _ = RUNTIME.set(Runtime { remote_id });
+        Ok(())
+    }
+
+    fn register() -> Result<(), Error> {
+        let Some(runtime) = RUNTIME.get() else {
+            return Err(Error::NotConfigured);
+        };
+        // WNS can take up to fifteen minutes to answer, so the request runs off this thread.
+        thread::spawn(move || {
+            DISPATCHER.emit(match create_channel(runtime.remote_id) {
+                Ok(token) => Event::Token(token),
+                Err(error) => Event::RegistrationFailed(error),
+            });
         });
-    });
-    Ok(())
+        Ok(())
+    }
+
+    /// WNS raw pushes need no user permission, so the answer is whether push can register at all.
+    fn request_permission() -> impl Future<Output = Result<Permission, Error>> {
+        let granted =
+            RUNTIME.get().is_some() && bindings::PushNotificationManager::IsSupported() == Ok(true);
+        std::future::ready(Ok(if granted {
+            Permission::Granted
+        } else {
+            Permission::Denied
+        }))
+    }
 }
 
 /// Creates the fresh channel, waiting for WNS's answer.
@@ -284,36 +301,6 @@ fn create_channel(remote_id: windows_core::GUID) -> Result<Token, Error> {
         channel_uri,
         expires,
     })
-}
-
-/// WNS raw pushes need no user permission, so the answer is whether push can register at all.
-#[cfg(target_os = "windows")]
-pub(crate) fn request_permission() -> std::future::Ready<Result<Permission, Error>> {
-    let granted =
-        RUNTIME.get().is_some() && bindings::PushNotificationManager::IsSupported() == Ok(true);
-    std::future::ready(Ok(if granted {
-        Permission::Granted
-    } else {
-        Permission::Denied
-    }))
-}
-
-/// Windows keeps the events in the dispatcher, so there is nothing to hand over here.
-#[cfg(target_os = "windows")]
-pub(crate) fn handler_set() {}
-
-#[cfg(target_os = "windows")]
-pub(crate) fn in_service_worker() -> bool {
-    false
-}
-
-#[cfg(target_os = "windows")]
-pub(crate) fn serve_service_worker<H, F>(_handler: H) -> Result<(), Error>
-where
-    H: Fn(Message) -> F + 'static,
-    F: Future<Output = Notification> + 'static,
-{
-    Err(Error::Unsupported)
 }
 
 #[cfg(test)]

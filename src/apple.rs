@@ -19,13 +19,14 @@ use objc2_foundation::{NSError, NSFileManager, NSSearchPathDirectory, NSSearchPa
 use objc2_user_notifications::{UNAuthorizationOptions, UNUserNotificationCenter};
 use parking_lot::Mutex;
 
+use crate::backend::Backend;
 use crate::delivered::Delivered;
 use crate::dispatch::DISPATCHER;
 use crate::inbox::Inbox;
 use crate::queue::{Entry, QueueFile};
 use crate::session::Session;
 use crate::started::{Arrival, Started};
-use crate::{Config, Error, Event, Message, Notification, Permission, Token};
+use crate::{Config, Error, Event, Message, Permission, Token};
 
 /// The routing state and the files it writes to, behind one lock so a drain and a concurrent push keep their order.
 struct State {
@@ -47,94 +48,88 @@ const BACKGROUND_HANDLER: &std::ffi::CStr = c"__pushups_background_handler";
 /// The function behind [`BACKGROUND_HANDLER`].
 type BackgroundHandler = unsafe extern "C" fn(*const u8, usize, bool);
 
-pub(crate) fn install(_config: Config) -> Result<(), Error> {
-    let mtm = MainThreadMarker::new()
-        .ok_or_else(|| Error::Platform("install must run on the main thread".to_owned()))?;
-    if STATE.get().is_some() {
-        return Ok(());
-    }
-    let directory = data_directory()?;
-    let state = State {
-        inbox: Inbox::new(
-            Session::Headless.on_session(true),
-            QueueFile::new(directory.join("queue")),
-        ),
-        started: Started::default(),
-        delivered: Delivered::new(directory.join("delivered")),
-    };
-    if STATE.set(Mutex::new(state)).is_err() {
-        return Ok(());
-    }
-    runtime::take_over_notification_delegate(mtm);
-    runtime::observe_launch(mtm);
-    Ok(())
-}
+pub(crate) struct Apple;
 
-pub(crate) fn register() -> Result<(), Error> {
-    if STATE.get().is_none() {
-        return Err(Error::NotConfigured);
-    }
-    DispatchQueue::main().exec_async(|| {
-        if let Some(mtm) = MainThreadMarker::new() {
-            runtime::register_for_remote_notifications(mtm);
+impl Backend for Apple {
+    fn install(_config: Config) -> Result<(), Error> {
+        let mtm = MainThreadMarker::new()
+            .ok_or_else(|| Error::Platform("install must run on the main thread".to_owned()))?;
+        if STATE.get().is_some() {
+            return Ok(());
         }
-    });
-    Ok(())
-}
-
-pub(crate) async fn request_permission() -> Result<Permission, Error> {
-    if STATE.get().is_none() {
-        return Err(Error::NotConfigured);
-    }
-    let (sender, reply) = oneshot::channel();
-    let sender = Mutex::new(Some(sender));
-    let answered = block2::RcBlock::new(move |granted: Bool, error: *mut NSError| {
-        // SAFETY: the system passes a valid `NSError` or null, for this call only.
-        let error = unsafe { error.as_ref() };
-        let answer = match error {
-            // `UNErrorCodeNotificationsNotAllowed`, the user or the system refusing notifications to this app.
-            Some(error) if error.domain().to_string() == "UNErrorDomain" && error.code() == 1 => {
-                Ok(Permission::Denied)
-            }
-            Some(error) => Err(Error::Platform(error.localizedDescription().to_string())),
-            None if granted.as_bool() => Ok(Permission::Granted),
-            None => Ok(Permission::Denied),
+        let directory = data_directory()?;
+        let state = State {
+            inbox: Inbox::new(
+                Session::Headless.on_session(true),
+                QueueFile::new(directory.join("queue")),
+            ),
+            started: Started::default(),
+            delivered: Delivered::new(directory.join("delivered")),
         };
-        if let Some(sender) = sender.lock().take() {
-            let _ = sender.send(answer);
+        if STATE.set(Mutex::new(state)).is_err() {
+            return Ok(());
         }
-    });
-    UNUserNotificationCenter::currentNotificationCenter()
-        .requestAuthorizationWithOptions_completionHandler(
-            UNAuthorizationOptions::Alert
-                | UNAuthorizationOptions::Badge
-                | UNAuthorizationOptions::Sound,
-            &answered,
-        );
-    reply.await.unwrap_or_else(|oneshot::Canceled| {
-        Err(Error::Platform(
-            "the permission request ended without an answer".to_owned(),
-        ))
-    })
-}
+        runtime::take_over_notification_delegate(mtm);
+        runtime::observe_launch(mtm);
+        Ok(())
+    }
 
-pub(crate) fn in_service_worker() -> bool {
-    false
-}
+    fn register() -> Result<(), Error> {
+        if STATE.get().is_none() {
+            return Err(Error::NotConfigured);
+        }
+        DispatchQueue::main().exec_async(|| {
+            if let Some(mtm) = MainThreadMarker::new() {
+                runtime::register_for_remote_notifications(mtm);
+            }
+        });
+        Ok(())
+    }
 
-pub(crate) fn serve_service_worker<H, F>(_handler: H) -> Result<(), Error>
-where
-    H: Fn(Message) -> F + 'static,
-    F: Future<Output = Notification> + 'static,
-{
-    Err(Error::Unsupported)
-}
+    async fn request_permission() -> Result<Permission, Error> {
+        if STATE.get().is_none() {
+            return Err(Error::NotConfigured);
+        }
+        let (sender, reply) = oneshot::channel();
+        let sender = Mutex::new(Some(sender));
+        let answered = block2::RcBlock::new(move |granted: Bool, error: *mut NSError| {
+            // SAFETY: the system passes a valid `NSError` or null, for this call only.
+            let error = unsafe { error.as_ref() };
+            let answer = match error {
+                // `UNErrorCodeNotificationsNotAllowed`, the user or the system refusing notifications to this app.
+                Some(error)
+                    if error.domain().to_string() == "UNErrorDomain" && error.code() == 1 =>
+                {
+                    Ok(Permission::Denied)
+                }
+                Some(error) => Err(Error::Platform(error.localizedDescription().to_string())),
+                None if granted.as_bool() => Ok(Permission::Granted),
+                None => Ok(Permission::Denied),
+            };
+            if let Some(sender) = sender.lock().take() {
+                let _ = sender.send(answer);
+            }
+        });
+        UNUserNotificationCenter::currentNotificationCenter()
+            .requestAuthorizationWithOptions_completionHandler(
+                UNAuthorizationOptions::Alert
+                    | UNAuthorizationOptions::Badge
+                    | UNAuthorizationOptions::Sound,
+                &answered,
+            );
+        reply.await.unwrap_or_else(|oneshot::Canceled| {
+            Err(Error::Platform(
+                "the permission request ended without an answer".to_owned(),
+            ))
+        })
+    }
 
-/// Binds the process to the handler just set, and hands it the queue.
-pub(crate) fn handler_set() {
-    if let Some(state) = STATE.get() {
-        state.lock().inbox.handler_set();
-        DISPATCHER.flush();
+    /// Binds the process to the handler just set, and hands it the queue.
+    fn handler_set() {
+        if let Some(state) = STATE.get() {
+            state.lock().inbox.handler_set();
+            DISPATCHER.flush();
+        }
     }
 }
 

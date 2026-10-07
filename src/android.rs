@@ -17,12 +17,13 @@ use jni::sys::{jboolean, jlong};
 use jni::{EnvUnowned, JavaVM, jni_sig, jni_str};
 use parking_lot::Mutex;
 
+use crate::backend::Backend;
 use crate::dispatch::DISPATCHER;
 use crate::inbox::Inbox;
 use crate::queue::{Entry, QueueFile};
 use crate::session::Session;
 use crate::token::base64url;
-use crate::{Config, Error, Event, Message, Notification, Permission, Token};
+use crate::{Config, Error, Event, Message, Permission, Token};
 
 /// What `Native.init` hands over, once per process.
 struct Runtime {
@@ -47,81 +48,73 @@ fn runtime() -> Result<&'static Runtime, Error> {
     RUNTIME.get().ok_or(Error::AndroidModuleMissing)
 }
 
-pub(crate) fn install(config: Config) -> Result<(), Error> {
-    if let Some(unified_push) = config.unified_push {
-        // A second `install` keeps the first key, as it keeps the first runtime.
-        let _ = VAPID.set(base64url(&unified_push.vapid_public_key));
+pub(crate) struct Android;
+
+impl Backend for Android {
+    fn install(config: Config) -> Result<(), Error> {
+        if let Some(unified_push) = config.unified_push {
+            // A second `install` keeps the first key, as it keeps the first runtime.
+            let _ = VAPID.set(base64url(&unified_push.vapid_public_key));
+        }
+        runtime().map(|_| ())
     }
-    runtime().map(|_| ())
-}
 
-pub(crate) fn register() -> Result<(), Error> {
-    let runtime = runtime()?;
-    runtime
-        .vm
-        .attach_current_thread(|env| -> jni::errors::Result<()> {
-            let vapid = match VAPID.get() {
-                Some(vapid) => JObject::from(env.new_string(vapid)?),
-                None => JObject::null(),
-            };
-            env.call_static_method(
-                &runtime.pushups,
-                jni_str!("register"),
-                jni_sig!("(Ljava/lang/String;)V"),
-                &[JValue::Object(&vapid)],
-            )?
-            .v()
-        })
-        .map_err(|error| Error::Platform(error.to_string()))
-}
-
-pub(crate) async fn request_permission() -> Result<Permission, Error> {
-    let runtime = runtime()?;
-    let id = NEXT_PERMISSION.fetch_add(1, Ordering::Relaxed);
-    let (sender, reply) = oneshot::channel();
-    PERMISSIONS.lock().insert(id, sender);
-    let asked = runtime
-        .vm
-        .attach_current_thread(|env| -> jni::errors::Result<()> {
-            env.call_static_method(
-                &runtime.pushups,
-                jni_str!("requestPermission"),
-                jni_sig!("(J)V"),
-                &[JValue::Long(id)],
-            )?
-            .v()
-        });
-    if let Err(error) = asked {
-        PERMISSIONS.lock().remove(&id);
-        return Err(Error::Platform(error.to_string()));
+    fn register() -> Result<(), Error> {
+        let runtime = runtime()?;
+        runtime
+            .vm
+            .attach_current_thread(|env| -> jni::errors::Result<()> {
+                let vapid = match VAPID.get() {
+                    Some(vapid) => JObject::from(env.new_string(vapid)?),
+                    None => JObject::null(),
+                };
+                env.call_static_method(
+                    &runtime.pushups,
+                    jni_str!("register"),
+                    jni_sig!("(Ljava/lang/String;)V"),
+                    &[JValue::Object(&vapid)],
+                )?
+                .v()
+            })
+            .map_err(|error| Error::Platform(error.to_string()))
     }
-    match reply.await {
-        Ok(true) => Ok(Permission::Granted),
-        Ok(false) => Ok(Permission::Denied),
-        Err(oneshot::Canceled) => Err(Error::Platform(
-            "the permission request ended without an answer".to_owned(),
-        )),
+
+    async fn request_permission() -> Result<Permission, Error> {
+        let runtime = runtime()?;
+        let id = NEXT_PERMISSION.fetch_add(1, Ordering::Relaxed);
+        let (sender, reply) = oneshot::channel();
+        PERMISSIONS.lock().insert(id, sender);
+        let asked = runtime
+            .vm
+            .attach_current_thread(|env| -> jni::errors::Result<()> {
+                env.call_static_method(
+                    &runtime.pushups,
+                    jni_str!("requestPermission"),
+                    jni_sig!("(J)V"),
+                    &[JValue::Long(id)],
+                )?
+                .v()
+            });
+        if let Err(error) = asked {
+            PERMISSIONS.lock().remove(&id);
+            return Err(Error::Platform(error.to_string()));
+        }
+        match reply.await {
+            Ok(true) => Ok(Permission::Granted),
+            Ok(false) => Ok(Permission::Denied),
+            Err(oneshot::Canceled) => Err(Error::Platform(
+                "the permission request ended without an answer".to_owned(),
+            )),
+        }
     }
-}
 
-pub(crate) fn in_service_worker() -> bool {
-    false
-}
-
-pub(crate) fn serve_service_worker<H, F>(_handler: H) -> Result<(), Error>
-where
-    H: Fn(Message) -> F + 'static,
-    F: Future<Output = Notification> + 'static,
-{
-    Err(Error::Unsupported)
-}
-
-/// Binds the UI session to the handler just set, and hands it the queue if the session was
-/// waiting for one.
-pub(crate) fn handler_set() {
-    if let Some(runtime) = RUNTIME.get() {
-        runtime.inbox.lock().handler_set();
-        DISPATCHER.flush();
+    /// Binds the UI session to the handler just set, and hands it the queue if the session was
+    /// waiting for one.
+    fn handler_set() {
+        if let Some(runtime) = RUNTIME.get() {
+            runtime.inbox.lock().handler_set();
+            DISPATCHER.flush();
+        }
     }
 }
 
