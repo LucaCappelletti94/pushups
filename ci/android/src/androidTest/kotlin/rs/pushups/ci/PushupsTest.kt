@@ -74,9 +74,22 @@ class PushupsTest {
             scenario = ActivityScenario.launch(TapActivity::class.java)
         }
 
+        /**
+         * Ends the UI session. The session lasts while any Activity of the process lives, the
+         * test framework's own launch Activities included, so this waits until none is left.
+         */
         private fun closeUi() {
             scenario?.close()
             scenario = null
+            val live = listOf(Stage.PRE_ON_CREATE, Stage.CREATED, Stage.STARTED, Stage.RESUMED, Stage.PAUSED, Stage.STOPPED, Stage.RESTARTED)
+            waitFor(UI_MS) {
+                var alive = 0
+                instrumentation.runOnMainSync {
+                    val monitor = ActivityLifecycleMonitorRegistry.getInstance()
+                    alive = live.sumOf { monitor.getActivitiesInStage(it).size }
+                }
+                if (alive == 0) Unit else null
+            } ?: error("an Activity was still alive ${UI_MS / 1000} s after closing the UI")
         }
 
         private fun awaitPermission(): String =
