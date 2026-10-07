@@ -21,6 +21,8 @@ from pathlib import Path
 PACKAGE = "rs.pushups.example"
 DIR = "files/pushups-ci"
 POLL_S = 0.5
+# FCM answers 404 UNREGISTERED for a moment after a token is new, as the web harness found for its 410.
+UNREGISTERED_S = 30
 
 
 def b64url(data: bytes) -> bytes:
@@ -65,7 +67,7 @@ def run_as(command: str, stdin: bytes | None = None) -> bytes:
     return adb("shell", f"run-as {PACKAGE} sh -c '{command}'", stdin=stdin)
 
 
-def send(key: dict, token: str, message: dict) -> str:
+def post(key: dict, token: str, message: dict) -> str:
     request = urllib.request.Request(
         f"https://fcm.googleapis.com/v1/projects/{key['project_id']}/messages:send",
         data=json.dumps({"message": message}).encode(),
@@ -76,6 +78,16 @@ def send(key: dict, token: str, message: dict) -> str:
             return f"{response.status} {response.read().decode()}"
     except urllib.error.HTTPError as error:
         return f"{error.code} {error.read().decode()}"
+
+
+def send(key: dict, token: str, message: dict) -> str:
+    """Posts the message, re-sending for up to UNREGISTERED_S while FCM calls a new token unregistered."""
+    deadline = time.monotonic() + UNREGISTERED_S
+    while True:
+        status = post(key, token, message)
+        if not (status.startswith("404 ") and "UNREGISTERED" in status) or time.monotonic() >= deadline:
+            return status
+        time.sleep(3)
 
 
 def main() -> None:
