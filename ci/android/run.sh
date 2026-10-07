@@ -55,10 +55,15 @@ adb shell svc power stayon true
 # A distributor never opened stays in Android's stopped state, which drops the app's registration
 # broadcast, so ntfy is opened once, as its user would, with its own permission prompt pre-answered.
 adb shell pm grant io.heckel.ntfy android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+# ntfy's first screen asks for this. Without it, Android 12 and later refuse ntfy's subscriber
+# service from the background, and ntfy.sh then refuses pushes to a topic with no subscriber.
+adb shell dumpsys deviceidle whitelist +io.heckel.ntfy >/dev/null
 wake
 adb shell am start -W -n io.heckel.ntfy/.ui.MainActivity >/dev/null
 adb shell input keyevent KEYCODE_HOME
 
+# Request files a previous run left on the device would be sent ahead of this run's, so they go.
+adb uninstall "$package" >/dev/null 2>&1 || true
 python3 "$ci/send.py" "$key" --webpush-sender "$root/ci/linux/probe/target/debug/send" --vapid "$out/vapid.pem" &
 sender=$!
 trap 'kill $sender 2>/dev/null || true; adb shell svc power stayon false || true' EXIT
