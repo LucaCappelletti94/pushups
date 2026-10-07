@@ -9,15 +9,15 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.BySelector
+import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
-import androidx.test.uiautomator.Until
 import com.google.android.gms.tasks.Tasks
 import com.google.firebase.messaging.FirebaseMessaging
 import org.json.JSONObject
 import org.junit.AfterClass
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.BeforeClass
@@ -95,11 +95,23 @@ class PushupsTest {
         private fun awaitPermission(): String =
             waitFor(UI_MS) { Probe.permission() } ?: error("no permission answer within ${UI_MS / 1000} s")
 
+        /**
+         * Clicks what [selector] finds once it shows, within [boundMs]. The screen may redraw
+         * between finding and clicking, so a stale object is found again.
+         */
+        private fun clickWhenShown(selector: BySelector, boundMs: Long): Boolean =
+            waitFor(boundMs) {
+                try {
+                    device.findObject(selector)?.click()?.let { true }
+                } catch (e: StaleObjectException) {
+                    null
+                }
+            } ?: false
+
         /** Answers the system prompt with the button whose resource id ends in [button]. */
         private fun answerPrompt(button: String) {
-            val found = device.wait(Until.findObject(By.res("com.android.permissioncontroller", button)), UI_MS)
-            assertNotNull("the permission prompt did not show $button", found)
-            found.click()
+            val selector = By.res("com.android.permissioncontroller", button)
+            assertTrue("the permission prompt did not show $button", clickWhenShown(selector, UI_MS))
         }
     }
 
@@ -196,9 +208,7 @@ class PushupsTest {
         )
         val monitor = instrumentation.addMonitor(TapActivity::class.java.name, null, false)
         device.openNotification()
-        val notification = device.wait(Until.findObject(By.text(title)), DELIVERY_MS)
-        assertNotNull("the notification $title did not show", notification)
-        notification.click()
+        assertTrue("the notification $title did not show", clickWhenShown(By.text(title), DELIVERY_MS))
         val activity: Activity = instrumentation.waitForMonitorWithTimeout(monitor, UI_MS)
             ?: error("the tap did not open TapActivity")
         Probe.setHandler()
