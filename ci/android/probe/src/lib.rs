@@ -36,7 +36,7 @@ unsafe extern "C" {
 
 #[cfg(feature = "background-handler")]
 #[pushups::background_handler]
-fn on_push(_context: pushups::AndroidContext, message: Message) {
+fn on_push(_context: pushups::Context, message: Message) {
     HANDLED.lock().push(describe_message(&message));
 }
 
