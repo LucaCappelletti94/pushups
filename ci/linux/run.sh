@@ -5,6 +5,7 @@ set -euo pipefail
 
 ci=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$ci/../.." && pwd)
+mkdir -p "$root/target"
 out=$(mktemp -d "$root/target/linux-run.XXXXXX")
 trap 'rm -rf "$out"' EXIT
 
