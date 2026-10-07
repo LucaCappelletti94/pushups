@@ -53,6 +53,7 @@ impl Dispatcher {
             target_os = "ios",
             target_os = "linux",
             target_os = "macos",
+            target_os = "windows",
             all(target_arch = "wasm32", target_os = "unknown")
         )),
         expect(

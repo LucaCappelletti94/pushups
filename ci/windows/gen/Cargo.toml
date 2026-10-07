@@ -1,0 +1,10 @@
+[package]
+name = "windows-bindings-gen"
+version = "0.1.0"
+edition = "2024"
+publish = false
+[dependencies]
+# The newest generator whose 0.6x output builds on the crate's Rust 1.85; the 0.100 line needs 1.95.
+windows-bindgen = "=0.66.0"
+
+[workspace]

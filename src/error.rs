@@ -13,8 +13,8 @@ pub enum Error {
     #[error("the pushups Android module is not in the app")]
     AndroidModuleMissing,
     /// The target's part of [`Config`](crate::Config) is missing, a
-    /// [`WebPushConfig`](crate::WebPushConfig) on the web or a [`LinuxConfig`](crate::LinuxConfig)
-    /// on Linux.
+    /// [`WebPushConfig`](crate::WebPushConfig) on the web, a [`LinuxConfig`](crate::LinuxConfig)
+    /// on Linux or a [`WnsConfig`](crate::WnsConfig) on Windows.
     #[error("Config lacks the part this target needs")]
     NotConfigured,
     /// [`serve_service_worker`](crate::serve_service_worker) ran in a web page, outside the

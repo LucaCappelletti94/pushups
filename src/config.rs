@@ -8,6 +8,7 @@ pub struct Config {
     pub(crate) web: Option<WebPushConfig>,
     pub(crate) unified_push: Option<UnifiedPushConfig>,
     pub(crate) linux: Option<LinuxConfig>,
+    pub(crate) windows: Option<WnsConfig>,
 }
 
 impl Config {
@@ -35,6 +36,13 @@ impl Config {
     #[must_use]
     pub fn linux(mut self, linux: LinuxConfig) -> Self {
         self.linux = Some(linux);
+        self
+    }
+
+    /// Sets the WNS part, which the Windows target requires.
+    #[must_use]
+    pub fn windows(mut self, wns: WnsConfig) -> Self {
+        self.windows = Some(wns);
         self
     }
 }
@@ -70,6 +78,23 @@ impl LinuxConfig {
     pub fn new(app_id: impl Into<String>) -> Self {
         Self {
             app_id: app_id.into(),
+        }
+    }
+}
+
+/// The WNS part of [`Config`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WnsConfig {
+    pub(crate) remote_id: String,
+}
+
+impl WnsConfig {
+    /// A configuration for the Object ID of the app's Entra ID registration, the `remoteId`
+    /// that `CreateChannelAsync` takes.
+    #[must_use]
+    pub fn new(remote_id: impl Into<String>) -> Self {
+        Self {
+            remote_id: remote_id.into(),
         }
     }
 }

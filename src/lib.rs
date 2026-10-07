@@ -42,6 +42,7 @@ mod token;
         target_os = "ios",
         target_os = "linux",
         target_os = "macos",
+        target_os = "windows",
         all(target_arch = "wasm32", target_os = "unknown")
     )),
     test
@@ -53,6 +54,8 @@ mod web;
 mod web_parts;
 #[cfg(target_os = "linux")]
 mod webpush_crypto;
+#[cfg(any(target_os = "windows", test))]
+mod windows;
 
 use std::sync::Arc;
 
@@ -67,13 +70,16 @@ use linux as platform;
     target_os = "ios",
     target_os = "linux",
     target_os = "macos",
+    target_os = "windows",
     all(target_arch = "wasm32", target_os = "unknown")
 )))]
 use unsupported as platform;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use web as platform;
+#[cfg(target_os = "windows")]
+use windows as platform;
 
-pub use config::{Config, LinuxConfig, UnifiedPushConfig, WebPushConfig};
+pub use config::{Config, LinuxConfig, UnifiedPushConfig, WebPushConfig, WnsConfig};
 pub use context::Context;
 use dispatch::DISPATCHER;
 pub use error::Error;
@@ -90,11 +96,13 @@ pub use token::{Token, WebPushKeys};
 ///
 /// # Errors
 ///
-/// [`Error::Unsupported`] on a target without a push backend or a browser without the Push API,
-/// [`Error::AndroidModuleMissing`] on Android when the app does not include the crate's Gradle
-/// module, [`Error::NotConfigured`] on the web without a [`WebPushConfig`] and on Linux without a
-/// [`LinuxConfig`], and [`Error::Platform`] on Linux without a session bus or when another
-/// process of the app owns its bus name.
+/// [`Error::Unsupported`] on a target without a push backend, a browser without the Push API,
+/// or Windows without the Windows App SDK push API. [`Error::AndroidModuleMissing`] on Android
+/// when the app does not include the crate's Gradle module. [`Error::NotConfigured`] on the
+/// web without a [`WebPushConfig`], on Linux without a [`LinuxConfig`] and on Windows without
+/// a [`WnsConfig`]. [`Error::Platform`] on Linux without a session bus or when another process
+/// of the app owns its bus name, and on Windows when the `remote_id` is not a GUID or the
+/// runtime does not start.
 pub fn install(config: Config) -> Result<(), Error> {
     platform::install(config)
 }

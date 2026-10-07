@@ -143,5 +143,5 @@ let config = Config::new()
 | Android | FCM or UnifiedPush | available |
 | iOS, macOS | APNs | in development |
 | Linux | UnifiedPush over D-Bus | in development |
-| Windows | WNS | in development |
+| Windows | WNS | device proof pending |
 | Web | Web Push | available |

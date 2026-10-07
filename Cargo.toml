@@ -54,6 +54,14 @@ zbus = "5"
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 linkme = "0.3"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+# The newest 0.6x line that builds on Rust 1.85, since the 0.100 line of `windows-core` needs 1.95.
+windows = { version = "0.62", default-features = false, features = ["Foundation", "ApplicationModel_Background", "ApplicationModel_Core"] }
+windows-collections = "0.3"
+windows-core = "0.62"
+windows-future = "0.3"
+windows-link = "0.2"
+
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 js-sys = "0.3"
 wasm-bindgen = "0.2"
