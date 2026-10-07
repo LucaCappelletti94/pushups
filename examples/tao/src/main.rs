@@ -33,6 +33,8 @@ fn main() {
             TaoEvent::NewEvents(tao::event::StartCause::Init) => {
                 _window = WindowBuilder::new()
                     .with_title("pushups tao example")
+                    // The brand navy from `assets/brand`.
+                    .with_background_color((0x0e, 0x18, 0x24, 0xff))
                     .build(target)
                     .map_err(|error| log(&format!("window failed: {error}")))
                     .ok();

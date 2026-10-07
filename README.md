@@ -1,5 +1,7 @@
 # pushups
 
+<img src="https://raw.githubusercontent.com/LucaCappelletti94/pushups/main/assets/brand/mark.svg" alt="pushups logo" width="160">
+
 [![CI](https://github.com/LucaCappelletti94/pushups/actions/workflows/ci.yml/badge.svg)](https://github.com/LucaCappelletti94/pushups/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/LucaCappelletti94/pushups/graph/badge.svg)](https://codecov.io/gh/LucaCappelletti94/pushups)
 [![MSRV](https://img.shields.io/badge/MSRV-1.85-blue)](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/)

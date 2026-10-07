@@ -3,9 +3,20 @@ name = "pushups-dioxus-example"
 # Serves js/pushups-sw.js at /pushups-sw.js, the static worker's default path.
 public_dir = "../../js"
 
+[web.app]
+title = "pushups example"
+
 [bundle]
 identifier = "rs.pushups.example"
 publisher = "pushups"
+# Rendered by assets/brand/render.sh. `dx` builds every macOS icon size from the first PNG, so the largest leads.
+icon = [
+    "../../assets/brand/png/icon-macos-1024.png",
+    "../../assets/brand/png/icon-macos-512.png",
+    "../../assets/brand/png/icon-macos-256.png",
+    "../../assets/brand/png/icon-macos-128.png",
+    "../../assets/brand/png/icon-macos-32.png",
+]
 
 # APNs, for the iOS build.
 [ios.entitlements]

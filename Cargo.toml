@@ -9,6 +9,7 @@ license = "MIT"
 readme = "README.md"
 keywords = ["push", "notifications", "apns", "fcm", "webpush"]
 categories = ["api-bindings", "os", "wasm"]
+exclude = ["/assets"]
 
 [features]
 stream = ["dep:futures-channel", "dep:futures-core"]

@@ -1,5 +1,9 @@
 #![doc = include_str!("../README.md")]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/LucaCappelletti94/pushups/main/assets/brand/icon.svg",
+    html_favicon_url = "https://raw.githubusercontent.com/LucaCappelletti94/pushups/main/assets/brand/favicon.svg"
+)]
 
 #[doc(hidden)]
 #[path = "private.rs"]
