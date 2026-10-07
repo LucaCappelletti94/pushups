@@ -1,0 +1,18 @@
+[package]
+name = "pushups-android-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Built only by ci/android/run.sh, with `-Cinstrument-coverage`, so it stays out of the crate's workspace.
+[workspace]
+
+[lib]
+name = "pushups_probe"
+crate-type = ["cdylib"]
+
+[dependencies]
+futures-executor = "0.3"
+jni = "0.22"
+parking_lot = "0.12"
+pushups = { path = "../../.." }

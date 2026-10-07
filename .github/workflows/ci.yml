@@ -84,8 +84,61 @@ jobs:
         env:
           RUSTDOCFLAGS: --cfg docsrs -D warnings
 
+  android-coverage:
+    name: Android on an emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Neither a fork's pull request nor a Dependabot run can read the Firebase secrets.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]')
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: |
+          rustup toolchain install stable --profile minimal --component llvm-tools,clippy,rustfmt
+          rustup target add --toolchain stable x86_64-linux-android
+      # The emulator needs KVM, which the runner's user cannot open by default.
+      - run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Write the Firebase configuration and the FCM key
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT }}
+        run: |
+          printf '%s' "$GOOGLE_SERVICES_JSON" > ci/android/probe/google-services.json
+          printf '%s' "$FCM_SERVICE_ACCOUNT" > "$RUNNER_TEMP/fcm-service-account.json"
+      - name: Lint the probe
+        working-directory: ci/android/probe
+        run: |
+          cargo fmt --check
+          cargo clippy --target x86_64-linux-android -- -D warnings
+      - name: Instrumented tests, through Firebase Cloud Messaging
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          # The runner image exports its NDK path as a shell variable, which `env` cannot read.
+          script: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" ci/android/run.sh x86_64 "$RUNNER_TEMP/fcm-service-account.json"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-coverage
+          path: |
+            target/android-rust.lcov
+            target/android-kotlin.xml
+          if-no-files-found: error
+
   coverage:
     name: Coverage and Sonar
+    needs: android-coverage
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Neither a fork's pull request nor a Dependabot run can read CODECOV_TOKEN or SONAR_TOKEN.
@@ -102,10 +155,14 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - run: cargo +nightly llvm-cov --workspace --all-features --all-targets --no-report
       - run: cargo +nightly llvm-cov --workspace --all-features --doc --no-clean --lcov --output-path target/coverage.lcov
+      - uses: actions/download-artifact@v8
+        with:
+          name: android-coverage
+          path: target
       - uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: target/coverage.lcov
+          files: target/coverage.lcov,target/android-rust.lcov,target/android-kotlin.xml
           fail_ci_if_error: true
       # The Sonar analyzer runs clippy itself.
       - run: rustup toolchain install stable --profile minimal --component clippy
