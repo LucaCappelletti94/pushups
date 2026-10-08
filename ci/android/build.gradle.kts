@@ -37,6 +37,8 @@ project(":pushups") {
             "androidTestImplementation"("androidx.test:runner:1.6.2")
             "androidTestImplementation"("androidx.test.ext:junit:1.2.1")
             "androidTestImplementation"("androidx.test.uiautomator:uiautomator:2.3.0")
+            // ComponentTapActivity, an androidx Activity like wry's, for the singleTop taps.
+            "androidTestImplementation"("androidx.activity:activity:1.9.3")
         }
     }
 }

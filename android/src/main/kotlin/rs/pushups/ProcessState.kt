@@ -3,8 +3,10 @@ package rs.pushups
 import android.app.Activity
 import android.app.Application
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Bundle
+import androidx.core.app.OnNewIntentProvider
 import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
@@ -50,7 +52,12 @@ object ProcessState : Application.ActivityLifecycleCallbacks {
             first to started
         }
         if (newSession) invokeNative("onSession") { Native.onSession(true) }
-        handleTap(activity, firstActivity)
+        val context = activity.applicationContext
+        handleTap(context, activity.intent, firstActivity)
+        // A tap into a running singleTop or singleTask Activity arrives here, and an androidx Activity keeps its old intent.
+        if (activity is OnNewIntentProvider) {
+            activity.addOnNewIntentListener { intent -> handleTap(context, intent, firstActivity = false) }
+        }
     }
 
     override fun onActivityDestroyed(activity: Activity) {
@@ -66,7 +73,9 @@ object ProcessState : Application.ActivityLifecycleCallbacks {
 
     override fun onActivityStarted(activity: Activity) = Unit
 
-    override fun onActivityResumed(activity: Activity) = Unit
+    // A plain Activity whose onNewIntent calls setIntent shows the tap here, and the delivered ids skip every other resume.
+    override fun onActivityResumed(activity: Activity) =
+        handleTap(activity.applicationContext, activity.intent, firstActivity = false)
 
     override fun onActivityPaused(activity: Activity) = Unit
 
@@ -88,20 +97,20 @@ object ProcessState : Application.ActivityLifecycleCallbacks {
     private fun tapStartedApp(firstActivity: Boolean): Boolean =
         firstActivity && synchronized(lock) { pushesSeen == 0 }
 
-    private fun handleTap(activity: Activity, firstActivity: Boolean) {
-        val id = activity.intent?.getStringExtra(MSG_ID) ?: return
-        val prefs = activity.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private fun handleTap(context: Context, intent: Intent?, firstActivity: Boolean) {
+        val id = intent?.getStringExtra(MSG_ID) ?: return
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         loadDelivered(prefs)
         if (synchronized(lock) { delivered.contains(id) }) return
         val startedApp = tapStartedApp(firstActivity)
-        val bytes = tapPayload(activity).toString().toByteArray(StandardCharsets.UTF_8)
+        val bytes = tapPayload(intent).toString().toByteArray(StandardCharsets.UTF_8)
         invokeNative("onMessage") { Native.onMessage(bytes, startedApp) }
         rememberDelivered(prefs, id)
     }
 
-    private fun tapPayload(activity: Activity): JSONObject {
+    private fun tapPayload(intent: Intent): JSONObject {
         val json = JSONObject()
-        val extras = activity.intent?.extras ?: return json
+        val extras = intent.extras ?: return json
         for (key in extras.keySet()) {
             if (key.startsWith("google.") || key.startsWith("gcm.")) continue
             if (key in DROPPED) continue

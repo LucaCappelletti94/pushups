@@ -112,6 +112,8 @@ run_variant unifiedpush "config-real background-handler" default UnifiedPushTest
 adb shell pm disable-user --user 0 io.heckel.ntfy >/dev/null
 run_variant unifiedpush-fallback "config-real background-handler" default UnifiedPushFallbackTest vapid "$vapid_hex"
 adb shell pm enable io.heckel.ntfy >/dev/null
+# A tap into a running singleTop Activity, plain and androidx.
+run_variant single-top "config-real background-handler" single-top SingleTopTapTest
 
 # Rust: every variant's profile against its own library, kept to the crate's own sources, with
 # paths relative to the repository.

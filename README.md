@@ -99,7 +99,7 @@ fn on_push(context: Context, message: Message) {
 }
 ```
 
-The payload is the FCM `data` map as a JSON object. A notification message that FCM shows itself reaches the app when the user taps it.
+The payload is the FCM `data` map as a JSON object. A notification message that FCM shows itself reaches the app when the user taps it. A tap into a running `singleTop` or `singleTask` Activity reaches it through that Activity's `onNewIntent`, which an androidx `ComponentActivity` reports by itself, so a plain `android.app.Activity` with such a launch mode calls `setIntent(intent)` in its `onNewIntent`.
 
 An app whose `Config` has a `UnifiedPushConfig` gets its pushes through a [UnifiedPush](https://unifiedpush.org) distributor, such as ntfy, when the device has one, and through FCM otherwise. The first `register` with several distributors installed asks the user to pick one. The app holds one token at a time, so on UnifiedPush it is a Web Push subscription, and the payload is the message body the server sent.
 
