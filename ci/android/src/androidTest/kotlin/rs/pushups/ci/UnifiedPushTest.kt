@@ -16,6 +16,7 @@ import org.unifiedpush.android.connector.FailedReason
 import org.unifiedpush.android.connector.data.PublicKeySet
 import org.unifiedpush.android.connector.data.PushEndpoint
 import org.unifiedpush.android.connector.data.PushMessage
+import rs.pushups.DistributorActivity
 import rs.pushups.PushupsMessagingService
 import rs.pushups.PushupsPushService
 import java.util.UUID
@@ -113,5 +114,19 @@ class UnifiedPushTest {
             awaitLine(Probe::events, "the distributor unregistered the app", UI_MS)
             assertFalse(Probe.events().contains(undecrypted))
         }
+    }
+
+    @Test
+    fun a6_registeringAgainUsesTheSavedDistributorWithoutThePicker() {
+        val picker = InstrumentationRegistry.getInstrumentation()
+            .addMonitor(DistributorActivity::class.java.name, null, false)
+        ActivityScenario.launch(TapActivity::class.java).use {
+            Probe.setHandler()
+            val before = lines(Probe.events()).count { it.startsWith("webpush ") }
+            assertNull(Probe.register())
+            waitFor(DELIVERY_MS) { lines(Probe.events()).count { it.startsWith("webpush ") }.takeIf { it > before } }
+                ?: error("no new Web Push token within ${DELIVERY_MS / 1000} s, got:\n${Probe.events()}")
+        }
+        assertEquals(0, picker.hits)
     }
 }

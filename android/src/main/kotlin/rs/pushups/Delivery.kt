@@ -31,7 +31,7 @@ internal object Transport {
     const val UNIFIED_PUSH = "unifiedpush"
 
     fun get(context: Context): String =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY, FCM) ?: FCM
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY, null) ?: FCM
 
     fun set(context: Context, transport: String) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY, transport).apply()

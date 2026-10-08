@@ -24,8 +24,7 @@ class PushupsMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         Log.d(TAG, "message ${message.messageId} received, priority ${message.priority}")
-        val context = Pushups.context ?: return
-        deliverPush(context, JSONObject(message.data).toString().toByteArray(StandardCharsets.UTF_8))
+        deliverPush(applicationContext, JSONObject(message.data).toString().toByteArray(StandardCharsets.UTF_8))
     }
 
     override fun onDeletedMessages() {

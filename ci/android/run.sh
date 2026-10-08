@@ -66,7 +66,7 @@ adb shell input keyevent KEYCODE_HOME
 adb uninstall "$package" >/dev/null 2>&1 || true
 python3 "$ci/send.py" "$key" --webpush-sender "$root/ci/linux/probe/target/debug/send" --vapid "$out/vapid.pem" &
 sender=$!
-trap 'kill $sender 2>/dev/null || true; adb shell svc power stayon false || true' EXIT
+trap 'kill $sender 2>/dev/null || true; adb shell pm enable io.heckel.ntfy >/dev/null 2>&1 || true; adb shell svc power stayon false || true' EXIT
 
 # One app configuration: the probe built with <features>, the test manifest <manifest>, the test
 # class <class>, and instrumentation arguments as key and value pairs. Each runs in a fresh
@@ -108,6 +108,10 @@ run_variant unconfigured "" default RegistrationFailsTest expect "FCM is not con
 run_variant mismatched config-mismatched default RegistrationFailsTest expect "FCM is not configured"
 run_variant rejected config-fixture default RegistrationFailsTest expect "Please set a valid API key"
 run_variant unifiedpush "config-real background-handler" default UnifiedPushTest vapid "$vapid_hex" endpoint https://ntfy.sh/
+# With ntfy disabled the device has no distributor, so the same configuration registers through FCM.
+adb shell pm disable-user --user 0 io.heckel.ntfy >/dev/null
+run_variant unifiedpush-fallback "config-real background-handler" default UnifiedPushFallbackTest vapid "$vapid_hex"
+adb shell pm enable io.heckel.ntfy >/dev/null
 
 # Rust: every variant's profile against its own library, kept to the crate's own sources, with
 # paths relative to the repository.
