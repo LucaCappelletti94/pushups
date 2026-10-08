@@ -2,8 +2,9 @@
 //! logcat tag `pushups-example` on Android and in the console on the web, so a device proof can
 //! time send to delivery.
 //!
-//! On the web, `PUSHUPS_VAPID_PUBLIC_KEY` (base64url) at build time sets the VAPID key, and
-//! `PUSHUPS_WEB_WORKER=static` registers the static worker in place of the Rust handler.
+//! `PUSHUPS_VAPID_PUBLIC_KEY` (base64url) at build time sets the app server's VAPID key, for Web Push
+//! on the web and UnifiedPush on Android and Linux. `PUSHUPS_WEB_WORKER=static` registers the static
+//! worker in place of the Rust handler.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -13,7 +14,10 @@ use dioxus::prelude::*;
 use futures_util::StreamExt;
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use pushups::{Config, Context, Event, Message, Notification, Permission, WebPushConfig};
+use pushups::{
+    Config, Context, Event, LinuxConfig, Message, Notification, Permission, UnifiedPushConfig,
+    WebPushConfig,
+};
 
 pushups::firebase_config!("google-services.json");
 
@@ -36,17 +40,21 @@ fn main() {
 }
 
 fn config() -> Config {
+    // The bundle identifier, which also names the app on the Linux session bus.
+    let config = Config::new().linux(LinuxConfig::new("rs.pushups.example"));
     let key = option_env!("PUSHUPS_VAPID_PUBLIC_KEY")
         .and_then(|key| URL_SAFE_NO_PAD.decode(key).ok())
         .and_then(|key| <[u8; 65]>::try_from(key).ok());
     let Some(key) = key else {
-        return Config::new();
+        return config;
     };
     let web = WebPushConfig::new(key);
-    Config::new().web(match option_env!("PUSHUPS_WEB_WORKER") {
-        Some("static") => web,
-        _ => web.rust_handler(),
-    })
+    config
+        .unified_push(UnifiedPushConfig::new(key))
+        .web(match option_env!("PUSHUPS_WEB_WORKER") {
+            Some("static") => web,
+            _ => web.rust_handler(),
+        })
 }
 
 /// Runs in the service worker for every push, and decides what the user sees.
