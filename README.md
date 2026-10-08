@@ -138,6 +138,17 @@ let config = Config::new()
 
 `install` writes a D-Bus activation file to `~/.local/share/dbus-1/services`, unless the system already ships one for the app, so a push to a closed app starts it. A process started that way never returns from `install`. It hands the push to the background handler, keeps it on disk for the next window's handler, and exits once idle, so the app's window never opens for a push. There is no permission prompt, and `request_permission` answers whether a distributor runs. `register` returns at once, and a distributor that is offline, as KDE's is when the machine has no network, answers once it reconnects, so the token can come much later.
 
+## Windows
+
+The Windows backend goes through the Windows App SDK's push notifications and still waits for its device proof. The app gives the Object ID of its Entra ID app registration, and ships `Microsoft.WindowsAppRuntime.Bootstrap.dll` beside its executable, where `install` loads it from.
+
+```rust
+use pushups::{Config, WnsConfig};
+
+let config = Config::new().windows(WnsConfig::new("00000000-0000-0000-0000-000000000000"));
+# let _ = config;
+```
+
 | Platform | Push service | Backend |
 |---|---|---|
 | Android | FCM or UnifiedPush | available |
