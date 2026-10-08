@@ -174,9 +174,20 @@ export async function activeRegistration(registration) {
 
 export async function subscribe(registration, applicationServerKey) {
   const options = { userVisibleOnly: true, applicationServerKey };
+  const existing = await registration.pushManager.getSubscription();
+  // The Push API refuses a key that differs from the existing subscription's, so a rotated key replaces it.
+  if (existing && !sameKey(existing.options?.applicationServerKey, applicationServerKey)) {
+    await existing.unsubscribe();
+  }
   const subscription = await registration.pushManager.subscribe(options);
   await withStore(OPTIONS, "readwrite", (store) => store.put(options, SUBSCRIBE_OPTIONS));
   return tokenRecord(subscription);
+}
+
+function sameKey(existing, wanted) {
+  if (!existing) return false;
+  const have = new Uint8Array(existing);
+  return have.length === wanted.length && have.every((byte, index) => byte === wanted[index]);
 }
 
 export async function drain() {

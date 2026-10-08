@@ -333,6 +333,34 @@ async function staticWorker(origin) {
   });
 }
 
+/** A subscription the origin made with an earlier VAPID key gives way to one with the configured key on `register`. */
+async function rotated(origin) {
+  await withBrowser(origin, "granted", async (browser) => {
+    const probe = await Probe.open(browser, origin);
+    await probe.install(false);
+    const earlierKey = [...Buffer.from(webpush.generateVAPIDKeys().publicKey, "base64url")];
+    const earlier = await probe.page.evaluate(async (key) => {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: new Uint8Array(key),
+      });
+      return subscription.endpoint;
+    }, earlierKey);
+    await probe.subscribe();
+    const token = await probe.event(
+      "the token for the configured key",
+      (event) => event.kind === "token" || event.kind === "registrationFailed",
+      SUBSCRIBE_MS,
+    );
+    expect(token.kind === "token", `a token after the key change, got ${JSON.stringify(token)}`);
+    expect(token.endpoint !== earlier, "a new endpoint for the configured key");
+    await push(token, "rotated");
+    await probe.message("rotated");
+    await probe.close("rotated");
+  });
+}
+
 /** The Rust handler builds the notification, page open or not, in a running worker, since puppeteer stalls a cold one. */
 async function rustWorker(origin) {
   await withBrowser(origin, "granted", async (browser) => {
@@ -364,7 +392,7 @@ mkdirSync(join(out, "rust"), { recursive: true });
 mkdirSync(join(out, "js"), { recursive: true });
 const { server, origin } = await serve();
 try {
-  const scenarios = [misuse, denied, resumed, staticWorker, rustWorker];
+  const scenarios = [misuse, denied, resumed, staticWorker, rotated, rustWorker];
   for (const scenario of scenarios.filter(({ name }) => only.length === 0 || only.includes(name))) {
     log(`scenario ${scenario.name}`);
     await scenario(origin);

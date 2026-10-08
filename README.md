@@ -95,7 +95,7 @@ fn main() {
 }
 ```
 
-Web Push needs HTTPS, or `localhost` while developing. On iOS it works only in web apps added to the home screen, which never get `pushsubscriptionchange`, so the page should call `register` on every load. Webviews expose no Push API, so an app in a webview uses its platform's native backend.
+Web Push needs HTTPS, or `localhost` while developing. On iOS it works only in web apps added to the home screen. Safari never fires `pushsubscriptionchange`, so the page should call `register` on every load, which also moves a returning user to the new VAPID key after the app changes it. Webviews expose no Push API, so an app in a webview uses its platform's native backend.
 
 | Platform | Push service | Backend |
 |---|---|---|
