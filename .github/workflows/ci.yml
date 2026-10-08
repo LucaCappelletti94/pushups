@@ -61,6 +61,16 @@ jobs:
       - run: cargo +stable test --workspace
       - run: cargo +stable test --workspace --all-features
 
+  test-windows:
+    # No Windows App SDK runtime on the runner, so this runs the Windows backend as an app shipped without it.
+    name: Test on Windows
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal
+      - run: cargo +stable test --workspace --all-features
+
   msrv:
     name: MSRV
     runs-on: ubuntu-latest
@@ -264,8 +274,54 @@ jobs:
         # The runner image exports its NDK path as a shell variable, which `env` cannot read.
         run: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" dx build --android --target aarch64-linux-android
 
+  example-android-emulator:
+    name: Example app on an Android emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Neither a fork's pull request nor a Dependabot run can read the Firebase secrets.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]')
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add --toolchain stable x86_64-linux-android
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: dioxus-cli@0.7.10
+      # The emulator needs KVM, which the runner's user cannot open by default.
+      - run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Write the Firebase configuration and the FCM key
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT }}
+        run: |
+          printf '%s' "$GOOGLE_SERVICES_JSON" > examples/dioxus/google-services.json
+          printf '%s' "$FCM_SERVICE_ACCOUNT" > "$RUNNER_TEMP/fcm-service-account.json"
+      - name: Build the APK for the emulator
+        working-directory: examples/dioxus
+        # The runner image exports its NDK path as a shell variable, which `env` cannot read.
+        run: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" dx build --android --target x86_64-linux-android
+      - name: Pushes to the open app and to one whose process was killed
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: ci/android/example.sh examples/dioxus/target/dx/pushups-dioxus-example/debug/android/app/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/fcm-service-account.json"
+
   example-web:
-    name: Example web build
+    name: Example web app in Chrome
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -277,13 +333,23 @@ jobs:
         with:
           tool: dioxus-cli@0.7.10
       - run: cp tests/fixtures/google-services.json examples/dioxus/google-services.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ci/web/package-lock.json
+      - run: npm ci
+        working-directory: ci/web
       - name: Build the web app in both worker modes
         working-directory: examples/dioxus
         run: |
           dx build --web --release --no-default-features --features web
-          PUSHUPS_WEB_WORKER=static dx build --web --release --no-default-features --features web
+          key=$(node ../../ci/web/example.mjs keys "$RUNNER_TEMP/vapid.json")
+          PUSHUPS_WEB_WORKER=static PUSHUPS_VAPID_PUBLIC_KEY="$key" dx build --web --release --no-default-features --features web
           # The `dioxus` feature has dx copy the worker unchanged into the assets.
           cmp target/dx/pushups-dioxus-example/release/web/public/assets/pushups-sw.js ../../js/pushups-sw.js
+      - name: The static-worker build in Chrome, with its manifest and real pushes
+        run: node ci/web/example.mjs check examples/dioxus/target/dx/pushups-dioxus-example/release/web/public "$RUNNER_TEMP/vapid.json"
 
   example-apple:
     name: Example apps for iOS and macOS
