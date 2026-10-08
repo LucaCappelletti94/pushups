@@ -64,6 +64,15 @@ web-sys = { version = "0.3", features = ["Navigator", "Notification", "Registrat
 futures-executor = "0.3"
 tempfile = "3"
 
+# The fake distributor of tests/linux.rs.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+zbus = "5"
+
+# Runs itself as the app on a private session bus, so it needs its own main.
+[[test]]
+name = "linux"
+harness = false
+
 [package.metadata.docs.rs]
 all-features = true
 

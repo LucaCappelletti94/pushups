@@ -134,7 +134,7 @@ let config = Config::new()
 # let _ = config;
 ```
 
-`install` writes a D-Bus activation file to `~/.local/share/dbus-1/services`, unless the system already ships one for the app, so a push to a closed app starts it. A process started that way never returns from `install`. It hands the push to the background handler, keeps it on disk for the next window's handler, and exits once idle, so the app's window never opens for a push. There is no permission prompt, and `request_permission` answers whether a distributor runs.
+`install` writes a D-Bus activation file to `~/.local/share/dbus-1/services`, unless the system already ships one for the app, so a push to a closed app starts it. A process started that way never returns from `install`. It hands the push to the background handler, keeps it on disk for the next window's handler, and exits once idle, so the app's window never opens for a push. There is no permission prompt, and `request_permission` answers whether a distributor runs. `register` returns at once, and a distributor that is offline, as KDE's is when the machine has no network, answers once it reconnects, so the token can come much later.
 
 | Platform | Push service | Backend |
 |---|---|---|

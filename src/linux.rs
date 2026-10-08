@@ -18,7 +18,7 @@ use std::{env, process, thread};
 
 use parking_lot::Mutex;
 use zbus::blocking::fdo::DBusProxy;
-use zbus::blocking::{Connection, Proxy, connection};
+use zbus::blocking::{Connection, connection};
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::zvariant::{OwnedValue, Value};
 
@@ -189,6 +189,20 @@ pub(crate) fn register() -> Result<(), Error> {
             return Ok(());
         }
     };
+    // KUnifiedPush holds the reply while it believes the machine is offline, so the call waits on its own thread.
+    thread::Builder::new()
+        .name("pushups register".to_owned())
+        .spawn(move || {
+            if let Err(reason) = send_register(runtime, &distributor) {
+                DISPATCHER.emit(Entry::RegistrationFailed(reason).into_event());
+            }
+        })
+        .map(drop)
+        .map_err(platform)
+}
+
+/// Sends `Register` and waits for the answer, with the failure as `RegistrationFailed` describes it.
+fn send_register(runtime: &Runtime, distributor: &str) -> Result<(), String> {
     let token = runtime.state.lock().token.clone();
     let mut args: HashMap<&str, Value<'_>> = HashMap::new();
     args.insert("service", Value::from(runtime.app_id.as_str()));
@@ -196,29 +210,30 @@ pub(crate) fn register() -> Result<(), Error> {
     if let Some(vapid) = &runtime.vapid {
         args.insert("vapid", Value::from(vapid.as_str()));
     }
-    let proxy = Proxy::new(
-        &runtime.connection,
-        distributor.as_str(),
-        DISTRIBUTOR_PATH,
-        DISTRIBUTOR_INTERFACE,
-    )
-    .map_err(platform)?;
-    let reply: HashMap<String, OwnedValue> = proxy.call("Register", &(args,)).map_err(platform)?;
+    let failed = |error: zbus::Error| format!("registering with {distributor} failed: {error}");
+    let reply = runtime
+        .connection
+        .call_method(
+            Some(distributor),
+            DISTRIBUTOR_PATH,
+            Some(DISTRIBUTOR_INTERFACE),
+            "Register",
+            &(args,),
+        )
+        .map_err(failed)?;
+    let reply: HashMap<String, OwnedValue> = reply.body().deserialize().map_err(failed)?;
     let succeeded = reply
         .get("success")
         .and_then(|value| <&str>::try_from(value).ok())
         == Some("REGISTRATION_SUCCEEDED");
-    if !succeeded {
-        let reason = reply
-            .get("reason")
-            .and_then(|value| <&str>::try_from(value).ok())
-            .unwrap_or("no reason given");
-        DISPATCHER.emit(
-            Entry::RegistrationFailed(format!("{distributor} refused the registration: {reason}"))
-                .into_event(),
-        );
+    if succeeded {
+        return Ok(());
     }
-    Ok(())
+    let reason = reply
+        .get("reason")
+        .and_then(|value| <&str>::try_from(value).ok())
+        .unwrap_or("no reason given");
+    Err(format!("{distributor} refused the registration: {reason}"))
 }
 
 pub(crate) fn request_permission() -> Ready<Result<Permission, Error>> {
