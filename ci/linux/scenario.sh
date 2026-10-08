@@ -12,6 +12,8 @@ app_id=rs.pushups.LinuxProbe
 export PROBE_OUT=/out/run
 export PROBE_VAPID_HEX=$(cat /out/vapid.hex)
 export LLVM_PROFILE_FILE=/out/profraw/%p-%m.profraw
+# The host's user, whose uid need not be the container's, must be able to delete what lands here.
+umask 0000
 mkdir -p "$PROBE_OUT" /out/profraw
 
 # A process the bus starts for a push gets the daemon's environment, not this script's.
