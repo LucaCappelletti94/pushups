@@ -22,5 +22,9 @@ android {
 }
 
 dependencies {
-    implementation(project(":pushups"))
+    if (providers.gradleProperty("pushups.aar").isPresent) {
+        implementation("io.github.lucacappelletti94:pushups-android:${gradle.extensions.extraProperties["pushupsVersion"]}")
+    } else {
+        implementation(project(":pushups"))
+    }
 }

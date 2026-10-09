@@ -26,6 +26,8 @@ jobs:
       - uses: actions/checkout@v7
       - run: rustup toolchain install stable --profile minimal --component rustfmt
       - run: cargo +stable fmt --check
+      # The Android module's version, which the runtime handshake compares, follows the crate's.
+      - run: ci/check-versions.sh
 
   clippy:
     name: Clippy ${{ matrix.target }}
@@ -394,14 +396,20 @@ jobs:
           (cd android && ./gradlew --no-daemon assembleDebug)
           # The module's build output stays out of the crate.
           test ! -e ../../android/build
-      - name: Pushes to the open app and to one whose process was killed
+          mkdir -p "$RUNNER_TEMP/apk" && cp android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/apk/sources.apk"
+      - name: Build the same APK against the module published as the pushups-android AAR
+        run: |
+          ci/maven/publish.sh local
+          (cd examples/winit/android && ./gradlew --no-daemon clean assembleDebug -Ppushups.aar="$GITHUB_WORKSPACE/ci/maven/build/repo")
+          cp examples/winit/android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/apk/aar.apk"
+      - name: Pushes to the open app and to one whose process was killed, with the module from sources and from the AAR
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
           target: google_apis
           arch: x86_64
           disable-animations: true
-          script: ci/android/example.sh examples/winit/android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/fcm-service-account.json" android.app.NativeActivity
+          script: ci/android/example.sh "$RUNNER_TEMP/apk/sources.apk" "$RUNNER_TEMP/fcm-service-account.json" android.app.NativeActivity && ci/android/example.sh "$RUNNER_TEMP/apk/aar.apk" "$RUNNER_TEMP/fcm-service-account.json" android.app.NativeActivity
 
   example-tauri-android:
     name: Example Tauri app through tauri-plugin-pushups on an Android emulator

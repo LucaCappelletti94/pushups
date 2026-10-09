@@ -101,6 +101,16 @@ gradle.beforeProject {
 }
 ```
 
+The module is also on Maven Central as `io.github.lucacappelletti94:pushups-android`, released with every version of the crate, for a Gradle project that would rather add one dependency than include the sources. Its version must be the version of the `pushups` crate the app links, since the Kotlin calls into that crate's Rust.
+
+```kotlin
+dependencies {
+    implementation("io.github.lucacappelletti94:pushups-android:0.1.0")
+}
+```
+
+In every route the module checks at start that the app's `pushups` crate is its own version, and a mismatch, such as an AAR of one release beside a crate of another, leaves push off and makes `install` return `Error::AndroidModuleMismatch` naming both versions.
+
 The app compiles its Firebase configuration in, from the `google-services.json` the Firebase console gives, with no Google services Gradle plugin. A process the push started with no UI can run Rust at once through a background handler. The push also waits on disk for the app's handler, which gets it when the UI opens.
 
 ```rust
