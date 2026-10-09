@@ -133,6 +133,8 @@ fn main() {
 
 A Trunk app, such as one built with Yew, writes the static worker from a `build.rs` with `pushups` as a build dependency, and copies it into the site from a `post_build` hook, as [`examples/yew`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/yew) does. Its `Trunk.toml` turns file hashes off, so that the worker entry `sw.js` can import the glue by name.
 
+A Leptos app built with cargo-leptos serves `pushups::SERVICE_WORKER` from a route of its axum server, as [`examples/leptos`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/leptos) does. Its worker entry for `rust_handler` passes the wasm's URL to `init()`, since cargo-leptos renames the file, and the library's `#[wasm_bindgen(start)]` function serves the handler when `pushups::in_service_worker()` is true.
+
 Web Push needs HTTPS, or `localhost` while developing. On iOS it works only in web apps added to the home screen, and there a push reaches the handler when the app is next shown or started, even if it is open when the push arrives, since iOS gives the service worker no way to reach the open page ([WebKit bug 268797](https://bugs.webkit.org/show_bug.cgi?id=268797)). Safari never fires `pushsubscriptionchange`, so the page should call `register` on every load, which also moves a returning user to the new VAPID key after the app changes it. Webviews expose no Push API, so an app in a webview uses its platform's native backend.
 
 ## Linux

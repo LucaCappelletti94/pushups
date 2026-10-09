@@ -383,6 +383,28 @@ jobs:
       - name: The static-worker build in Chrome, with real pushes
         run: node ci/web/example.mjs check examples/yew/dist-static "$RUNNER_TEMP/vapid.json" '/pushups-sw\.js\?pushups=static'
 
+  example-leptos:
+    name: Example Leptos SSR app in Chrome
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add --toolchain stable wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-leptos@0.3.11
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ci/web/package-lock.json
+      - run: npm ci
+        working-directory: ci/web
+      - name: Both worker modes, served by the app's own server, with real pushes
+        run: ci/web/leptos.sh
+
   example-apple:
     name: Example apps for iOS and macOS
     runs-on: macos-latest

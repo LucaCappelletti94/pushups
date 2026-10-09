@@ -4,6 +4,7 @@
 // node ci/web/example.mjs keys <vapid.json>    writes a VAPID pair and prints its public key
 // node ci/web/example.mjs check <site> <vapid.json> <worker> [--manifest] [--rust]
 //
+// <site> is a directory this script serves, or the http URL of the app's own running server.
 // <worker> is a regular expression the registered worker's path and query must match, and the
 // scope must be that path's directory. --manifest checks the manifest, its icons and installability.
 // --rust checks that the app's Rust handler ran in the worker for the push.
@@ -41,20 +42,23 @@ const types = {
   ".png": "image/png",
   ".webmanifest": "application/manifest+json",
 };
-const server = createServer((request, response) => {
-  const path = new URL(request.url, "http://x").pathname;
-  const file = normalize(join(site, path === "/" ? "index.html" : path));
-  try {
-    if (relative(site, file).startsWith("..")) throw new Error("outside the site");
-    const body = readFileSync(file);
-    response.writeHead(200, { "content-type": types[extname(file)] ?? "application/octet-stream" });
-    response.end(body);
-  } catch {
-    response.writeHead(404).end();
-  }
-});
-await new Promise((done) => server.listen(0, "127.0.0.1", done));
-const origin = `http://127.0.0.1:${server.address().port}`;
+// A site directory is served here, while an `http` URL is the app's own server, already running.
+const server = site.startsWith("http")
+  ? null
+  : createServer((request, response) => {
+    const path = new URL(request.url, "http://x").pathname;
+    const file = normalize(join(site, path === "/" ? "index.html" : path));
+    try {
+      if (relative(site, file).startsWith("..")) throw new Error("outside the site");
+      const body = readFileSync(file);
+      response.writeHead(200, { "content-type": types[extname(file)] ?? "application/octet-stream" });
+      response.end(body);
+    } catch {
+      response.writeHead(404).end();
+    }
+  });
+if (server) await new Promise((done) => server.listen(0, "127.0.0.1", done));
+const origin = server ? `http://127.0.0.1:${server.address().port}` : new URL(site).origin;
 
 const lines = [];
 const expect = (ok, what) => {
@@ -165,5 +169,5 @@ try {
   console.log("ok: a push to a closed page reaches the next page");
 } finally {
   await browser.close();
-  server.close();
+  server?.close();
 }
