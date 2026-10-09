@@ -35,14 +35,30 @@ open_app() {
   adb shell wm dismiss-keyguard
   adb shell am start -W -n "$activity" >/dev/null
 }
+# Prints the FCM token, reopening the app when its registration fails, as FCM's first one on a fresh emulator sometimes does.
+register() {
+  local attempt line
+  for attempt in 1 2 3; do
+    adb logcat -c
+    open_app >&2
+    line=$(await 'ui token at_ms=[0-9]+ Fcm\(|ui registration failed')
+    case "$line" in
+      *"ui token"*)
+        echo "$line" | sed -E 's/.*Fcm\("([^"]+)"\).*/\1/'
+        return 0
+        ;;
+    esac
+    echo "example: registration attempt $attempt failed, reopening the app" >&2
+    adb shell am force-stop "$package"
+  done
+  fail "FCM registration failed three times"
+}
 
 adb uninstall "$package" >/dev/null 2>&1 || true
 adb install "$apk" >/dev/null
 # Before Android 13 there is no permission to grant.
 adb shell pm grant "$package" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
-adb logcat -c
-open_app
-token=$(await 'ui token at_ms=[0-9]+ Fcm\(' | sed -E 's/.*Fcm\("([^"]+)"\).*/\1/')
+token=$(register)
 [ -n "$token" ] || fail "no FCM token"
 
 python3 "$ci/fcm_push.py" "$key" "$token" 1
