@@ -9,13 +9,8 @@ use web_sys::ServiceWorkerRegistration;
 
 use crate::backend::Backend;
 use crate::dispatch::DISPATCHER;
-use crate::web_parts::{
-    WorkerMode, permission_from, static_worker_path, web_push_token, worker_script_url,
-};
+use crate::web_parts::{WorkerMode, permission_from, web_push_token, worker_script};
 use crate::{Config, Error, Event, Message, Notification, Permission, WebPushConfig};
-
-// wasm-bindgen reads the snippet without telling cargo, so a change to it would not rebuild.
-const _: &str = include_str!("../js/pushups-sw.js");
 
 #[wasm_bindgen(module = "/js/pushups-sw.js")]
 extern "C" {
@@ -156,16 +151,21 @@ impl Backend for Web {
         {
             return Err(Error::Unsupported);
         }
-        let script = if web.rust_handler {
-            worker_script_url(&GLUE_URL.with(Clone::clone), WorkerMode::Rust)
+        #[cfg(feature = "dioxus")]
+        let bundled = Some(crate::dx::WORKER.to_string());
+        #[cfg(not(feature = "dioxus"))]
+        let bundled = None;
+        let mode = if web.rust_handler {
+            WorkerMode::Rust
         } else {
-            #[cfg(feature = "dioxus")]
-            let bundled = Some(crate::dx::WORKER.to_string());
-            #[cfg(not(feature = "dioxus"))]
-            let bundled = None;
-            let path = static_worker_path(web.service_worker_path.as_deref(), bundled);
-            worker_script_url(&path, WorkerMode::Static)
+            WorkerMode::Static
         };
+        let script = worker_script(
+            mode,
+            web.service_worker_path.as_deref(),
+            &GLUE_URL.with(Clone::clone),
+            bundled,
+        );
         let options = web_sys::RegistrationOptions::new();
         options.set_type("module");
         let registration = navigator

@@ -1,8 +1,12 @@
-// Checks the dx-built `examples/dioxus` in headless Chrome: the worker the `dioxus` feature bundles,
-// the web app manifest, installability, and real pushes to an open and a closed page.
+// Checks a built example web app in headless Chrome: the worker it registers, its web app manifest
+// and installability when it has one, and real pushes to an open and a closed page.
 //
 // node ci/web/example.mjs keys <vapid.json>    writes a VAPID pair and prints its public key
-// node ci/web/example.mjs check <site> <vapid.json>
+// node ci/web/example.mjs check <site> <vapid.json> <worker> [--manifest] [--rust]
+//
+// <worker> is a regular expression the registered worker's path and query must match, and the
+// scope must be that path's directory. --manifest checks the manifest, its icons and installability.
+// --rust checks that the app's Rust handler ran in the worker for the push.
 import { readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize, relative } from "node:path";
@@ -18,11 +22,14 @@ if (command === "keys") {
   process.exit(0);
 }
 if (command !== "check") {
-  console.error("usage: example.mjs keys <vapid.json> | check <site> <vapid.json>");
+  console.error("usage: example.mjs keys <vapid.json> | check <site> <vapid.json> <worker> [--manifest] [--rust]");
   process.exit(2);
 }
 
-const [site, keys] = args;
+const [site, keys, workerPattern, ...flags] = args;
+const worker = new RegExp(`^${workerPattern}$`);
+const withManifest = flags.includes("--manifest");
+const rust = flags.includes("--rust");
 const vapid = JSON.parse(readFileSync(keys, "utf8"));
 webpush.setVapidDetails("mailto:pushups-ci@users.noreply.github.com", vapid.publicKey, vapid.privateKey);
 const STEP_MS = 60_000;
@@ -65,6 +72,14 @@ const awaitLine = async (what, test) => {
 };
 
 const browser = await puppeteer.launch({ headless: true, channel: "chrome", args: ["--no-first-run"] });
+// The worker's console carries the Rust handler's lines, read as the page's are.
+browser.on("targetcreated", (target) => {
+  if (target.type() !== "service_worker") return;
+  target.worker().then(
+    (worker) => worker?.on("console", (message) => lines.push(message.text())),
+    (error) => console.log(`could not attach to ${target.url()}: ${error.message}`),
+  );
+});
 try {
   await browser.setPermission(origin, { permission: { name: "notifications" }, state: "granted" });
   const open = async () => {
@@ -77,12 +92,14 @@ try {
   let page = await open();
 
   const cdp = await page.createCDPSession();
-  const manifest = await cdp.send("Page.getAppManifest");
-  expect(manifest.url === `${origin}/manifest.webmanifest`, "the page links its manifest");
-  expect(manifest.errors.length === 0, `the manifest parses (${JSON.stringify(manifest.errors)})`);
-  for (const icon of JSON.parse(manifest.data).icons) {
-    const status = await page.evaluate(async (src) => (await fetch(src)).status, icon.src);
-    expect(status === 200, `icon ${icon.src} (${icon.purpose}) loads`);
+  if (withManifest) {
+    const manifest = await cdp.send("Page.getAppManifest");
+    expect(manifest.url === `${origin}/manifest.webmanifest`, "the page links its manifest");
+    expect(manifest.errors.length === 0, `the manifest parses (${JSON.stringify(manifest.errors)})`);
+    for (const icon of JSON.parse(manifest.data).icons) {
+      const status = await page.evaluate(async (src) => (await fetch(src)).status, icon.src);
+      expect(status === 200, `icon ${icon.src} (${icon.purpose}) loads`);
+    }
   }
 
   await page.$$eval("button", (buttons) => buttons.find((b) => b.textContent.includes("Allow"))?.click());
@@ -94,22 +111,26 @@ try {
       script: (r.active ?? r.waiting ?? r.installing)?.scriptURL,
     })),
   );
+  const script = registrations.length === 1 ? new URL(registrations[0].script) : null;
   expect(
-    registrations.length === 1 &&
-      registrations[0].scope === `${origin}/assets/` &&
-      registrations[0].script === `${origin}/assets/pushups-sw.js?pushups=static`,
-    `the bundled worker is registered (${JSON.stringify(registrations)})`,
+    script !== null &&
+      script.origin === origin &&
+      worker.test(script.pathname + script.search) &&
+      registrations[0].scope === new URL(".", script).href,
+    `the expected worker is registered (${JSON.stringify(registrations)})`,
   );
 
-  // Chrome rechecks installability once the worker settles, so it is asked until it answers or the step ends.
-  let errors = [];
-  const settled = performance.now() + STEP_MS;
-  do {
-    errors = (await cdp.send("Page.getInstallabilityErrors")).installabilityErrors;
-    if (errors.length === 0) break;
-    await sleep(500);
-  } while (performance.now() < settled);
-  expect(errors.length === 0, `Chrome finds the page installable (${JSON.stringify(errors)})`);
+  if (withManifest) {
+    // Chrome rechecks installability once the worker settles, so it is asked until it answers or the step ends.
+    let errors = [];
+    const settled = performance.now() + STEP_MS;
+    do {
+      errors = (await cdp.send("Page.getInstallabilityErrors")).installabilityErrors;
+      if (errors.length === 0) break;
+      await sleep(500);
+    } while (performance.now() < settled);
+    expect(errors.length === 0, `Chrome finds the page installable (${JSON.stringify(errors)})`);
+  }
 
   // FCM answers 410 to a subscription it has not propagated yet, so a 410 is resent for a while, as the harness does.
   const send = async (seq) => {
@@ -130,6 +151,10 @@ try {
   await send(1);
   await awaitLine("message on the open page", (l) => l.includes("ui message") && l.includes("seq=1 "));
   console.log("ok: a push reaches the open page");
+  if (rust) {
+    await awaitLine("the Rust handler's line", (l) => l.includes("worker push") && l.includes("seq=1 "));
+    console.log("ok: the app's Rust handler built the notification in the worker");
+  }
 
   await page.close();
   await send(2);

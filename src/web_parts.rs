@@ -14,7 +14,7 @@ pub(crate) enum WorkerMode {
 }
 
 /// The script URL the page registers, telling the shim its mode in the query.
-pub(crate) fn worker_script_url(script: &str, mode: WorkerMode) -> String {
+fn worker_script_url(script: &str, mode: WorkerMode) -> String {
     let separator = if script.contains('?') { '&' } else { '?' };
     let mode = match mode {
         WorkerMode::Static => "static",
@@ -25,12 +25,29 @@ pub(crate) fn worker_script_url(script: &str, mode: WorkerMode) -> String {
 
 /// The static worker's script: the app's own path, else the one `dx` bundled from this crate,
 /// else [`WebPushConfig::DEFAULT_SERVICE_WORKER_PATH`](crate::WebPushConfig::DEFAULT_SERVICE_WORKER_PATH).
-pub(crate) fn static_worker_path(configured: Option<&str>, bundled: Option<String>) -> String {
+fn static_worker_path(configured: Option<&str>, bundled: Option<String>) -> String {
     match (configured, bundled) {
         (Some(path), _) => path.to_owned(),
         (None, Some(bundled)) => bundled,
         (None, None) => crate::WebPushConfig::DEFAULT_SERVICE_WORKER_PATH.to_owned(),
     }
+}
+
+/// The script the page registers. A Rust handler runs in the app's own entry module when the
+/// app set a path, else in the glue, which only starts itself under `dx`. The static worker is
+/// [`static_worker_path`]'s.
+pub(crate) fn worker_script(
+    mode: WorkerMode,
+    configured: Option<&str>,
+    glue: &str,
+    bundled: Option<String>,
+) -> String {
+    let script = match (mode, configured) {
+        (WorkerMode::Rust, Some(entry)) => entry.to_owned(),
+        (WorkerMode::Rust, None) => glue.to_owned(),
+        (WorkerMode::Static, configured) => static_worker_path(configured, bundled),
+    };
+    worker_script_url(&script, mode)
 }
 
 /// The token of a push subscription, from its endpoint, keys and expiry in milliseconds.
@@ -103,6 +120,28 @@ mod tests {
         assert_eq!(
             static_worker_path(Some("/pushups-sw.js"), bundled()),
             "/pushups-sw.js"
+        );
+    }
+
+    #[test]
+    fn a_rust_handler_registers_the_apps_entry_when_set_else_the_glue() {
+        let glue = "https://a.example/app-1f2e.js";
+        let bundled = || Some("/assets/pushups-sw.js".to_owned());
+        assert_eq!(
+            worker_script(WorkerMode::Rust, Some("/sw.js"), glue, bundled()),
+            "/sw.js?pushups=rust"
+        );
+        assert_eq!(
+            worker_script(WorkerMode::Rust, None, glue, bundled()),
+            "https://a.example/app-1f2e.js?pushups=rust"
+        );
+        assert_eq!(
+            worker_script(WorkerMode::Static, Some("/sw.js"), glue, bundled()),
+            "/sw.js?pushups=static"
+        );
+        assert_eq!(
+            worker_script(WorkerMode::Static, None, glue, None),
+            "/pushups-sw.js?pushups=static"
         );
     }
 

@@ -123,15 +123,22 @@ impl WebPushConfig {
         }
     }
 
-    /// Where the app serves the `js/pushups-sw.js` file this crate ships.
+    /// Where the app serves the static worker, [`SERVICE_WORKER`](crate::SERVICE_WORKER). With
+    /// [`rust_handler`](Self::rust_handler) it is where the app serves its own worker entry, a
+    /// module that imports the app's wasm-bindgen glue and calls its `init`.
     #[must_use]
     pub fn service_worker_path(mut self, path: impl Into<String>) -> Self {
         self.service_worker_path = Some(path.into());
         self
     }
 
-    /// Registers the app's own wasm as the service worker, so its `main` can serve a Rust
-    /// handler through [`serve_service_worker`](crate::serve_service_worker).
+    /// Runs the app's own wasm in the service worker, so its `main` can serve a Rust handler
+    /// through [`serve_service_worker`](crate::serve_service_worker).
+    ///
+    /// Without a [`service_worker_path`](Self::service_worker_path) the page registers the
+    /// app's wasm-bindgen glue itself, which starts the wasm only when it initializes itself, as
+    /// `dx`'s does. Under Trunk, cargo-leptos or wasm-pack, whose glue the page initializes, the
+    /// app serves a worker entry and sets its path.
     #[must_use]
     pub fn rust_handler(mut self) -> Self {
         self.rust_handler = true;

@@ -1,0 +1,13 @@
+[build]
+# `sw.js` imports the glue by name, so its file name carries no hash.
+filehash = false
+
+[watch]
+# The build script writes it, so watching it would rebuild in a loop.
+ignore = ["pushups-sw.js"]
+
+# Runs after the build script wrote the worker, into the directory Trunk turns into `dist`.
+[[hooks]]
+stage = "post_build"
+command = "sh"
+command_arguments = ["-c", "cp pushups-sw.js \"$TRUNK_STAGING_DIR/pushups-sw.js\""]

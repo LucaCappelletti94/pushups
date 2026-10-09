@@ -196,3 +196,11 @@ where
 {
     Platform::serve_service_worker(handler)
 }
+
+/// The source of the static service worker, `js/pushups-sw.js`, for an app whose bundler does
+/// not copy it out of the crate as `dx` does with the `dioxus` feature.
+///
+/// The app serves it as JavaScript at [`WebPushConfig::service_worker_path`], `/pushups-sw.js`
+/// by default, from a route of its own server or as a file its build writes. It is the same on
+/// every target, so a server built for the host serves the worker its wasm registers.
+pub const SERVICE_WORKER: &str = include_str!("../js/pushups-sw.js");

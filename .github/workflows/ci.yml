@@ -349,7 +349,39 @@ jobs:
           # The `dioxus` feature has dx copy the worker unchanged into the assets.
           cmp target/dx/pushups-dioxus-example/release/web/public/assets/pushups-sw.js ../../js/pushups-sw.js
       - name: The static-worker build in Chrome, with its manifest and real pushes
-        run: node ci/web/example.mjs check examples/dioxus/target/dx/pushups-dioxus-example/release/web/public "$RUNNER_TEMP/vapid.json"
+        run: node ci/web/example.mjs check examples/dioxus/target/dx/pushups-dioxus-example/release/web/public "$RUNNER_TEMP/vapid.json" '/assets/pushups-sw\.js\?pushups=static' --manifest
+
+  example-yew:
+    name: Example Yew app on Trunk in Chrome
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add --toolchain stable wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: trunk@0.21.14
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ci/web/package-lock.json
+      - run: npm ci
+        working-directory: ci/web
+      - name: Build the Yew app in both worker modes
+        working-directory: examples/yew
+        run: |
+          key=$(node ../../ci/web/example.mjs keys "$RUNNER_TEMP/vapid.json")
+          PUSHUPS_VAPID_PUBLIC_KEY="$key" trunk build --release --dist dist-rust
+          PUSHUPS_WEB_WORKER=static PUSHUPS_VAPID_PUBLIC_KEY="$key" trunk build --release --dist dist-static
+          # `build.rs` wrote `pushups::SERVICE_WORKER`, which the Trunk hook copied.
+          cmp dist-static/pushups-sw.js ../../js/pushups-sw.js
+      - name: The Rust-handler build in Chrome, with real pushes
+        run: node ci/web/example.mjs check examples/yew/dist-rust "$RUNNER_TEMP/vapid.json" '/sw\.js\?pushups=rust' --rust
+      - name: The static-worker build in Chrome, with real pushes
+        run: node ci/web/example.mjs check examples/yew/dist-static "$RUNNER_TEMP/vapid.json" '/pushups-sw\.js\?pushups=static'
 
   example-apple:
     name: Example apps for iOS and macOS

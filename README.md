@@ -107,7 +107,7 @@ An app whose `Config` has a `UnifiedPushConfig` gets its pushes through a [Unifi
 
 The web target needs the app's VAPID public key. Every push shows a notification, as browsers require, and a payload in the [Declarative Web Push](https://webkit.org/blog/16535/meet-declarative-web-push/) shape (`"web_push": 8030`) is shown as it is. Pushes that arrive with no page open wait in `IndexedDB` for the next page's handler.
 
-By default the app serves `js/pushups-sw.js` from this crate at `/pushups-sw.js`, a service worker with no wasm in it, and with the `dioxus` feature `dx` serves it from the app's assets. An app that needs Rust to build the notification, to decrypt an end-to-end encrypted payload for instance, sets `rust_handler`. Its own wasm then runs as the service worker, with no second build, and its `main` serves the handler there.
+By default the app serves the static service worker at `/pushups-sw.js`, a worker with no wasm in it. With the `dioxus` feature `dx` serves it from the app's assets. Any other app serves `pushups::SERVICE_WORKER`, the worker's source, as JavaScript, from a route of its own server or as a file its build writes. An app that needs Rust to build the notification, to decrypt an end-to-end encrypted payload for instance, sets `rust_handler`. Its own wasm then runs as the service worker, with no second build, and its `main` serves the handler there. Under `dx` the page registers the app's glue, which starts itself. Under Trunk, cargo-leptos or wasm-pack the page starts the glue, so the app also serves a worker entry, a module that imports its glue and calls `init()`, and passes its path to `service_worker_path`.
 
 ```rust
 use pushups::{Config, Message, Notification, WebPushConfig};
@@ -130,6 +130,8 @@ fn main() {
     }
 }
 ```
+
+A Trunk app, such as one built with Yew, writes the static worker from a `build.rs` with `pushups` as a build dependency, and copies it into the site from a `post_build` hook, as [`examples/yew`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/yew) does. Its `Trunk.toml` turns file hashes off, so that the worker entry `sw.js` can import the glue by name.
 
 Web Push needs HTTPS, or `localhost` while developing. On iOS it works only in web apps added to the home screen, and there a push reaches the handler when the app is next shown or started, even if it is open when the push arrives, since iOS gives the service worker no way to reach the open page ([WebKit bug 268797](https://bugs.webkit.org/show_bug.cgi?id=268797)). Safari never fires `pushsubscriptionchange`, so the page should call `register` on every load, which also moves a returning user to the new VAPID key after the app changes it. Webviews expose no Push API, so an app in a webview uses its platform's native backend.
 
