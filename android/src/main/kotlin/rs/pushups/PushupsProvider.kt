@@ -57,7 +57,7 @@ class PushupsProvider : ContentProvider() {
             Log.e(TAG, "load $libName", e)
             loaded = false
         }
-        if (loaded) {
+        if (loaded && handshake(appContext, libName)) {
             try {
                 Native.init(appContext, appContext.filesDir.absolutePath)
                 ProcessState.loaded = true
@@ -66,6 +66,28 @@ class PushupsProvider : ContentProvider() {
             }
         }
         return ProcessState.loaded
+    }
+
+    /**
+     * Whether the loaded library's `pushups` is the version of this module. Another version's
+     * exports may differ, so on a mismatch no other export is called and `install` reports it.
+     */
+    private fun handshake(appContext: Context, libName: String): Boolean {
+        val moduleVersion = try {
+            appContext.packageManager
+                .getApplicationInfo(appContext.packageName, PackageManager.GET_META_DATA)
+                .metaData?.getString("pushups.module_version")
+        } catch (e: PackageManager.NameNotFoundException) {
+            null
+        } ?: ""
+        return try {
+            Native.handshake(moduleVersion).also { matches ->
+                if (!matches) Log.e(TAG, "pushups module $moduleVersion does not match lib$libName.so, pushups stays off")
+            }
+        } catch (e: UnsatisfiedLinkError) {
+            Log.e(TAG, "lib$libName.so has a pushups older than module $moduleVersion, pushups stays off", e)
+            false
+        }
     }
 
     private fun initFirebase(appContext: Context) {

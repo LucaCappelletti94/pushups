@@ -5,6 +5,13 @@ import android.util.Log
 
 /** Rust-implemented exports in the app's cdylib, symbols Java_rs_pushups_Native_*. */
 object Native {
+    /**
+     * Hands Rust this module's version and returns whether it equals the crate's, which every
+     * other export depends on. Its signature never changes, so any two versions can make this call.
+     */
+    @JvmStatic
+    external fun handshake(moduleVersion: String): Boolean
+
     @JvmStatic
     external fun init(context: Context, filesDir: String)
 

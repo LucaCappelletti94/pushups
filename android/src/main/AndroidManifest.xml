@@ -5,6 +5,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application>
+        <!-- The crate version this Kotlin was released with, which the Rust side checks at start. -->
+        <meta-data
+            android:name="pushups.module_version"
+            android:value="0.1.0" />
+
         <service
             android:name="rs.pushups.PushupsMessagingService"
             android:exported="false">

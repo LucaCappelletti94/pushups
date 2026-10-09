@@ -12,6 +12,17 @@ pub enum Error {
     /// `ContentProvider` never handed the process to Rust.
     #[error("the pushups Android module is not in the app")]
     AndroidModuleMissing,
+    /// The app's Gradle module is another version of `pushups` than its Rust crate, such as an
+    /// AAR of one release beside a crate of another, so the module handed nothing to Rust.
+    #[error(
+        "the pushups Android module is version {module}, but the app's pushups crate is {crate_version}"
+    )]
+    AndroidModuleMismatch {
+        /// The version the Gradle module was released with.
+        module: String,
+        /// The version of the `pushups` crate in the app.
+        crate_version: String,
+    },
     /// The target's part of [`Config`](crate::Config) is missing, a
     /// [`WebPushConfig`](crate::WebPushConfig) on the web, a [`LinuxConfig`](crate::LinuxConfig)
     /// on Linux or a [`WnsConfig`](crate::WnsConfig) on Windows.

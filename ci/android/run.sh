@@ -114,6 +114,8 @@ run_variant unifiedpush-fallback "config-real background-handler" default Unifie
 adb shell pm enable io.heckel.ntfy >/dev/null
 # A tap into a running singleTop Activity, plain and androidx.
 run_variant single-top "config-real background-handler" single-top SingleTopTapTest
+# A Kotlin module of another version than the crate, which the handshake stops before any other export.
+run_variant module-mismatch config-real module-mismatch ModuleMismatchTest crate "$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml" | head -1)"
 
 # Rust: every variant's profile against its own library, kept to the crate's own sources, with
 # paths relative to the repository.

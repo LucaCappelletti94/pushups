@@ -42,10 +42,19 @@ static VAPID: OnceLock<String> = OnceLock::new();
 static PERMISSIONS: Mutex<BTreeMap<jlong, oneshot::Sender<bool>>> = Mutex::new(BTreeMap::new());
 static NEXT_PERMISSION: AtomicI64 = AtomicI64::new(0);
 
+/// The module version the handshake saw, when it differed from the crate's.
+static MISMATCHED_MODULE: OnceLock<String> = OnceLock::new();
+
 const QUEUE_FILE: &str = "pushups-queue";
 
 fn runtime() -> Result<&'static Runtime, Error> {
-    RUNTIME.get().ok_or(Error::AndroidModuleMissing)
+    RUNTIME.get().ok_or_else(|| match MISMATCHED_MODULE.get() {
+        Some(module) => Error::AndroidModuleMismatch {
+            module: module.clone(),
+            crate_version: env!("CARGO_PKG_VERSION").to_owned(),
+        },
+        None => Error::AndroidModuleMissing,
+    })
 }
 
 pub(crate) struct Android;
@@ -125,6 +134,25 @@ fn receive(entry: Entry) {
         None => DISPATCHER.enqueue(entry.into_event()),
     }
     DISPATCHER.flush();
+}
+
+/// `Native.handshake(moduleVersion)`, from `PushupsProvider.onCreate` before any other export.
+/// Whether the Kotlin module is this crate's version. Its signature never changes, so a module
+/// and a crate of any two versions can make this call.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_pushups_Native_handshake<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    module_version: JString<'caller>,
+) -> jboolean {
+    let module = unowned
+        .with_env(|env| -> jni::errors::Result<String> { module_version.try_to_string(env) })
+        .resolve::<ThrowRuntimeExAndDefault>();
+    if module == env!("CARGO_PKG_VERSION") {
+        return true;
+    }
+    let _ = MISMATCHED_MODULE.set(module);
+    false
 }
 
 /// `Native.init(context, filesDir)`, from `PushupsProvider.onCreate`.
