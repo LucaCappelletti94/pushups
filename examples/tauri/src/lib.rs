@@ -75,9 +75,23 @@ fn now_ms() -> u128 {
         .map_or(0, |since| since.as_millis())
 }
 
+/// Prints the line, and appends it to `pushups-example.log` in the temporary directory, which an
+/// iOS app's container keeps for `devicectl` to copy, since its standard output reaches nothing.
 #[cfg(not(target_os = "android"))]
 fn log(line: &str) {
-    println!("pushups-tauri-example {line}");
+    use std::io::Write;
+
+    let line = format!("pushups-tauri-example {line}");
+    println!("{line}");
+    let path = std::env::temp_dir().join("pushups-example.log");
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        // One write per line, so lines from the handler thread and the UI never interleave.
+        let _ = file.write_all(format!("{line}\n").as_bytes());
+    }
 }
 
 /// Writes the line to logcat under the tag `pushups-example`, which `ci/android/example.sh` reads.
