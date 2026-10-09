@@ -106,17 +106,18 @@ Expand-Archive $package (Join-Path $work 'foundation')
 Copy-Item (Join-Path $work 'foundation/runtimes/win-x64/native/Microsoft.WindowsAppRuntime.Bootstrap.dll') $app
 Copy-Item 'ci/windows/w0/target/release/pushups-w0-probe.exe' $exe
 
-# Which GUID `CreateChannelAsync` accepts.
+# Which GUIDs `CreateChannelAsync` accepts. Delivery then tells whether each channel reaches the app.
 $ids = [ordered]@{ 'object-id' = $env:WNS_OBJECT_ID; 'app-id' = $env:WNS_APP_ID }
-$accepted = $null
+$channels = [Collections.Generic.List[string]]::new()
 foreach ($label in $ids.Keys) {
     $probe = Start-Probe $label $ids[$label]
     $uri = Wait-Channel $probe
     Stop-Probe $probe
-    if ($uri -and -not $accepted) { $accepted = $label }
+    if ($uri) { $channels.Add($label) }
 }
 
-if (-not $accepted) {
+$token = $null
+if ($channels.Count -eq 0) {
     Note '- no channel, so no push was sent'
     $passed = $false
 } else {
@@ -134,27 +135,35 @@ if (-not $accepted) {
     } catch {
         $reason = if ($_.ErrorDetails) { $_.ErrorDetails.Message } else { $_.Exception.Message }
         Note "- access token refused: $reason"
-        $token = $null
         $passed = $false
     }
 }
 
-if ($accepted -and $token) {
-    # The files a process Windows starts for a push reads, with no environment from this script.
-    Set-Content (Join-Path $app 'remote_id.txt') $ids[$accepted]
-
-    $probe = Start-Probe 'running' $ids[$accepted]
-    $uri = Wait-Channel $probe
-    if ($uri) {
-        Note "- push to the running app: $(Send-Push $uri $token 'w0 running')"
-        $got = Wait-Until $PushBound { First-Line (Join-Path $probe.Out 'events.log') '^message started_app=false w0 running$' }
-        if ($got) { Note '- the running app got the push as `Event::Message`' } else {
-            Note "- the running app got nothing within $PushBound"
-            $passed = $false
+$delivered = $null
+if ($token) {
+    foreach ($label in $channels) {
+        $probe = Start-Probe "running-$label" $ids[$label]
+        $uri = Wait-Channel $probe
+        if ($uri) {
+            Note "- push to the running app on the $label channel: $(Send-Push $uri $token "w0 running $label")"
+            $got = Wait-Until $PushBound { First-Line (Join-Path $probe.Out 'events.log') "^message started_app=false w0 running $label$" }
+            if ($got) {
+                Note "- the running app got the $label push as ``Event::Message``"
+                if (-not $delivered) { $delivered = $label }
+            } else { Note "- the running app got nothing on the $label channel within $PushBound" }
         }
-    } else { $passed = $false }
-    Stop-Probe $probe
+        Stop-Probe $probe
+    }
+    if (-not $delivered) { $passed = $false }
+}
 
+if ($delivered) {
+    # The files a process Windows starts for a push reads, with no environment from this script.
+    Set-Content (Join-Path $app 'remote_id.txt') $ids[$delivered]
+    # A fresh registration with the GUID that delivered, so the closed push targets the exe this one registered.
+    $probe = Start-Probe "closed-$delivered" $ids[$delivered]
+    $uri = Wait-Channel $probe
+    Stop-Probe $probe
     if ($uri) {
         $beside = Join-Path $app 'w0-out'
         Note "- push with the app closed: $(Send-Push $uri $token 'w0 closed')"
@@ -170,7 +179,7 @@ if ($accepted -and $token) {
             Write-Host '--- push-started handled.log'
             Get-Content (Join-Path $beside 'handled.log') -ErrorAction SilentlyContinue | Write-Host
         }
-    }
+    } else { $passed = $false }
 }
 
 if ($env:GITHUB_STEP_SUMMARY) { $verdict | Add-Content $env:GITHUB_STEP_SUMMARY }
