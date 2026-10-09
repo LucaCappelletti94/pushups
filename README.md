@@ -82,7 +82,7 @@ A push that wakes the app in the background runs the background handler below of
 
 ## Android
 
-The crate ships a Gradle module in `android/` holding the FCM and UnifiedPush services. A `dx` app bundles it through the `dioxus` feature. Any other app with a Gradle project, such as a winit, Slint, Bevy or egui app on android-activity, includes the module from its `settings.gradle.kts`, which asks `cargo metadata` where cargo put the `pushups` its Rust links, and adds `implementation(project(":pushups"))` to its app module. [`examples/winit`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/winit) shows it in `android/settings.gradle.kts`. cargo-apk, cargo-apk2, xbuild and `cargo makepad` build no Gradle project and cannot ship the module.
+The crate ships a Gradle module in `android/` holding the FCM and UnifiedPush services. A `dx` app bundles it through the `dioxus` feature. A Tauri app adds [`tauri-plugin-pushups`](https://github.com/LucaCappelletti94/pushups/tree/main/tauri-plugin-pushups), whose build hands Tauri a copy of the module and adds the iOS push entitlement, as [`examples/tauri`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/tauri) does. Any other app with a Gradle project, such as a winit, Slint, Bevy or egui app on android-activity, includes the module from its `settings.gradle.kts`, which asks `cargo metadata` where cargo put the `pushups` its Rust links, and adds `implementation(project(":pushups"))` to its app module. [`examples/winit`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/winit) shows it in `android/settings.gradle.kts`. cargo-apk, cargo-apk2, xbuild and `cargo makepad` build no Gradle project and cannot ship the module.
 
 ```kotlin
 val pushupsDir = run {

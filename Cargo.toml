@@ -10,6 +10,8 @@ readme = "README.md"
 keywords = ["push", "notifications", "apns", "fcm", "webpush"]
 categories = ["api-bindings", "os", "wasm"]
 exclude = ["/assets"]
+# Unique in a build, so `build.rs` can hand the Android module's path to direct dependents.
+links = "pushups"
 
 [features]
 stream = ["dep:futures-channel", "dep:futures-core"]
@@ -18,6 +20,8 @@ dioxus = ["dep:manganis"]
 
 [workspace]
 members = ["pushups-macros"]
+# Built in its own workspace, since `tauri` needs GTK on Linux, Rust 1.90 and no wasm32.
+exclude = ["tauri-plugin-pushups"]
 
 [dependencies]
 futures-channel = { version = "0.3", optional = true, default-features = false, features = ["std"] }
