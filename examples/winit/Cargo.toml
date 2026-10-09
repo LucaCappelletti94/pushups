@@ -21,3 +21,8 @@ winit = "=0.31.0-beta.3"
 winit = { version = "=0.31.0-beta.3", features = ["android-native-activity"] }
 
 [workspace]
+
+# winit's Android loop ignores `Destroy` and allows one loop per process, so a relaunched Activity
+# freezes its main thread (winit#4303). The fix's PR head, until a winit release carries it.
+[patch.crates-io]
+winit = { git = "https://github.com/LucaCappelletti94/winit", rev = "aedb05bb" }
