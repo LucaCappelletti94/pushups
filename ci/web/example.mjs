@@ -26,6 +26,7 @@ const [site, keys] = args;
 const vapid = JSON.parse(readFileSync(keys, "utf8"));
 webpush.setVapidDetails("mailto:pushups-ci@users.noreply.github.com", vapid.publicKey, vapid.privateKey);
 const STEP_MS = 60_000;
+const PUSH_GONE_RETRY_MS = 30_000;
 const types = {
   ".html": "text/html",
   ".js": "text/javascript",
@@ -110,10 +111,21 @@ try {
   } while (performance.now() < settled);
   expect(errors.length === 0, `Chrome finds the page installable (${JSON.stringify(errors)})`);
 
+  // FCM answers 410 to a subscription it has not propagated yet, so a 410 is resent for a while, as the harness does.
   const send = async (seq) => {
     const payload = JSON.stringify({ seq: String(seq), sent_at_ms: String(Date.now()) });
-    const sent = await webpush.sendNotification(subscription, payload, { TTL: 300, timeout: STEP_MS });
-    expect(sent.statusCode === 201 || sent.statusCode === 200, `push ${seq} is accepted (HTTP ${sent.statusCode})`);
+    const deadline = performance.now() + PUSH_GONE_RETRY_MS;
+    for (;;) {
+      try {
+        const sent = await webpush.sendNotification(subscription, payload, { TTL: 300, timeout: STEP_MS });
+        expect(sent.statusCode === 201 || sent.statusCode === 200, `push ${seq} is accepted (HTTP ${sent.statusCode})`);
+        return;
+      } catch (error) {
+        if (error.statusCode !== 410 || performance.now() > deadline) throw error;
+        console.log(`push ${seq}: HTTP 410, retrying`);
+        await sleep(1000);
+      }
+    }
   };
   await send(1);
   await awaitLine("message on the open page", (l) => l.includes("ui message") && l.includes("seq=1 "));
