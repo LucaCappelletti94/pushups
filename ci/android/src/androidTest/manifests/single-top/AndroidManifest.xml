@@ -1,9 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- moveTaskToFront, so a test resumes the Activity with the intent it already has. -->
-    <uses-permission android:name="android.permission.REORDER_TASKS" />
-
     <application>
         <!-- The library PushupsProvider loads, as an app names its own. -->
         <meta-data

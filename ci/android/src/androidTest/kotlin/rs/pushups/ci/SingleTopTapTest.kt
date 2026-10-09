@@ -1,11 +1,8 @@
 package rs.pushups.ci
 
 import android.app.Activity
-import android.app.ActivityManager
 import android.content.Intent
 import androidx.test.core.app.ActivityScenario
-import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
-import androidx.test.runner.lifecycle.Stage
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -99,27 +96,15 @@ class SingleTopTapTest {
             }
             checkNotNull(tapped) { "tapping $title never reached the running Activity's onNewIntent" }
             awaitLine(Probe::events, id, UI_MS)
-            // A later resume with the same intent must not deliver the tap again.
-            device.pressHome()
-            checkNotNull(waitFor(UI_MS) { if (stageOf(running) == Stage.STOPPED) Unit else null }) {
-                "the Activity never stopped after pressing home"
-            }
-            context.getSystemService(ActivityManager::class.java).moveTaskToFront(running.taskId, 0)
-            checkNotNull(waitFor(UI_MS) { if (stageOf(running) == Stage.RESUMED) Unit else null }) {
-                "the Activity never resumed from the background"
+            // A later resume with the same intent must not deliver the tap again. Android 10 bars a test from bringing its own task back, so Instrumentation drives the resume, whose onResume runs the app's onActivityResumed.
+            instrumentation.runOnMainSync {
+                instrumentation.callActivityOnPause(running)
+                instrumentation.callActivityOnResume(running)
             }
             instrumentation.waitForIdleSync()
             assertEquals(1, lines(Probe.events()).count { line -> line.contains(id) })
         } finally {
             instrumentation.runOnMainSync { running.finish() }
         }
-    }
-
-    private fun stageOf(activity: Activity): Stage? {
-        var stage: Stage? = null
-        instrumentation.runOnMainSync {
-            stage = ActivityLifecycleMonitorRegistry.getInstance().getLifecycleStageOf(activity)
-        }
-        return stage
     }
 }
