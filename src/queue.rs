@@ -138,8 +138,11 @@ impl QueueFile {
             .open(&self.path)?;
         let mut record = Vec::new();
         if !starts_with_header(&mut file)? {
-            // A first append cut inside the header leaves a prefix no reader accepts.
-            file.set_len(0)?;
+            // A first append cut inside the header leaves a prefix no reader accepts, and only a handle opened for writing may truncate it on Windows.
+            file = OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&self.path)?;
             record.extend_from_slice(HEADER);
         }
         entry.encode(&mut record)?;
