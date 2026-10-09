@@ -98,19 +98,19 @@ object ProcessState : Application.ActivityLifecycleCallbacks {
         firstActivity && synchronized(lock) { pushesSeen == 0 }
 
     private fun handleTap(context: Context, intent: Intent?, firstActivity: Boolean) {
-        val id = intent?.getStringExtra(MSG_ID) ?: return
+        val extras = intent?.extras ?: return
+        val id = extras.getString(MSG_ID) ?: return
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         loadDelivered(prefs)
         if (synchronized(lock) { delivered.contains(id) }) return
         val startedApp = tapStartedApp(firstActivity)
-        val bytes = tapPayload(intent).toString().toByteArray(StandardCharsets.UTF_8)
+        val bytes = tapPayload(extras).toString().toByteArray(StandardCharsets.UTF_8)
         invokeNative("onMessage") { Native.onMessage(bytes, startedApp) }
         rememberDelivered(prefs, id)
     }
 
-    private fun tapPayload(intent: Intent): JSONObject {
+    private fun tapPayload(extras: Bundle): JSONObject {
         val json = JSONObject()
-        val extras = intent.extras ?: return json
         for (key in extras.keySet()) {
             if (key.startsWith("google.") || key.startsWith("gcm.")) continue
             if (key in DROPPED) continue
