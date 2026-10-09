@@ -82,7 +82,24 @@ A push that wakes the app in the background runs the background handler below of
 
 ## Android
 
-The crate ships a Gradle module in `android/` holding the FCM and UnifiedPush services. A `dx` app bundles it through the `dioxus` feature. A Tauri app includes it as a Gradle project. cargo-apk and xbuild have no way to bundle it yet.
+The crate ships a Gradle module in `android/` holding the FCM and UnifiedPush services. A `dx` app bundles it through the `dioxus` feature. Any other app with a Gradle project, such as a winit, Slint, Bevy or egui app on android-activity, includes the module from its `settings.gradle.kts`, which asks `cargo metadata` where cargo put the `pushups` its Rust links, and adds `implementation(project(":pushups"))` to its app module. [`examples/winit`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/winit) shows it in `android/settings.gradle.kts`. cargo-apk, cargo-apk2, xbuild and `cargo makepad` build no Gradle project and cannot ship the module.
+
+```kotlin
+val pushupsDir = run {
+    val metadata = providers.exec {
+        commandLine("cargo", "metadata", "--format-version", "1", "--manifest-path", file("../Cargo.toml").path)
+    }.standardOutput.asText.get()
+    @Suppress("UNCHECKED_CAST")
+    val packages = (groovy.json.JsonSlurper().parseText(metadata) as Map<String, Any>)["packages"] as List<Map<String, Any>>
+    File(packages.single { it["name"] == "pushups" }["manifest_path"] as String).parentFile
+}
+include(":pushups")
+project(":pushups").projectDir = pushupsDir.resolve("android")
+// Keeps the module's build output out of the crate's directory, which cargo's registry shares.
+gradle.beforeProject {
+    if (path == ":pushups") layout.buildDirectory.set(rootDir.resolve("build/pushups"))
+}
+```
 
 The app compiles its Firebase configuration in, from the `google-services.json` the Firebase console gives, with no Google services Gradle plugin. A process the push started with no UI can run Rust at once through a background handler. The push also waits on disk for the app's handler, which gets it when the UI opens.
 

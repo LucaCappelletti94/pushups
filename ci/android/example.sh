@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Runs the dx-built examples/dioxus APK on the device adb selects with real FCM pushes: one to the
-# open app, one that starts the app after its process is killed, and the drain when the app opens.
+# Runs an example APK of package `rs.pushups.example` on the device adb selects with real FCM
+# pushes: one to the open app, one that starts the app after its process is killed, and the drain
+# when the app opens. The app logs under the logcat tag `pushups-example`.
 #
-# Usage: ci/android/example.sh <apk> <FCM service account JSON>
+# Usage: ci/android/example.sh <apk> <FCM service account JSON> [launch Activity]
+# The Activity defaults to the one `dx` generates for examples/dioxus.
 set -euo pipefail
 
 apk=$1
 key=$(realpath "$2")
 ci=$(cd "$(dirname "$0")" && pwd)
 package=rs.pushups.example
-activity=$package/dev.dioxus.main.MainActivity
+activity=$package/${3:-dev.dioxus.main.MainActivity}
 STEP_S=180
 
 log() { adb logcat -d -s pushups-example:I; }
