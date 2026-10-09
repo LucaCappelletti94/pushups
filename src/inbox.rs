@@ -18,9 +18,15 @@ impl Inbox {
     }
 
     /// A UI session began (`true`) or ended (`false`), which only Android reports while running.
+    /// A session that begins after a handler was set binds to it and drains the queue into it.
     #[cfg(target_os = "android")]
     pub(crate) fn on_session(&mut self, active: bool) {
-        self.session = self.session.on_session(active);
+        let (next, drain) = self.session.on_session(active);
+        if drain {
+            self.drain_into(next, Session::Unbound);
+        } else {
+            self.session = next;
+        }
     }
 
     /// Persists or enqueues an event, by the session's route.
@@ -39,18 +45,25 @@ impl Inbox {
 
     /// Binds the session to the handler just set, and enqueues the queue if it was waiting for one.
     pub(crate) fn handler_set(&mut self) {
-        let (bound, drain) = self.session.on_handler_set();
-        if !drain {
-            self.session = bound;
-            return;
+        let (next, drain) = self.session.on_handler_set();
+        if drain {
+            self.drain_into(next, self.session);
+        } else {
+            self.session = next;
         }
-        // A queue that cannot be read stays on disk and the session stays unbound, so the next
-        // handler tries again.
-        if let Ok(entries) = self.queue.take_all() {
-            self.session = bound;
-            for entry in entries {
-                DISPATCHER.enqueue(entry.into_event());
+    }
+
+    /// Enqueues the queue for the handler and moves to `bound`. A queue that cannot be read stays
+    /// on disk and the session moves to `unread`, unbound, so the next handler tries again.
+    fn drain_into(&mut self, bound: Session, unread: Session) {
+        match self.queue.take_all() {
+            Ok(entries) => {
+                self.session = bound;
+                for entry in entries {
+                    DISPATCHER.enqueue(entry.into_event());
+                }
             }
+            Err(_) => self.session = unread,
         }
     }
 }

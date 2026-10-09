@@ -59,10 +59,7 @@ impl Backend for Apple {
         }
         let directory = data_directory()?;
         let state = State {
-            inbox: Inbox::new(
-                Session::Headless.on_session(true),
-                QueueFile::new(directory.join("queue")),
-            ),
+            inbox: Inbox::new(Session::Unbound, QueueFile::new(directory.join("queue"))),
             started: Started::default(),
             delivered: Delivered::new(directory.join("delivered")),
         };

@@ -106,7 +106,7 @@ impl Backend for Linux {
         let session = if headless {
             Session::Headless
         } else {
-            Session::Headless.on_session(true)
+            Session::Unbound
         };
         let runtime = Runtime {
             connection,
