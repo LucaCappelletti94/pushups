@@ -1,0 +1,38 @@
+name: Windows push
+
+# W0 on GitHub's Windows runner with the repository's Entra ID secrets, so it never runs for pull requests.
+on:
+  push:
+    branches: [w0-windows-ci]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  w0:
+    name: W0
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal
+      - name: Install the Windows App SDK 2.5 runtime
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'WindowsAppRuntimeInstall-x64.exe'
+          Invoke-WebRequest -TimeoutSec 600 -OutFile $installer 'https://aka.ms/windowsappsdk/2.5/latest/windowsappruntimeinstall-x64.exe'
+          $install = Start-Process $installer -ArgumentList '--quiet' -NoNewWindow -PassThru
+          # The handle is taken now so the exit code stays readable.
+          $null = $install.Handle
+          if (-not $install.WaitForExit(600000)) { $install.Kill(); throw 'the runtime installer did not finish within 10 minutes' }
+          if ($install.ExitCode -ne 0) { throw "the runtime installer exited with $($install.ExitCode)" }
+      - run: cargo +stable build --release --manifest-path ci/windows/w0/Cargo.toml
+      - name: W0
+        shell: pwsh
+        env:
+          WNS_TENANT_ID: ${{ secrets.WNS_TENANT_ID }}
+          WNS_APP_ID: ${{ secrets.WNS_APP_ID }}
+          WNS_OBJECT_ID: ${{ secrets.WNS_OBJECT_ID }}
+          WNS_CLIENT_SECRET: ${{ secrets.WNS_CLIENT_SECRET }}
+        run: ./ci/windows/w0.ps1

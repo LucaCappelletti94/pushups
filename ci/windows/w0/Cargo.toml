@@ -1,0 +1,11 @@
+[package]
+name = "pushups-w0-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Built only by the W0 job, so it stays out of the crate's workspace.
+[workspace]
+
+[dependencies]
+pushups = { path = "../../.." }
