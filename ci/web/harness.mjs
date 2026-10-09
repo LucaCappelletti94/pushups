@@ -361,6 +361,30 @@ async function rotated(origin) {
   });
 }
 
+/** Two `register` calls of one page while the first is still subscribing end with one endpoint, which receives the push. */
+async function concurrent(origin) {
+  await withBrowser(origin, "granted", async (browser) => {
+    const probe = await Probe.open(browser, origin);
+    await probe.install(false);
+    // A fresh profile's first subscribe takes Chrome tens of seconds, so the second call starts while it is pending.
+    await probe.page.evaluate(() => {
+      window.probe.register();
+      window.probe.register();
+    });
+    const answers = await until("both registrations to answer", async () => {
+      probe.events.push(...(await probe.page.evaluate(() => window.probe.takeEvents())));
+      const answered = probe.events.filter((event) => event.kind === "token" || event.kind === "registrationFailed");
+      return answered.length >= 2 ? answered : null;
+    }, SUBSCRIBE_MS);
+    expect(answers.every((event) => event.kind === "token"), `two tokens, got ${JSON.stringify(answers)}`);
+    const endpoints = new Set(answers.map((event) => event.endpoint));
+    expect(endpoints.size === 1, `one endpoint for both registrations, got ${[...endpoints].join(" and ")}`);
+    await push(answers[0], "concurrent");
+    await probe.message("concurrent");
+    await probe.close("concurrent");
+  });
+}
+
 /** The Rust handler builds the notification, page open or not, in a running worker, since puppeteer stalls a cold one. */
 async function rustWorker(origin) {
   await withBrowser(origin, "granted", async (browser) => {
@@ -392,7 +416,7 @@ mkdirSync(join(out, "rust"), { recursive: true });
 mkdirSync(join(out, "js"), { recursive: true });
 const { server, origin } = await serve();
 try {
-  const scenarios = [misuse, denied, resumed, staticWorker, rotated, rustWorker];
+  const scenarios = [misuse, denied, resumed, staticWorker, rotated, concurrent, rustWorker];
   for (const scenario of scenarios.filter(({ name }) => only.length === 0 || only.includes(name))) {
     log(`scenario ${scenario.name}`);
     await scenario(origin);

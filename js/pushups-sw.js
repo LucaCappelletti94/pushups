@@ -172,7 +172,16 @@ export async function activeRegistration(registration) {
   return registration;
 }
 
-export async function subscribe(registration, applicationServerKey) {
+// The subscribe in progress, so a second `register` waits for it instead of making a second subscription.
+let subscribing = Promise.resolve();
+
+export function subscribe(registration, applicationServerKey) {
+  const next = subscribing.then(() => subscribeNow(registration, applicationServerKey));
+  subscribing = next.catch(() => {});
+  return next;
+}
+
+async function subscribeNow(registration, applicationServerKey) {
   const options = { userVisibleOnly: true, applicationServerKey };
   const existing = await registration.pushManager.getSubscription();
   // The Push API refuses a key that differs from the existing subscription's, so a rotated key replaces it.
