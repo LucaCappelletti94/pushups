@@ -1,17 +1,24 @@
 name: Windows push
 
-# W0 on GitHub's Windows runner with the repository's Entra ID secrets, so it never runs for pull requests.
-on:
+# Real WNS pushes with the repository's Entra ID secrets, which pull requests from forks never get.
+"on":
+  pull_request:
   push:
-    branches: [w0-windows-ci]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   w0:
     name: W0
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: windows-latest
     timeout-minutes: 40
     steps:

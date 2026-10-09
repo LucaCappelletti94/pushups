@@ -151,7 +151,7 @@ let config = Config::new()
 
 ## Windows
 
-The Windows backend goes through the Windows App SDK's push notifications and still waits for its device proof. The app gives the Object ID of its Entra ID app registration, and ships `Microsoft.WindowsAppRuntime.Bootstrap.dll` beside its executable, where `install` loads it from.
+The Windows backend goes through the Windows App SDK 2.5 push notifications, whose runtime the app's installer puts on the machine. The app gives the Object ID of its Entra ID app registration's service principal, and ships `Microsoft.WindowsAppRuntime.Bootstrap.dll` beside its executable, where `install` loads it from. A push reaches a running app as `Event::Message`. A push to a closed app starts its executable as usual, and `install` hands the push to the background handler with `started_app` set before it returns. CI sends real WNS pushes to an unpackaged app on Windows Server 2025 to prove both, and a Windows 11 desktop is not checked yet.
 
 ```rust
 use pushups::{Config, WnsConfig};
@@ -165,5 +165,5 @@ let config = Config::new().windows(WnsConfig::new("00000000-0000-0000-0000-00000
 | Android | FCM or UnifiedPush | available |
 | iOS, macOS | APNs | in development |
 | Linux | UnifiedPush over D-Bus | in development |
-| Windows | WNS | device proof pending |
+| Windows | WNS | available |
 | Web | Web Push | available |
