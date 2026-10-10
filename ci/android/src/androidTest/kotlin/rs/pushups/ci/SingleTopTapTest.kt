@@ -1,6 +1,7 @@
 package rs.pushups.ci
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.content.Intent
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -77,8 +78,10 @@ class SingleTopTapTest {
             Probe.setHandler()
             val id = "single-top-${UUID.randomUUID()}"
             val title = "pushups tap $id"
-            // FCM shows a notification only while the app is in the background, and the Activity stays alive there.
+            // FCM shows a notification only while the process's importance is below foreground, which lags the home press, and the Activity stays alive there.
             device.pressHome()
+            waitFor(UI_MS) { if (importance() != ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND) Unit else null }
+                ?: error("the app was still in the foreground ${UI_MS / 1000} s after going home")
             Pushes.send(
                 context,
                 id,
@@ -107,4 +110,8 @@ class SingleTopTapTest {
             instrumentation.runOnMainSync { running.finish() }
         }
     }
+
+    /** This process's importance, which FCM reads to choose between showing a push and handing it to the app. */
+    private fun importance(): Int =
+        ActivityManager.RunningAppProcessInfo().also { ActivityManager.getMyMemoryState(it) }.importance
 }
