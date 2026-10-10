@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application>
+        <!-- The crate version this Kotlin was released with, which the Rust side checks at start. -->
+        <meta-data
+            android:name="pushups.module_version"
+            android:value="0.1.0" />
+
+        <service
+            android:name="rs.pushups.PushupsMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- The connector library binds this for every UnifiedPush event, after decrypting messages. -->
+        <service
+            android:name="rs.pushups.PushupsPushService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
+            </intent-filter>
+        </service>
+
+        <activity
+            android:name="rs.pushups.DistributorActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true" />
+
+        <provider
+            android:name="rs.pushups.PushupsProvider"
+            android:authorities="${applicationId}.pushups"
+            android:exported="false"
+            android:initOrder="2147483647" />
+
+        <provider
+            android:name="com.google.firebase.provider.FirebaseInitProvider"
+            tools:node="remove" />
+
+        <activity
+            android:name="rs.pushups.PermissionActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true" />
+    </application>
+</manifest>

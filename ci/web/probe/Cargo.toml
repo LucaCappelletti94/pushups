@@ -1,0 +1,37 @@
+# Instruments `pushups` and the probe, whose copies of `pushups`' generic functions count too, and leaves wasm-bindgen's own crates alone.
+cargo-features = ["profile-rustflags"]
+
+[package]
+name = "pushups-web-probe"
+description = "The web app the CI harness drives through pushups in real browsers, with coverage"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+js-sys = "0.3"
+minicov = "0.3.9"
+parking_lot = "0.12"
+pushups = { path = "../../.." }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+
+[profile.dev.package.pushups]
+rustflags = ["-Cinstrument-coverage"]
+
+[profile.dev.package.pushups-web-probe]
+rustflags = ["-Cinstrument-coverage"]
+
+[workspace]

@@ -1,0 +1,575 @@
+---
+name: CI
+
+"on":
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal --component rustfmt
+      - run: cargo +stable fmt --check
+      # The Android module's version, which the runtime handshake compares, follows the crate's.
+      - run: ci/check-versions.sh
+
+  clippy:
+    name: Clippy ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-apple-ios
+          - aarch64-apple-darwin
+          - aarch64-linux-android
+          - x86_64-pc-windows-msvc
+          - wasm32-unknown-unknown
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup target add --toolchain stable ${{ matrix.target }}
+      - name: Default features
+        run: cargo +stable clippy --workspace --target ${{ matrix.target }} --all-targets -- -D warnings
+      - name: All features
+        run: cargo +stable clippy --workspace --target ${{ matrix.target }} --all-targets --all-features -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal
+      - run: cargo +stable test --workspace
+      - run: cargo +stable test --workspace --all-features
+
+  test-windows:
+    # No Windows App SDK runtime on the runner, so this runs the Windows backend as an app shipped without it.
+    name: Test on Windows
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal
+      - run: cargo +stable test --workspace --all-features
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          rustup toolchain install 1.85 --profile minimal
+          rustup target add --toolchain 1.85 aarch64-linux-android aarch64-apple-ios aarch64-apple-darwin
+      # Every feature but `dioxus`, which needs the Rust version Dioxus 0.7 apps already need.
+      - run: cargo +1.85 check --workspace --features stream
+      - run: cargo +1.85 check --workspace --features stream --target aarch64-linux-android
+      - run: cargo +1.85 check --workspace --features stream --target aarch64-apple-ios
+      - run: cargo +1.85 check --workspace --features stream --target aarch64-apple-darwin
+
+  tauri-plugin:
+    name: tauri-plugin-pushups
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: tauri-plugin-pushups
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup toolchain install 1.90 --profile minimal
+          rustup target add --toolchain stable aarch64-linux-android
+      # Tauri builds on Linux against GTK and WebKitGTK.
+      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
+      - run: cargo +stable fmt --check
+      - run: cargo +stable clippy --all-targets -- -D warnings
+      # On Android the build script copies the crate's module, which this runs.
+      - run: cargo +stable clippy --target aarch64-linux-android -- -D warnings
+      - run: cargo +stable test --doc
+      - run: cargo +1.90 check
+      - name: The plugin is released at the crate's version
+        run: test "$(cargo pkgid | sed 's/.*[#@]//')" = "$(cd .. && cargo pkgid -p pushups | sed 's/.*[#@]//')"
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install nightly --profile minimal
+      - run: cargo +nightly doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: --cfg docsrs -D warnings
+
+  android-coverage:
+    name: Android ${{ matrix.api }} on an emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # 29 asks for no notification permission, 35 shows the Android 13 prompt.
+        api: [29, 35]
+    # Neither a fork's pull request nor a Dependabot run can read the Firebase secrets.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]')
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: |
+          rustup toolchain install stable --profile minimal --component llvm-tools,clippy,rustfmt
+          rustup target add --toolchain stable x86_64-linux-android
+      # The emulator needs KVM, which the runner's user cannot open by default.
+      - run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Write the Firebase configuration and the FCM key
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT }}
+        run: |
+          printf '%s' "$GOOGLE_SERVICES_JSON" > ci/android/probe/google-services.json
+          printf '%s' "$FCM_SERVICE_ACCOUNT" > "$RUNNER_TEMP/fcm-service-account.json"
+      - name: Lint the probe under every configuration it is built with
+        working-directory: ci/android/probe
+        run: |
+          cargo fmt --check
+          for features in "" config-real "config-real background-handler" config-fixture config-mismatched; do
+            cargo clippy --target x86_64-linux-android ${features:+--features "$features"} -- -D warnings
+          done
+      - name: Instrumented tests, through Firebase Cloud Messaging and through ntfy for UnifiedPush
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          # The runner image exports its NDK path as a shell variable, which `env` cannot read.
+          script: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" ci/android/run.sh x86_64 "$RUNNER_TEMP/fcm-service-account.json" android-${{ matrix.api }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-${{ matrix.api }}-coverage
+          path: |
+            target/android-${{ matrix.api }}-rust.lcov
+            target/android-${{ matrix.api }}-kotlin.xml
+          if-no-files-found: error
+
+  web-coverage:
+    name: Web in Chrome and Firefox
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the probe's toolchain and its wasm-bindgen
+        id: tools
+        run: |
+          rustup toolchain install nightly --profile minimal --component llvm-tools,clippy,rustfmt --target wasm32-unknown-unknown
+          version=$(grep -A1 '^name = "wasm-bindgen"$' ci/web/probe/Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
+          echo "wasm-bindgen=$version" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ steps.tools.outputs.wasm-bindgen }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ci/web/package-lock.json
+      - run: npm ci
+        working-directory: ci/web
+      - name: Lint the probe
+        working-directory: ci/web/probe
+        run: |
+          cargo fmt --check
+          cargo clippy -- -D warnings
+      - run: ci/web/build.sh
+      - name: Chrome, through Firebase Cloud Messaging
+        run: node ci/web/harness.mjs chrome target/web
+      - name: Firefox, through Mozilla autopush
+        run: FIREFOX_PATH="$(command -v firefox)" node ci/web/harness.mjs firefox target/web
+      - run: ci/web/report.sh target/web target/web-rust.lcov target/web-shim.lcov
+      - uses: actions/upload-artifact@v7
+        with:
+          name: web-coverage
+          path: target/web-*.lcov
+          if-no-files-found: error
+
+  linux-coverage:
+    name: Linux through a UnifiedPush distributor
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # A fork's pull request gets no secrets, so it pulls anonymously.
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal --component llvm-tools,clippy,rustfmt
+      - name: Lint the probe
+        working-directory: ci/linux/probe
+        run: |
+          cargo fmt --check
+          cargo clippy -- -D warnings
+      # GitHub's runners share Docker Hub's anonymous pull limit, which the image pull otherwise hits.
+      - if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # KDE's distributor in a Debian testing container, with real pushes through ntfy.sh.
+      - run: ci/linux/run.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-coverage
+          path: target/linux-rust.lcov
+          if-no-files-found: error
+
+  coverage:
+    name: Coverage and Sonar
+    needs: [android-coverage, linux-coverage, web-coverage]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Neither a fork's pull request nor a Dependabot run can read CODECOV_TOKEN or SONAR_TOKEN.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]')
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Sonar attributes new code through blame, which needs the full history.
+          fetch-depth: 0
+      - run: rustup toolchain install nightly --profile minimal --component llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - run: cargo +nightly llvm-cov --workspace --all-features --all-targets --no-report
+      - run: cargo +nightly llvm-cov --workspace --all-features --doc --no-clean --lcov --output-path target/coverage.lcov
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: "*-coverage"
+          merge-multiple: true
+          path: target
+      - uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: target/coverage.lcov,target/android-29-rust.lcov,target/android-35-rust.lcov,target/android-29-kotlin.xml,target/android-35-kotlin.xml,target/linux-rust.lcov,target/web-rust.lcov,target/web-shim.lcov
+          fail_ci_if_error: true
+      # The Sonar analyzer runs clippy itself.
+      - run: rustup toolchain install stable --profile minimal --component clippy
+      - uses: SonarSource/sonarqube-scan-action@v8
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  example-android:
+    name: Example APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add --toolchain stable aarch64-linux-android
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: dioxus-cli@0.7.10
+      # The example compiles a Firebase configuration in, and the fixture stands in for the
+      # real one, which never leaves the maintainer's machine.
+      - run: cp tests/fixtures/google-services.json examples/dioxus/google-services.json
+      - name: Build the APK, Gradle module included
+        working-directory: examples/dioxus
+        # The runner image exports its NDK path as a shell variable, which `env` cannot read.
+        run: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" dx build --android --target aarch64-linux-android
+
+  example-android-emulator:
+    name: Example app on an Android emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Neither a fork's pull request nor a Dependabot run can read the Firebase secrets.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]')
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add --toolchain stable x86_64-linux-android
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: dioxus-cli@0.7.10
+      # The emulator needs KVM, which the runner's user cannot open by default.
+      - run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Write the Firebase configuration and the FCM key
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT }}
+        run: |
+          printf '%s' "$GOOGLE_SERVICES_JSON" > examples/dioxus/google-services.json
+          printf '%s' "$FCM_SERVICE_ACCOUNT" > "$RUNNER_TEMP/fcm-service-account.json"
+      - name: Build the APK for the emulator
+        working-directory: examples/dioxus
+        # The runner image exports its NDK path as a shell variable, which `env` cannot read.
+        run: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" dx build --android --target x86_64-linux-android
+      - name: Pushes to the open app and to one whose process was killed
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: ci/android/example.sh examples/dioxus/target/dx/pushups-dioxus-example/debug/android/app/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/fcm-service-account.json"
+
+  example-winit-android:
+    name: Example winit app through Gradle on an Android emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Neither a fork's pull request nor a Dependabot run can read the Firebase secrets.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]')
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add --toolchain stable x86_64-linux-android
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      # The emulator needs KVM, which the runner's user cannot open by default.
+      - run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Write the Firebase configuration and the FCM key
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT }}
+        run: |
+          printf '%s' "$GOOGLE_SERVICES_JSON" > examples/winit/google-services.json
+          printf '%s' "$FCM_SERVICE_ACCOUNT" > "$RUNNER_TEMP/fcm-service-account.json"
+      - name: Build the library with cargo-ndk and the APK with Gradle, the module found through cargo metadata
+        working-directory: examples/winit
+        # The runner image exports its NDK path as a shell variable, which `env` cannot read.
+        run: |
+          ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" cargo ndk -t x86_64 -o android/app/src/main/jniLibs build
+          (cd android && ./gradlew --no-daemon assembleDebug)
+          # The module's build output stays out of the crate.
+          test ! -e ../../android/build
+          mkdir -p "$RUNNER_TEMP/apk" && cp android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/apk/sources.apk"
+      - name: Build the same APK against the module published as the pushups-android AAR
+        run: |
+          ci/maven/publish.sh local
+          (cd examples/winit/android && ./gradlew --no-daemon clean assembleDebug -Ppushups.aar="$GITHUB_WORKSPACE/ci/maven/build/repo")
+          cp examples/winit/android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/apk/aar.apk"
+      - name: Pushes to the open app and to one whose process was killed, with the module from sources and from the AAR
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: ci/android/example.sh "$RUNNER_TEMP/apk/sources.apk" "$RUNNER_TEMP/fcm-service-account.json" android.app.NativeActivity && ci/android/example.sh "$RUNNER_TEMP/apk/aar.apk" "$RUNNER_TEMP/fcm-service-account.json" android.app.NativeActivity
+
+  example-tauri-android:
+    name: Example Tauri app through tauri-plugin-pushups on an Android emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Neither a fork's pull request nor a Dependabot run can read the Firebase secrets.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]')
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add --toolchain stable x86_64-linux-android
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: tauri-cli@2.12.1
+      # The emulator needs KVM, which the runner's user cannot open by default.
+      - run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Write the Firebase configuration and the FCM key
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT }}
+        run: |
+          printf '%s' "$GOOGLE_SERVICES_JSON" > examples/tauri/google-services.json
+          printf '%s' "$FCM_SERVICE_ACCOUNT" > "$RUNNER_TEMP/fcm-service-account.json"
+      - name: Generate the Android project and build the APK, the module coming from the plugin
+        working-directory: examples/tauri
+        # The runner image exports its NDK path as a shell variable, which `env` cannot read.
+        run: |
+          export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          cargo tauri android init --ci
+          cargo tauri android build --apk --debug --target x86_64
+          # Tauri's own files land in the plugin's copy of the module, never in the crate.
+          test ! -e ../../android/.tauri
+      - name: Pushes to the open app and to one whose process was killed
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: ci/android/example.sh "$(find examples/tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -1)" "$RUNNER_TEMP/fcm-service-account.json" .MainActivity
+
+  example-web:
+    name: Example web app in Chrome
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add --toolchain stable wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: dioxus-cli@0.7.10
+      - run: cp tests/fixtures/google-services.json examples/dioxus/google-services.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ci/web/package-lock.json
+      - run: npm ci
+        working-directory: ci/web
+      - name: Build the web app in both worker modes
+        working-directory: examples/dioxus
+        run: |
+          dx build --web --release --no-default-features --features web
+          key=$(node ../../ci/web/example.mjs keys "$RUNNER_TEMP/vapid.json")
+          PUSHUPS_WEB_WORKER=static PUSHUPS_VAPID_PUBLIC_KEY="$key" dx build --web --release --no-default-features --features web
+          # The `dioxus` feature has dx copy the worker unchanged into the assets.
+          cmp target/dx/pushups-dioxus-example/release/web/public/assets/pushups-sw.js ../../js/pushups-sw.js
+      - name: The static-worker build in Chrome, with its manifest and real pushes
+        run: node ci/web/example.mjs check examples/dioxus/target/dx/pushups-dioxus-example/release/web/public "$RUNNER_TEMP/vapid.json" '/assets/pushups-sw\.js\?pushups=static' --manifest
+
+  example-yew:
+    name: Example Yew app on Trunk in Chrome
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add --toolchain stable wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: trunk@0.21.14
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ci/web/package-lock.json
+      - run: npm ci
+        working-directory: ci/web
+      - name: Build the Yew app in both worker modes
+        working-directory: examples/yew
+        run: |
+          key=$(node ../../ci/web/example.mjs keys "$RUNNER_TEMP/vapid.json")
+          PUSHUPS_VAPID_PUBLIC_KEY="$key" trunk build --release --dist dist-rust
+          PUSHUPS_WEB_WORKER=static PUSHUPS_VAPID_PUBLIC_KEY="$key" trunk build --release --dist dist-static
+          # `build.rs` wrote `pushups::SERVICE_WORKER`, which the Trunk hook copied.
+          cmp dist-static/pushups-sw.js ../../js/pushups-sw.js
+      - name: The Rust-handler build in Chrome, with real pushes
+        run: node ci/web/example.mjs check examples/yew/dist-rust "$RUNNER_TEMP/vapid.json" '/sw\.js\?pushups=rust' --rust
+      - name: The static-worker build in Chrome, with real pushes
+        run: node ci/web/example.mjs check examples/yew/dist-static "$RUNNER_TEMP/vapid.json" '/pushups-sw\.js\?pushups=static'
+
+  example-leptos:
+    name: Example Leptos SSR app in Chrome
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add --toolchain stable wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-leptos@0.3.11
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ci/web/package-lock.json
+      - run: npm ci
+        working-directory: ci/web
+      - name: Both worker modes, served by the app's own server, with real pushes
+        run: ci/web/leptos.sh
+
+  example-apple:
+    name: Example apps for iOS and macOS
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add --toolchain stable aarch64-apple-ios aarch64-apple-darwin
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: dioxus-cli@0.7.10
+      - run: cp tests/fixtures/google-services.json examples/dioxus/google-services.json
+      # Each app exports its background handler, which the crate finds by name, so the linker must keep it.
+      - name: Build each app, unsigned, and check the background handler is exported
+        run: |
+          for app in dioxus tao winit; do
+            desktop=()
+            if [ "$app" = dioxus ]; then desktop=(--no-default-features --features desktop); fi
+            (cd "examples/$app" && dx build --ios --target aarch64-apple-ios && dx build --macos --target aarch64-apple-darwin "${desktop[@]}")
+            binaries=$(find "examples/$app/target/dx" -path "*.app/*" -type f -name "pushups-$app-example")
+            test "$(echo "$binaries" | wc -l)" -eq 2
+            for binary in $binaries; do
+              nm -gU "$binary" | grep -q ___pushups_background_handler || { echo "no background handler in $binary"; exit 1; }
+            done
+          done

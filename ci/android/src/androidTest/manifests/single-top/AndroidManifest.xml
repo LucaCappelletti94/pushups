@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- The library PushupsProvider loads, as an app names its own. -->
+        <meta-data
+            android:name="pushups.lib_name"
+            android:value="pushups_probe" />
+
+        <!-- A singleTop Activity, so a tap while it runs reaches onNewIntent and creates nothing. -->
+        <activity
+            android:name="rs.pushups.ci.TapActivity"
+            android:exported="false"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="rs.pushups.ci.TAP" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- The same for an androidx Activity, reached by its own click_action. -->
+        <activity
+            android:name="rs.pushups.ci.ComponentTapActivity"
+            android:exported="false"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="rs.pushups.ci.TAP_COMPONENT" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

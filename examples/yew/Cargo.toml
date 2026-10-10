@@ -1,0 +1,23 @@
+[package]
+name = "pushups-yew-example"
+description = "A Yew app built with Trunk, receiving pushes through pushups, used for the bundler proofs"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+futures-util = { version = "0.3", default-features = false }
+js-sys = "0.3"
+pushups = { path = "../..", features = ["stream"] }
+serde_json = "1"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["console"] }
+yew = { version = "0.23", features = ["csr"] }
+
+# The build script writes the static worker from `pushups::SERVICE_WORKER` for Trunk to copy.
+[build-dependencies]
+pushups = { path = "../.." }
+
+[workspace]

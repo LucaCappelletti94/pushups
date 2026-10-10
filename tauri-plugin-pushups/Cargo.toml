@@ -1,0 +1,24 @@
+[package]
+name = "tauri-plugin-pushups"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+description = "Ships the Android module and the iOS push entitlement of the pushups crate into a Tauri app"
+repository = "https://github.com/LucaCappelletti94/pushups"
+license = "MIT"
+readme = "README.md"
+keywords = ["push", "notifications", "tauri", "fcm", "apns"]
+categories = ["os"]
+# Tauri reads the plugin's Android library path through this name.
+links = "tauri-plugin-pushups"
+
+[dependencies]
+# Depended on directly so the build script receives `DEP_PUSHUPS_ANDROID`.
+pushups = { version = "0.1.0", path = ".." }
+tauri = { version = "2.12", default-features = false }
+
+[build-dependencies]
+tauri-plugin = { version = "2.7", features = ["build"] }
+
+# Built on its own, apart from the crate's workspace, by the CI job `tauri-plugin`.
+[workspace]

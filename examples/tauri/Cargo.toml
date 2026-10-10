@@ -1,0 +1,23 @@
+[package]
+name = "pushups-tauri-example"
+description = "A Tauri 2 app receiving pushes through pushups and tauri-plugin-pushups, used for the bundler proofs"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# The library the mobile builds load, named apart from the desktop binary.
+[lib]
+name = "pushups_tauri_example_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+pushups = { path = "../.." }
+serde_json = "1"
+tauri = { version = "2.12", features = [] }
+tauri-plugin-pushups = { path = "../../tauri-plugin-pushups" }
+
+[workspace]

@@ -1,0 +1,106 @@
+[package]
+name = "pushups"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Receive push notifications in a Rust app: APNs on iOS and macOS, FCM on Android, WNS on Windows, UnifiedPush on Linux, Web Push in the browser, under any toolkit"
+repository = "https://github.com/LucaCappelletti94/pushups"
+license = "MIT"
+readme = "README.md"
+keywords = ["push", "notifications", "apns", "fcm", "webpush"]
+categories = ["api-bindings", "os", "wasm"]
+exclude = ["/assets"]
+# Unique in a build, so `build.rs` can hand the Android module's path to direct dependents.
+links = "pushups"
+
+[features]
+stream = ["dep:futures-channel", "dep:futures-core"]
+# Lets `dx` bundle the Android module and the static service worker from this crate.
+dioxus = ["dep:manganis"]
+
+[workspace]
+members = ["pushups-macros"]
+# Built in its own workspace, since `tauri` needs GTK on Linux, Rust 1.90 and no wasm32.
+exclude = ["tauri-plugin-pushups"]
+
+[dependencies]
+futures-channel = { version = "0.3", optional = true, default-features = false, features = ["std"] }
+futures-core = { version = "0.3", optional = true, default-features = false }
+parking_lot = "0.12"
+pushups-macros = { version = "0.1.0", path = "pushups-macros" }
+thiserror = "2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+futures-channel = { version = "0.3", default-features = false, features = ["std"] }
+jni = "0.22"
+
+[target.'cfg(any(target_os = "android", all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
+# The `dioxus` the app depends on resolves this to its own version.
+manganis = { version = "0.7", optional = true }
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+block2 = "0.6"
+dispatch2 = { version = "0.3", default-features = false, features = ["std", "block2"] }
+futures-channel = { version = "0.3", default-features = false, features = ["std"] }
+libc = "0.2"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSArray", "NSBundle", "NSData", "NSDictionary", "NSError", "NSFileManager", "NSJSONSerialization", "NSKeyValueObserving", "NSNotification", "NSObject", "NSOperation", "NSPathUtilities", "NSString", "NSURL", "NSValue"] }
+objc2-user-notifications = { version = "0.3", default-features = false, features = ["std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationSettings", "UNUserNotificationCenter"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-ui-kit = { version = "0.3", default-features = false, features = ["std", "block2", "UIApplication", "UIResponder"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSResponder"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+aes-gcm = "0.11"
+getrandom = "0.4"
+hkdf = "0.13"
+p256 = { version = "0.14", features = ["ecdh"] }
+sha2 = "0.11"
+zbus = "5"
+
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+linkme = "0.3"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# The newest 0.6x line that builds on Rust 1.85, since the 0.100 line of `windows-core` needs 1.95.
+windows = { version = "0.62", default-features = false, features = ["Foundation", "ApplicationModel_Background", "ApplicationModel_Core"] }
+windows-collections = "0.3"
+windows-core = "0.62"
+windows-future = "0.3"
+windows-link = "0.2"
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Navigator", "Notification", "RegistrationOptions", "ServiceWorkerContainer", "ServiceWorkerRegistration", "Window", "console"] }
+
+[dev-dependencies]
+futures-executor = "0.3"
+tempfile = "3"
+
+# The fake distributor of tests/linux.rs.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+zbus = "5"
+
+# Runs itself as the app on a private session bus, so it needs its own main.
+[[test]]
+name = "linux"
+harness = false
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"

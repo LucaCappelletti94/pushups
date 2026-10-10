@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- The library PushupsProvider loads, as an app names its own. -->
+        <meta-data
+            android:name="pushups.lib_name"
+            android:value="pushups_probe" />
+
+        <!-- Opened by a tap on a notification whose click_action is rs.pushups.ci.TAP. -->
+        <activity
+            android:name="rs.pushups.ci.TapActivity"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="rs.pushups.ci.TAP" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

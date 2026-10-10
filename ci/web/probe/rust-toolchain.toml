@@ -1,0 +1,5 @@
+# Coverage of wasm needs nightly's -Zno-profiler-runtime, and llvm-cov to read the profiles.
+[toolchain]
+channel = "nightly"
+components = ["llvm-tools"]
+targets = ["wasm32-unknown-unknown"]
