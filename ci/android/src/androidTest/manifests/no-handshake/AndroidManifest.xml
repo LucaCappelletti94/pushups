@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- A library the provider loads that holds no pushups at all, liblog from the NDK, so
+             the handshake finds no export, as with a crate older than the module. -->
+        <meta-data
+            android:name="pushups.lib_name"
+            android:value="log" />
+    </application>
+</manifest>

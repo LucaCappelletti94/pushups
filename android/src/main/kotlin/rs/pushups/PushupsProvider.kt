@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.ContentValues
 import android.database.Cursor
 import android.net.Uri
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.os.SystemClock
 import android.util.Log
@@ -22,18 +23,6 @@ class PushupsProvider : ContentProvider() {
     override fun onCreate(): Boolean {
         val appContext = context?.applicationContext ?: return false
         Pushups.context = appContext
-        val libName = resolveLibName(appContext)
-        if (libName == null) {
-            Log.w(TAG, "no native library name, pushups stays off")
-            return true
-        }
-        if (!loadAndInit(appContext, libName)) return true
-        initFirebase(appContext)
-        (appContext as Application).registerActivityLifecycleCallbacks(ProcessState)
-        return true
-    }
-
-    private fun resolveLibName(appContext: Context): String? {
         val info = try {
             appContext.packageManager.getPackageInfo(
                 appContext.packageName,
@@ -41,13 +30,26 @@ class PushupsProvider : ContentProvider() {
             )
         } catch (e: PackageManager.NameNotFoundException) {
             Log.e(TAG, "package info", e)
-            return null
+            return true
         }
+        val libName = resolveLibName(info)
+        if (libName == null) {
+            Log.w(TAG, "no native library name, pushups stays off")
+            return true
+        }
+        val moduleVersion = info.applicationInfo?.metaData?.getString("pushups.module_version") ?: ""
+        if (!loadAndInit(appContext, libName, moduleVersion)) return true
+        initFirebase(appContext)
+        (appContext as Application).registerActivityLifecycleCallbacks(ProcessState)
+        return true
+    }
+
+    private fun resolveLibName(info: PackageInfo): String? {
         info.applicationInfo?.metaData?.getString("pushups.lib_name")?.let { return it }
         return info.activities?.firstNotNullOfOrNull { it.metaData?.getString("android.app.lib_name") }
     }
 
-    private fun loadAndInit(appContext: Context, libName: String): Boolean {
+    private fun loadAndInit(appContext: Context, libName: String, moduleVersion: String): Boolean {
         var loaded = true
         try {
             val loadStart = SystemClock.elapsedRealtime()
@@ -57,7 +59,7 @@ class PushupsProvider : ContentProvider() {
             Log.e(TAG, "load $libName", e)
             loaded = false
         }
-        if (loaded && handshake(appContext, libName)) {
+        if (loaded && handshake(libName, moduleVersion)) {
             try {
                 Native.init(appContext, appContext.filesDir.absolutePath)
                 ProcessState.loaded = true
@@ -72,22 +74,13 @@ class PushupsProvider : ContentProvider() {
      * Whether the loaded library's `pushups` is the version of this module. Another version's
      * exports may differ, so on a mismatch no other export is called and `install` reports it.
      */
-    private fun handshake(appContext: Context, libName: String): Boolean {
-        val moduleVersion = try {
-            appContext.packageManager
-                .getApplicationInfo(appContext.packageName, PackageManager.GET_META_DATA)
-                .metaData?.getString("pushups.module_version")
-        } catch (e: PackageManager.NameNotFoundException) {
-            null
-        } ?: ""
-        return try {
-            Native.handshake(moduleVersion).also { matches ->
-                if (!matches) Log.e(TAG, "pushups module $moduleVersion does not match lib$libName.so, pushups stays off")
-            }
-        } catch (e: UnsatisfiedLinkError) {
-            Log.e(TAG, "lib$libName.so has a pushups older than module $moduleVersion, pushups stays off", e)
-            false
+    private fun handshake(libName: String, moduleVersion: String): Boolean = try {
+        Native.handshake(moduleVersion).also { matches ->
+            if (!matches) Log.e(TAG, "pushups module $moduleVersion does not match lib$libName.so, pushups stays off")
         }
+    } catch (e: UnsatisfiedLinkError) {
+        Log.e(TAG, "lib$libName.so has no pushups of module $moduleVersion's version, pushups stays off", e)
+        false
     }
 
     private fun initFirebase(appContext: Context) {

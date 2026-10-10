@@ -94,9 +94,13 @@ run_variant() {
   wake
   adb uninstall "$package" >/dev/null 2>&1 || true
   adb install -t "$build/pushups/outputs/apk/androidTest/debug/pushups-debug-androidTest.apk" >/dev/null
+  adb logcat -c
   timeout 900 adb shell am instrument -w -e class "rs.pushups.ci.$class" "${arguments[@]}" \
     -e coverage true -e coverageFile "$files/jacoco.ec" "$package/androidx.test.runner.AndroidJUnitRunner" \
     | tee "$out/$variant.txt" || true
+  # The device's side of a failure, which the runner's report does not show.
+  grep -q '^OK (' "$out/$variant.txt" || adb logcat -d -v time \
+    | grep -E 'pushups|FirebaseMessaging|FirebaseApp|NotificationService|ActivityTaskManager|AndroidRuntime' | tail -300
   adb exec-out run-as "$package" cat files/pushups.profraw > "$out/$variant.profraw"
   adb exec-out run-as "$package" cat files/jacoco.ec > "$out/$variant.ec"
 }
@@ -116,6 +120,8 @@ adb shell pm enable io.heckel.ntfy >/dev/null
 run_variant single-top "config-real background-handler" single-top SingleTopTapTest
 # A Kotlin module of another version than the crate, which the handshake stops before any other export.
 run_variant module-mismatch config-real module-mismatch ModuleMismatchTest crate "$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml" | head -1)"
+# A library without the handshake, as one built with a crate older than the module.
+run_variant no-handshake config-real no-handshake LibraryWithoutPushupsTest
 
 # Rust: every variant's profile against its own library, kept to the crate's own sources, with
 # paths relative to the repository.
