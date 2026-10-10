@@ -48,9 +48,29 @@ async function until(what, check, ms = WAIT_MS) {
   }
 }
 
+/**
+ * The worker at `/scoped/pushups-sw.js`, whose scope leaves the page at `/` uncontrolled, as `dx`'s
+ * `/assets/` does. It is the static worker plus a listener that answers its revision, which the
+ * `updated` scenario raises to change the script's bytes.
+ */
+let scopedRevision = 1;
+function scopedWorker() {
+  return Buffer.concat([
+    readFileSync(join(site, "pushups-sw.js")),
+    Buffer.from(
+      `\nself.addEventListener("message", (event) => { if (event.data === "pushups-revision?") event.source.postMessage({ revision: ${scopedRevision} }); });\n`,
+    ),
+  ]);
+}
+
 function serve() {
   const server = createServer((request, response) => {
     const path = normalize(new URL(request.url, "http://localhost").pathname);
+    if (path === "/scoped/pushups-sw.js") {
+      response.writeHead(200, { "Content-Type": "text/javascript" });
+      response.end(scopedWorker());
+      return;
+    }
     const file = join(site, path === "/" ? "index.html" : path);
     if (!file.startsWith(site)) {
       response.writeHead(403).end();
@@ -134,8 +154,8 @@ class Probe {
     this.events = [];
   }
 
-  async install(rustHandler) {
-    const path = rustHandler ? null : "/pushups-sw.js";
+  async install(rustHandler, workerPath = "/pushups-sw.js") {
+    const path = rustHandler ? null : workerPath;
     await this.page.evaluate(
       (key, rust, worker) => window.probe.install(new Uint8Array(key), rust, worker),
       vapidPublicKey,
@@ -385,6 +405,41 @@ async function concurrent(origin) {
   });
 }
 
+/**
+ * A changed worker reaches a page its scope does not control at the page's next load, through the
+ * update `install` asks for, where the browser alone would wait up to a day.
+ */
+async function updated(origin) {
+  await withBrowser(origin, "granted", async (browser) => {
+    const revision = (probe) =>
+      probe.page.evaluate(async () => {
+        const registration = await navigator.serviceWorker.getRegistration("/scoped/");
+        const worker = registration?.active;
+        if (!worker) return null;
+        navigator.serviceWorker.startMessages();
+        return new Promise((answer) => {
+          navigator.serviceWorker.addEventListener("message", (event) => {
+            if (event.data?.revision) answer(event.data.revision);
+          });
+          worker.postMessage("pushups-revision?");
+          setTimeout(() => answer(null), 1_000);
+        });
+      });
+
+    scopedRevision = 1;
+    const first = await Probe.open(browser, origin);
+    await first.install(false, "/scoped/pushups-sw.js");
+    await until("the first revision to answer", async () => (await revision(first)) === 1);
+    await first.close("updated-first");
+
+    scopedRevision = 2;
+    const next = await Probe.open(browser, origin);
+    await next.install(false, "/scoped/pushups-sw.js");
+    await until("the changed worker to replace the first", async () => (await revision(next)) === 2);
+    await next.close("updated-next");
+  });
+}
+
 /** The Rust handler builds the notification, page open or not, in a running worker, since puppeteer stalls a cold one. */
 async function rustWorker(origin) {
   await withBrowser(origin, "granted", async (browser) => {
@@ -416,7 +471,7 @@ mkdirSync(join(out, "rust"), { recursive: true });
 mkdirSync(join(out, "js"), { recursive: true });
 const { server, origin } = await serve();
 try {
-  const scenarios = [misuse, denied, resumed, staticWorker, rotated, concurrent, rustWorker];
+  const scenarios = [misuse, denied, resumed, staticWorker, rotated, concurrent, rustWorker, updated];
   for (const scenario of scenarios.filter(({ name }) => only.length === 0 || only.includes(name))) {
     log(`scenario ${scenario.name}`);
     await scenario(origin);

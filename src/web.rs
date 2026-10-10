@@ -171,6 +171,18 @@ impl Backend for Web {
         let registration = navigator
             .service_worker()
             .register_with_options(&script, &options);
+        // A page outside the worker's scope never makes the browser check the worker, which would
+        // then keep an old `pushups-sw.js` up to a day, so each page load asks for the check.
+        let updating = registration.clone();
+        spawn_local(async move {
+            if let Ok(registration) = JsFuture::from(updating).await {
+                let registration = ServiceWorkerRegistration::from(registration);
+                if let Ok(update) = registration.update() {
+                    // A failed check keeps the worker the browser has.
+                    let _ = JsFuture::from(update).await;
+                }
+            }
+        });
         let drain_request = Closure::<dyn Fn()>::new(|| {
             if PAGE.with_borrow(|page| page.as_ref().is_some_and(|page| page.handler_set)) {
                 spawn_local(drain());
