@@ -2,7 +2,9 @@
 
 use std::sync::mpsc::{Receiver, channel};
 
-use pushups::{Config, Context, Event, Message};
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use pushups::{Config, Context, Event, LinuxConfig, Message, UnifiedPushConfig, WnsConfig};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -10,10 +12,26 @@ use winit::window::{Window, WindowAttributes, WindowId};
 
 /// Installs `pushups`, before the event loop exists.
 pub(crate) fn install() {
-    match pushups::install(Config::new()) {
+    match pushups::install(config()) {
         Ok(()) => log(&format!("installed at_ms={}", now_ms())),
         Err(error) => log(&format!("install failed: {error}")),
     }
+}
+
+/// The app's configuration from build-time keys, `PUSHUPS_VAPID_PUBLIC_KEY` (base64url) for UnifiedPush on Linux and Android and `PUSHUPS_WNS_REMOTE_ID` for Windows.
+fn config() -> Config {
+    // The bundle identifier, which also names the app on the Linux session bus.
+    let mut config = Config::new().linux(LinuxConfig::new("rs.pushups.example"));
+    if let Some(remote_id) = option_env!("PUSHUPS_WNS_REMOTE_ID") {
+        config = config.windows(WnsConfig::new(remote_id));
+    }
+    let key = option_env!("PUSHUPS_VAPID_PUBLIC_KEY")
+        .and_then(|key| URL_SAFE_NO_PAD.decode(key).ok())
+        .and_then(|key| <[u8; 65]>::try_from(key).ok());
+    if let Some(key) = key {
+        config = config.unified_push(UnifiedPushConfig::new(key));
+    }
+    config
 }
 
 /// Registers, asks for permission, and runs the event loop until the app exits.
@@ -77,6 +95,14 @@ fn describe(event: &Event) -> String {
         Event::Token(pushups::Token::Apns(token)) => {
             let hex: String = token.iter().map(|byte| format!("{byte:02x}")).collect();
             format!("ui token at_ms={at} apns={hex}")
+        }
+        Event::Token(token @ pushups::Token::WebPush { endpoint, .. }) => {
+            let keys = token.web_push_keys().expect("a Web Push token has keys");
+            let subscription = serde_json::json!({
+                "endpoint": endpoint,
+                "keys": { "p256dh": keys.p256dh, "auth": keys.auth },
+            });
+            format!("ui token at_ms={at} subscription={subscription}")
         }
         Event::Token(token) => format!("ui token at_ms={at} {token:?}"),
         Event::RegistrationFailed(error) => format!("ui registration failed at_ms={at} {error}"),

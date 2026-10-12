@@ -4,7 +4,7 @@
 //!
 //! `PUSHUPS_VAPID_PUBLIC_KEY` (base64url) at build time sets the app server's VAPID key, for Web Push
 //! on the web and UnifiedPush on Android and Linux. `PUSHUPS_WEB_WORKER=static` registers the static
-//! worker in place of the Rust handler.
+//! worker in place of the Rust handler. `PUSHUPS_WNS_REMOTE_ID` sets the Windows remote id.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -16,7 +16,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use pushups::{
     Config, Context, Event, LinuxConfig, Message, Notification, Permission, UnifiedPushConfig,
-    WebPushConfig,
+    WebPushConfig, WnsConfig,
 };
 
 pushups::firebase_config!("google-services.json");
@@ -41,7 +41,10 @@ fn main() {
 
 fn config() -> Config {
     // The bundle identifier, which also names the app on the Linux session bus.
-    let config = Config::new().linux(LinuxConfig::new("rs.pushups.example"));
+    let mut config = Config::new().linux(LinuxConfig::new("rs.pushups.example"));
+    if let Some(remote_id) = option_env!("PUSHUPS_WNS_REMOTE_ID") {
+        config = config.windows(WnsConfig::new(remote_id));
+    }
     let key = option_env!("PUSHUPS_VAPID_PUBLIC_KEY")
         .and_then(|key| URL_SAFE_NO_PAD.decode(key).ok())
         .and_then(|key| <[u8; 65]>::try_from(key).ok());
