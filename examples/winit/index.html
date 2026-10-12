@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <title>pushups winit example</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link data-trunk rel="rust" data-bin="pushups-winit-example">
+        <link data-trunk rel="copy-file" href="sw.js">
+        <style>
+            html, body { margin: 0; background: #0e1824; }
+            body { font-family: system-ui, sans-serif; color: #f5f7fa; padding: 20px 16px; }
+            button { font-size: 16px; font-weight: 600; color: #ffffff; padding: 10px 16px; border: none; border-radius: 10px; background: linear-gradient(135deg, #fa1e13, #f67017); }
+        </style>
+    </head>
+    <body>
+        <h2>pushups winit example</h2>
+        <!-- Asks for the notification permission on click, which the prompt needs from a gesture. -->
+        <button onclick="Notification.requestPermission().then((answer) => { this.textContent = 'Notifications: ' + answer; })">Allow notifications</button>
+    </body>
+</html>
