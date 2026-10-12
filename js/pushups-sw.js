@@ -172,6 +172,11 @@ export async function activeRegistration(registration) {
   return registration;
 }
 
+// A page outside the worker's scope never makes the browser check the worker, so each page load asks.
+export function update(registration) {
+  registration.then((current) => current.update()).catch(() => {});
+}
+
 // The subscribe in progress, so a second `register` waits for it instead of making a second subscription.
 let subscribing = Promise.resolve();
 
