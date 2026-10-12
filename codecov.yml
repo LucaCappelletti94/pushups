@@ -7,3 +7,7 @@ coverage:
     patch:
       default:
         target: 85%
+
+# The README is the crate docs, and its doctests reach no push handler, so its lines are no code to cover.
+ignore:
+  - README.md
