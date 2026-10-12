@@ -6,15 +6,24 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV QT_QPA_PLATFORM=offscreen
 ENV LANG=C.UTF-8
 
-# dbus provides dbus-daemon, dbus-run-session and dbus-send. systemd provides busctl, procps pgrep.
+# The session bus, KDE's distributor, and Xvfb with the X and WebKitGTK libraries the example apps open their windows with.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         dbus \
         kunifiedpush \
+        libgtk-3-0t64 \
+        libx11-6 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxfixes3 \
+        libxkbcommon0 \
+        libxrandr2 \
+        libwebkit2gtk-4.1-0 \
         procps \
         systemd \
+        xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -u 1000 -s /bin/bash testuser \
