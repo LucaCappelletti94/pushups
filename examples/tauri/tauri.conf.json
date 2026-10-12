@@ -18,7 +18,12 @@
     "icon": [
       "../../assets/brand/png/icon-macos-512.png",
       "../../assets/brand/png/icon-macos-128.png",
-      "../../assets/brand/png/icon-macos-32.png"
-    ]
+      "../../assets/brand/png/icon-macos-32.png",
+      "../../assets/brand/icon-macos.ico"
+    ],
+    "macOS": {
+      "entitlements": "entitlements.plist",
+      "hardenedRuntime": false
+    }
   }
 }

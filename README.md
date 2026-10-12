@@ -36,14 +36,13 @@ The handler runs on the platform's delivery thread, so waking the toolkit is its
 
 | | Android | iOS | macOS | Windows | Linux | Web |
 |---|---|---|---|---|---|---|
-| Dioxus 0.7 | yes, though a tap into the running app restarts it until [tao#1365](https://github.com/tauri-apps/tao/pull/1365) | yes up to iOS 26, iOS 27 needs [dioxus#5893](https://github.com/DioxusLabs/dioxus/pull/5893) | yes | untested | yes | yes |
-| Tauri 2 | yes | yes | untested | untested | untested | n/a |
-| tao 0.37 | untested | yes | yes | yes | untested | n/a |
-| winit 0.31 | needs [winit#4752](https://github.com/rust-windowing/winit/pull/4752), which `examples/winit` pins | yes | yes | untested | untested | untested |
+| Dioxus 0.7 | yes, though a tap into the running app restarts it until [tao#1365](https://github.com/tauri-apps/tao/pull/1365) | yes up to iOS 26, iOS 27 needs [dioxus#5893](https://github.com/DioxusLabs/dioxus/pull/5893) | yes | panics when its window cannot take focus, as on a locked screen, until Dioxus takes [wry#1799](https://github.com/tauri-apps/wry/pull/1799) | yes | yes |
+| Tauri 2 | yes | yes | yes | yes | yes | n/a |
+| winit 0.31 | needs [winit#4752](https://github.com/rust-windowing/winit/pull/4752), which `examples/winit` pins | yes | yes | yes | yes | yes |
 | Leptos 0.8 | n/a | n/a | n/a | n/a | n/a | yes |
 | Yew 0.23 | n/a | n/a | n/a | n/a | n/a | yes |
 
-The [examples](https://github.com/LucaCappelletti94/pushups/tree/main/examples) are the proofs. Without the winit fix, a fresh install's first launch can get no FCM token until the app is reopened.
+The [examples](https://github.com/LucaCappelletti94/pushups/tree/main/examples) are the proofs. Dioxus and Tauri run on tao, so their cells cover a tao app. Without the winit fix, a fresh install's first launch can get no FCM token until the app is reopened.
 
 ## Android
 
@@ -62,7 +61,7 @@ fn on_push(context: Context, message: Message) {
 
 ## iOS and macOS
 
-The crate adds its push methods to whatever app delegate the toolkit installs. The bundle needs the push entitlement and, on iOS, the `remote-notification` background mode, which a `dx` app sets in `Dioxus.toml`.
+The crate adds its push methods to whatever app delegate the toolkit installs. The bundle needs the push entitlement and, on iOS, the `remote-notification` background mode, which a `dx` app sets in `Dioxus.toml`. A Tauri app gets the iOS entitlement from `tauri-plugin-pushups` and names a macOS entitlements file in `tauri.conf.json`, as [`examples/tauri`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/tauri) does.
 
 ```toml
 [ios.entitlements]

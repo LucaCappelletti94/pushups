@@ -9,6 +9,13 @@ mkdir -p "$brand/png"
 for size in 32 128 256 512 1024; do
   rsvg-convert --width "$size" --height "$size" "$brand/icon-macos.svg" --output "$brand/png/icon-macos-$size.png"
 done
+# The Windows resource icon `tauri-build` compiles into the Tauri example, which it reads only from an `.ico`.
+ico=$(mktemp -d)
+for size in 16 32 48 256; do
+  rsvg-convert --width "$size" --height "$size" "$brand/icon-macos.svg" --output "$ico/$size.png"
+done
+convert "$ico/16.png" "$ico/32.png" "$ico/48.png" "$ico/256.png" "$brand/icon-macos.ico"
+rm -r "$ico"
 # The repository's social preview, uploaded in the GitHub settings.
 rsvg-convert --width 1280 --height 640 "$brand/social.svg" --output "$brand/png/social.png"
 
