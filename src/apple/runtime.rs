@@ -333,7 +333,7 @@ fn original_with(this: &AnyObject, cmd: Sel) -> Option<&'static AnyClass> {
         .filter(|original| original.instance_method(cmd).is_some())
 }
 
-/// The JSON encoding of a property-list dictionary such as a push's `userInfo`.
+/// The JSON encoding of a property-list dictionary such as a push's `userInfo`, keys sorted so both delegate paths give the duplicate check the same bytes.
 fn json(object: &AnyObject) -> Option<Vec<u8>> {
     // SAFETY: `isValidJSONObject` accepts any object and never throws.
     if !unsafe { NSJSONSerialization::isValidJSONObject(object) } {
@@ -341,7 +341,10 @@ fn json(object: &AnyObject) -> Option<Vec<u8>> {
     }
     // SAFETY: `isValidJSONObject` confirmed the object converts, so this cannot throw.
     let data: Result<Retained<NSData>, Retained<NSError>> = unsafe {
-        NSJSONSerialization::dataWithJSONObject_options_error(object, NSJSONWritingOptions::empty())
+        NSJSONSerialization::dataWithJSONObject_options_error(
+            object,
+            NSJSONWritingOptions::SortedKeys,
+        )
     };
     data.ok().map(|data| data.to_vec())
 }
@@ -569,4 +572,32 @@ unsafe extern "C-unwind" fn delegate_changed(
 ) {
     let center = UNUserNotificationCenter::currentNotificationCenter();
     adopt_notification_delegate(&center);
+}
+
+#[cfg(test)]
+mod tests {
+    use objc2_foundation::{NSDictionary, NSString};
+
+    #[test]
+    fn the_json_of_a_push_lists_keys_in_sorted_order_whatever_the_dictionary_order() {
+        let keys: Vec<_> = (0..32)
+            .rev()
+            .map(|n| NSString::from_str(&format!("k{n:02}")))
+            .collect();
+        let values: Vec<_> = (0..32)
+            .rev()
+            .map(|n| NSString::from_str(&format!("v{n:02}")))
+            .collect();
+        let keys: Vec<&NSString> = keys.iter().map(|key| &**key).collect();
+        let values: Vec<&NSString> = values.iter().map(|value| &**value).collect();
+        let info = NSDictionary::from_slices(&keys, &values);
+        let entries: Vec<String> = (0..32)
+            .map(|n| format!("\"k{n:02}\":\"v{n:02}\""))
+            .collect();
+        let json = super::json(&info).expect("a dictionary of strings is valid JSON");
+        assert_eq!(
+            String::from_utf8(json).unwrap(),
+            format!("{{{}}}", entries.join(","))
+        );
+    }
 }
