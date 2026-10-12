@@ -3062,6 +3062,7 @@ dependencies = [
 name = "pushups-tauri-example"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
  "pushups",
  "serde_json",
  "tauri",
