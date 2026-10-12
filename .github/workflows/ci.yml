@@ -632,3 +632,18 @@ jobs:
               nm -gU "$binary" | grep -q ___pushups_background_handler || { echo "no background handler in $binary"; exit 1; }
             done
           done
+      # The Tauri build needs its CLI, and CI has no signing identity, so the app comes out unsigned.
+      - name: Build the Tauri app, unsigned, and check the handler and the aps-environment entitlement
+        run: |
+          cargo install tauri-cli --locked --version 2.12.1
+          (cd examples/tauri && cargo tauri build --debug --bundles app)
+          app=$(find examples/tauri/target/debug/bundle/macos -maxdepth 1 -name "*.app" | head -n1)
+          binary="$app/Contents/MacOS/pushups-tauri-example"
+          nm -gU "$binary" | grep -q ___pushups_background_handler || { echo "no background handler in $binary"; exit 1; }
+          entitlements=$(codesign -d --entitlements - "$binary" 2>/dev/null || true)
+          if [ -n "$entitlements" ]; then
+            echo "$entitlements" | grep -q "com.apple.developer.aps-environment" || { echo "no aps-environment in the Tauri app entitlements"; exit 1; }
+          else
+            # An unsigned build applies no entitlements, so check the file the signed build applies.
+            grep -q "com.apple.developer.aps-environment" examples/tauri/entitlements.plist || { echo "no aps-environment in examples/tauri/entitlements.plist"; exit 1; }
+          fi
