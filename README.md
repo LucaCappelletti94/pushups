@@ -9,8 +9,6 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.85-blue)](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/LucaCappelletti94/pushups/blob/main/LICENSE)
 
-Not on crates.io yet, so the docs.rs and crates.io badges resolve after the first release.
-
 Push notifications for Rust apps through each platform's own service, APNs on iOS and macOS, FCM or UnifiedPush on Android, WNS on Windows, UnifiedPush on Linux and Web Push in the browser. The app calls `install` in `main` before its toolkit starts, sets one handler and calls `register`. The handler gets the token for the app's server and every push, including the one that started the app.
 
 ```rust
@@ -32,8 +30,6 @@ The handler runs on the platform's delivery thread, so waking the toolkit is its
 
 ## Support
 
-"yes" means proven on a device or in CI with the framework's current release. A linked PR is upstream work the cell waits on.
-
 | | Android | iOS | macOS | Windows | Linux | Web |
 |---|---|---|---|---|---|---|
 | Dioxus 0.7 | yes, though a tap into the running app restarts it until [tao#1365](https://github.com/tauri-apps/tao/pull/1365) | yes up to iOS 26, iOS 27 needs [dioxus#5893](https://github.com/DioxusLabs/dioxus/pull/5893) | yes | panics when its window cannot take focus, as on a locked screen, until Dioxus takes [wry#1799](https://github.com/tauri-apps/wry/pull/1799) | yes | yes |
@@ -42,7 +38,7 @@ The handler runs on the platform's delivery thread, so waking the toolkit is its
 | Leptos 0.8 | n/a | n/a | n/a | n/a | n/a | yes |
 | Yew 0.23 | n/a | n/a | n/a | n/a | n/a | yes |
 
-The [examples](https://github.com/LucaCappelletti94/pushups/tree/main/examples) are the proofs. Dioxus and Tauri run on tao, so their cells cover a tao app. Without the winit fix, a fresh install's first launch can get no FCM token until the app is reopened.
+Dioxus and Tauri run on tao, so their cells cover a tao app. Without the winit fix, a fresh install's first launch can get no FCM token until the app is reopened.
 
 ## Android
 
