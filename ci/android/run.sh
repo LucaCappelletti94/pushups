@@ -98,9 +98,9 @@ run_variant() {
   timeout 900 adb shell am instrument -w -e class "rs.pushups.ci.$class" "${arguments[@]}" \
     -e coverage true -e coverageFile "$files/jacoco.ec" "$package/androidx.test.runner.AndroidJUnitRunner" \
     | tee "$out/$variant.txt" || true
-  # The device's side of a failure, which the runner's report does not show.
-  grep -q '^OK (' "$out/$variant.txt" || adb logcat -d -v time \
-    | grep -E 'pushups|FirebaseMessaging|FirebaseApp|NotificationService|ActivityTaskManager|AndroidRuntime' | tail -300
+  # The device's side of a failure, which the runner's report does not show, by tag, since system lines naming the package and UiDevice's polls for a title would fill the tail.
+  grep -q '^OK (' "$out/$variant.txt" || adb logcat -d -v time -s pushups:V FirebaseMessaging:V FirebaseApp:V \
+    NotificationService:V ActivityManager:V ActivityTaskManager:V AndroidRuntime:V TestRunner:V | tail -300
   adb exec-out run-as "$package" cat files/pushups.profraw > "$out/$variant.profraw"
   adb exec-out run-as "$package" cat files/jacoco.ec > "$out/$variant.ec"
 }
