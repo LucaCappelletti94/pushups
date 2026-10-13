@@ -13,6 +13,8 @@ ci=$(cd "$(dirname "$0")" && pwd)
 package=rs.pushups.example
 activity=$package/${3:-dev.dioxus.main.MainActivity}
 STEP_S=180
+# FCM refuses a fresh emulator's first registrations for some seconds after boot, so failed attempts are spaced out over this window.
+REGISTER_S=240
 
 log() { adb logcat -d -s pushups-example:I; }
 fail() {
@@ -37,10 +39,10 @@ open_app() {
   adb shell wm dismiss-keyguard
   adb shell am start -W -n "$activity" >/dev/null
 }
-# Prints the FCM token, reopening the app when its registration fails, as FCM's first one on a fresh emulator sometimes does.
+# Prints the FCM token, reopening the app after a pause each time its registration fails, until REGISTER_S passes.
 register() {
-  local attempt line
-  for attempt in 1 2 3; do
+  local attempt=1 pause=10 line deadline=$((SECONDS + REGISTER_S))
+  while :; do
     adb logcat -c
     open_app >&2
     line=$(await 'ui token at_ms=[0-9]+ Fcm\(|ui registration failed')
@@ -50,10 +52,13 @@ register() {
         return 0
         ;;
     esac
-    echo "example: registration attempt $attempt failed, reopening the app" >&2
+    [ $SECONDS -lt $deadline ] || fail "FCM registration failed $attempt times in $REGISTER_S s"
+    echo "example: registration attempt $attempt failed, reopening the app in $pause s" >&2
     adb shell am force-stop "$package"
+    sleep "$pause"
+    attempt=$((attempt + 1))
+    pause=$((pause < 30 ? pause + 10 : 30))
   done
-  fail "FCM registration failed three times"
 }
 
 adb uninstall "$package" >/dev/null 2>&1 || true
