@@ -76,11 +76,14 @@ impl Screen {
         };
         buffer.fill(BACKGROUND);
         let (width, height) = (size.width as usize, size.height as usize);
-        let scale = ((window.scale_factor() * 2.0).round() as usize).max(1);
+        let scale = ((window.scale_factor() * 1.5).round() as usize).max(1);
         let glyph = 8 * scale;
         let row = glyph + 4 * scale;
-        let margin = 2 * glyph;
-        let columns = width.saturating_sub(2 * margin) / glyph;
+        let insets = insets(window.as_ref());
+        let left = insets.left + 2 * glyph;
+        let top = insets.top + 2 * glyph;
+        let bottom = height.saturating_sub(insets.bottom + 2 * glyph);
+        let columns = width.saturating_sub(left + insets.right + 2 * glyph) / glyph;
         if columns == 0 {
             let _ = buffer.present();
             return;
@@ -91,22 +94,60 @@ impl Screen {
             height,
             scale,
         };
-        canvas.text(margin, margin, TITLE_TEXT, TITLE);
-        let top = margin + 2 * row;
-        let fitting = height.saturating_sub(top + margin) / row;
+        let mut y = top;
+        for text in wrap(TITLE_TEXT, columns) {
+            canvas.text(left, y, text, TITLE);
+            y += row;
+        }
+        y += row;
+        let fitting = bottom.saturating_sub(y) / row;
         let rows: Vec<&str> = self
             .lines
             .iter()
             .flat_map(|line| wrap(line, columns))
             .collect();
-        for (index, text) in rows[rows.len().saturating_sub(fitting)..]
-            .iter()
-            .enumerate()
-        {
-            canvas.text(margin, top + index * row, text, TEXT);
+        for text in &rows[rows.len().saturating_sub(fitting)..] {
+            canvas.text(left, y, text, TEXT);
+            y += row;
         }
         let _ = buffer.present();
     }
+}
+
+/// The edges system bars cover, from the safe area winit reports, or on Android, where winit
+/// reports none, from the Activity's content rectangle.
+fn insets(window: &dyn Window) -> Insets {
+    #[cfg(target_os = "android")]
+    {
+        use winit::platform::android::WindowExtAndroid as _;
+
+        let size = window.surface_size();
+        let rect = window.content_rect();
+        let edge = |pixels: i64| usize::try_from(pixels).unwrap_or(0);
+        Insets {
+            top: edge(rect.top.into()),
+            left: edge(rect.left.into()),
+            bottom: edge(i64::from(size.height) - i64::from(rect.bottom)),
+            right: edge(i64::from(size.width) - i64::from(rect.right)),
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let area = window.safe_area();
+        Insets {
+            top: area.top as usize,
+            left: area.left as usize,
+            bottom: area.bottom as usize,
+            right: area.right as usize,
+        }
+    }
+}
+
+struct Insets {
+    top: usize,
+    left: usize,
+    bottom: usize,
+    right: usize,
 }
 
 /// The line cut into pieces of at most `columns` characters, at a space where one falls inside.

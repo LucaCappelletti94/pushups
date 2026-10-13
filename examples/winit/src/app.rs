@@ -16,7 +16,6 @@ use pushups::{LinuxConfig, UnifiedPushConfig, WnsConfig};
 #[cfg(target_arch = "wasm32")]
 use web_time::{SystemTime, UNIX_EPOCH};
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowId};
@@ -122,9 +121,10 @@ impl App {
 
 impl ApplicationHandler for App {
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
-        let attributes = WindowAttributes::default()
-            .with_title("pushups winit example")
-            .with_surface_size(LogicalSize::new(640.0, 400.0));
+        let attributes = WindowAttributes::default().with_title("pushups winit example");
+        // A desktop or page window starts small, while a phone's fills the screen.
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let attributes = attributes.with_surface_size(winit::dpi::LogicalSize::new(640.0, 400.0));
         // The page shows the canvas under its heading.
         #[cfg(target_arch = "wasm32")]
         let attributes = attributes.with_platform_attributes(Box::new(
