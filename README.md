@@ -9,7 +9,7 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.85-blue)](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/LucaCappelletti94/pushups/blob/main/LICENSE)
 
-Push notifications for Rust apps through each platform's own service, APNs on iOS and macOS, FCM or UnifiedPush on Android, WNS on Windows, UnifiedPush on Linux and Web Push in the browser. The app calls `install` in `main` before its toolkit starts, sets one handler and calls `register`. The handler gets the token for the app's server and every push, including the one that started the app.
+Push notifications for Rust apps through each platform's own service, [APNs](https://developer.apple.com/documentation/usernotifications/registering-your-app-with-apns) on iOS and macOS, [FCM](https://firebase.google.com/docs/cloud-messaging) or [UnifiedPush](https://unifiedpush.org/) on Android, [WNS](https://learn.microsoft.com/en-us/windows/apps/develop/notifications/push-notifications/) on Windows, UnifiedPush on Linux and [Web Push](https://developer.mozilla.org/en-US/docs/Web/API/Push_API) in the browser. The app calls `install` in `main` before its toolkit starts, sets one handler and calls `register`. The handler gets the token for the app's server and every push, including the one that started the app.
 
 ```rust
 use pushups::{Config, Event};
@@ -33,10 +33,10 @@ The handler runs on the platform's delivery thread, so waking the toolkit is its
 | | Android | iOS | macOS | Windows | Linux | Web |
 |---|---|---|---|---|---|---|
 | Dioxus 0.7 | yes, though a tap into the running app restarts it until [tao#1365](https://github.com/tauri-apps/tao/pull/1365) | yes up to iOS 26, iOS 27 needs [dioxus#5893](https://github.com/DioxusLabs/dioxus/pull/5893) | yes | panics when its window cannot take focus, as on a locked screen, until Dioxus takes [wry#1799](https://github.com/tauri-apps/wry/pull/1799) | yes | yes |
-| Tauri 2 | yes | yes | yes | yes | yes | n/a |
+| Tauri 2 | yes | yes | yes | yes | yes | |
 | winit 0.31 | needs [winit#4752](https://github.com/rust-windowing/winit/pull/4752), which `examples/winit` pins | yes | yes | yes | yes | yes |
-| Leptos 0.8 | n/a | n/a | n/a | n/a | n/a | yes |
-| Yew 0.23 | n/a | n/a | n/a | n/a | n/a | yes |
+| Leptos 0.8 | | | | | | yes |
+| Yew 0.23 | | | | | | yes |
 
 Dioxus and Tauri run on tao, so their cells cover a tao app. Without the winit fix, a fresh install's first launch can get no FCM token until the app is reopened.
 
