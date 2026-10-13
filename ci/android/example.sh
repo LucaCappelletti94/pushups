@@ -68,11 +68,14 @@ await 'ui message .*started_app=false seq=1 '
 await 'handler started_app=false .*seq=1 '
 
 adb shell input keyevent KEYCODE_HOME
-sleep 2
 # Killed as the system kills a background app, which FCM still delivers to, unlike a force stop.
-adb shell am kill "$package"
-sleep 2
-[ -z "$(adb shell pidof "$package" || true)" ] || fail "the process outlived am kill"
+# `am kill` spares a process whose oom adj is still below SERVICE_ADJ, as during the home transition, so it is repeated until the process is gone.
+deadline=$((SECONDS + 30))
+until [ -z "$(adb shell pidof "$package" || true)" ]; do
+  [ $SECONDS -lt $deadline ] || fail "the process outlived am kill for 30 s"
+  adb shell am kill "$package"
+  sleep 1
+done
 python3 "$ci/fcm_push.py" "$key" "$token" 2
 await 'handler started_app=true .*seq=2 '
 
