@@ -4,8 +4,22 @@
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>pushups Tauri example</title>
+        <style>
+            body { margin: 0; padding: 20px 16px; background: #0e1824; color: #f5f7fa; font-family: system-ui, sans-serif; }
+            h2 { margin: 0 0 16px; color: #f67017; }
+            p { margin: 0 0 8px; overflow-wrap: anywhere; }
+        </style>
     </head>
-    <body style="margin: 0; background: #0e1824; color: #f5f7fa; font-family: system-ui, sans-serif;">
-        <h2 style="padding: 20px 16px;">pushups Tauri example</h2>
+    <body>
+        <h2>pushups Tauri example</h2>
+        <div id="lines"></div>
+        <script>
+            // The Rust side calls this through `eval` for every line, the earlier ones once the page has loaded.
+            function pushupsShow(text) {
+                const line = document.createElement("p");
+                line.textContent = text;
+                document.getElementById("lines").append(line);
+            }
+        </script>
     </body>
 </html>

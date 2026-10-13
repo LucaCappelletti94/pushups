@@ -5,7 +5,11 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use std::sync::{Mutex, PoisonError};
+
 use pushups::{Config, Context, Event, LinuxConfig, Message, UnifiedPushConfig, WnsConfig};
+use tauri::Webview;
+use tauri::webview::PageLoadEvent;
 
 #[cfg(target_os = "android")]
 pushups::firebase_config!("google-services.json");
@@ -17,14 +21,75 @@ pub fn run() {
         Ok(()) => log(&format!("installed at_ms={}", now_ms())),
         Err(error) => log(&format!("install failed: {error}")),
     }
-    pushups::set_handler(|event| log(&describe(&event)));
+    pushups::set_handler(|event| {
+        log(&describe(&event));
+        page_show(shown(&event));
+    });
     if let Err(error) = pushups::register() {
         log(&format!("register failed: {error}"));
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_pushups::init())
+        .on_page_load(|webview, payload| {
+            if payload.event() == PageLoadEvent::Finished {
+                page_loaded(webview.clone());
+            }
+        })
         .run(tauri::generate_context!())
         .expect("the Tauri app runs");
+}
+
+/// The lines the page shows, and the page once it has loaded.
+static PAGE: Mutex<Page> = Mutex::new(Page {
+    lines: Vec::new(),
+    webview: None,
+});
+
+struct Page {
+    lines: Vec<String>,
+    webview: Option<Webview>,
+}
+
+/// Adds the line to the page, now if it has loaded, else when it does.
+fn page_show(line: String) {
+    let mut page = PAGE.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(webview) = &page.webview {
+        show_in(webview, &line);
+    }
+    page.lines.push(line);
+}
+
+/// Shows every line so far in the page that just loaded, and the later ones as they come.
+fn page_loaded(webview: Webview) {
+    let mut page = PAGE.lock().unwrap_or_else(PoisonError::into_inner);
+    for line in &page.lines {
+        show_in(&webview, line);
+    }
+    page.webview = Some(webview);
+}
+
+fn show_in(webview: &Webview, line: &str) {
+    let text = serde_json::to_string(line).expect("a string serialises");
+    if let Err(error) = webview.eval(format!("pushupsShow({text})")) {
+        log(&format!("page update failed: {error}"));
+    }
+}
+
+/// The event as the page shows it, a push as the `body` its payload carries.
+fn shown(event: &Event) -> String {
+    match event {
+        Event::Token(_) => "Registered for pushes".to_owned(),
+        Event::RegistrationFailed(error) => format!("Registration failed: {error}"),
+        Event::Message(message) => {
+            let data: serde_json::Value =
+                serde_json::from_slice(&message.payload).unwrap_or_default();
+            match data.get("body").and_then(serde_json::Value::as_str) {
+                Some(body) => format!("Push: {body}"),
+                None => format!("Push: {}", String::from_utf8_lossy(&message.payload)),
+            }
+        }
+        Event::MessagesDropped => "Some pushes were dropped".to_owned(),
+    }
 }
 
 /// The app's configuration from build-time keys, `PUSHUPS_VAPID_PUBLIC_KEY` (base64url) for UnifiedPush on Linux and Android and `PUSHUPS_WNS_REMOTE_ID` for Windows.
