@@ -10,10 +10,10 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
-use dioxus::prelude::*;
-use futures_util::StreamExt;
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use dioxus::prelude::*;
+use futures_util::StreamExt;
 use pushups::{
     Config, Context, Event, LinuxConfig, Message, Notification, Permission, UnifiedPushConfig,
     WebPushConfig, WnsConfig,
@@ -65,8 +65,11 @@ async fn notification_for(message: Message) -> Notification {
     let at = now_ms();
     let line = timing(&message, at);
     log(&format!("worker push at_ms={at} {line}"));
-    Notification::new("pushups from Rust")
-        .body(format!("built in the service worker, {line}"))
+    Notification::new(field(&message, "title").unwrap_or_else(|| "pushups from Rust".to_owned()))
+        .body(
+            field(&message, "body")
+                .unwrap_or_else(|| format!("built in the service worker, {line}")),
+        )
         .navigate("/")
 }
 
@@ -82,9 +85,8 @@ fn App() -> Element {
             lines.write().push(format!("register failed: {error}"));
         }
         while let Some(event) = events.next().await {
-            let line = describe(&event);
-            log(&line);
-            lines.write().push(line);
+            log(&describe(&event));
+            lines.write().push(shown(&event));
         }
     });
     rsx! {
@@ -207,6 +209,26 @@ fn on_push(_context: Context, message: Message) {
     ));
 }
 
+/// The event as the page shows it, a push as the `body` its payload carries.
+fn shown(event: &Event) -> String {
+    match event {
+        Event::Token(_) => "Registered for pushes".to_owned(),
+        Event::RegistrationFailed(error) => format!("Registration failed: {error}"),
+        Event::Message(message) => format!(
+            "Push: {}",
+            field(message, "body")
+                .unwrap_or_else(|| String::from_utf8_lossy(&message.payload).into_owned())
+        ),
+        Event::MessagesDropped => "Some pushes were dropped".to_owned(),
+    }
+}
+
+/// The payload's string field `name`, for a JSON payload that carries it.
+fn field(message: &Message, name: &str) -> Option<String> {
+    let data: serde_json::Value = serde_json::from_slice(&message.payload).ok()?;
+    data.get(name)?.as_str().map(str::to_owned)
+}
+
 /// The push's `seq` and its latency from the sender's `sent_at_ms` to `at`.
 fn timing(message: &Message, at: u128) -> String {
     let data: serde_json::Value = serde_json::from_slice(&message.payload).unwrap_or_default();
@@ -216,7 +238,10 @@ fn timing(message: &Message, at: u128) -> String {
         "seq={} sent_at_ms={} since_sent_ms={}",
         field("seq").unwrap_or("-"),
         sent.map_or_else(|| "-".to_owned(), |sent| sent.to_string()),
-        sent.map_or_else(|| "-".to_owned(), |sent| at.saturating_sub(sent).to_string()),
+        sent.map_or_else(
+            || "-".to_owned(),
+            |sent| at.saturating_sub(sent).to_string()
+        ),
     )
 }
 
@@ -228,7 +253,11 @@ fn catch_up() -> String {
         stream.write_all(b"GET /catch-up HTTP/1.0\r\nHost: pushups\r\n\r\n")?;
         let mut response = String::new();
         stream.read_to_string(&mut response)?;
-        Ok(response.lines().next().unwrap_or("empty response").to_owned())
+        Ok(response
+            .lines()
+            .next()
+            .unwrap_or("empty response")
+            .to_owned())
     };
     attempt().unwrap_or_else(|error| format!("failed: {error}"))
 }
@@ -279,7 +308,11 @@ fn log(line: &str) {
     let line = format!("pushups-example {line}");
     println!("{line}");
     let path = std::env::temp_dir().join("pushups-example.log");
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         // One write per line, so lines from the handler thread and the UI never interleave.
         let _ = file.write_all(format!("{line}\n").as_bytes());
     }

@@ -44,7 +44,7 @@ mod client {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use pushups::{Config, Message, Notification, WebPushConfig};
 
-    use super::{log, now_ms, timing};
+    use super::{field, log, now_ms, timing};
 
     pub(super) fn config() -> Config {
         let key = option_env!("PUSHUPS_VAPID_PUBLIC_KEY")
@@ -65,9 +65,14 @@ mod client {
         let at = now_ms();
         let line = timing(&message, at);
         log(&format!("worker push at_ms={at} {line}"));
-        Notification::new("pushups from Rust")
-            .body(format!("built in the service worker, {line}"))
-            .navigate("/")
+        Notification::new(
+            field(&message, "title").unwrap_or_else(|| "pushups from Rust".to_owned()),
+        )
+        .body(
+            field(&message, "body")
+                .unwrap_or_else(|| format!("built in the service worker, {line}")),
+        )
+        .navigate("/")
     }
 }
 
@@ -113,9 +118,8 @@ fn Home() -> impl IntoView {
                 lines.update(|lines| lines.push(format!("register failed: {error}")));
             }
             while let Some(event) = events.next().await {
-                let line = describe(&event);
-                log(&line);
-                lines.update(|lines| lines.push(line));
+                log(&describe(&event));
+                lines.update(|lines| lines.push(shown(&event)));
             }
         });
     });
@@ -171,6 +175,26 @@ fn describe(event: &Event) -> String {
         ),
         Event::MessagesDropped => format!("ui messages dropped at_ms={at}"),
     }
+}
+
+/// The event as the page shows it, a push as the `body` its payload carries.
+fn shown(event: &Event) -> String {
+    match event {
+        Event::Token(_) => "Registered for pushes".to_owned(),
+        Event::RegistrationFailed(error) => format!("Registration failed: {error}"),
+        Event::Message(message) => format!(
+            "Push: {}",
+            field(message, "body")
+                .unwrap_or_else(|| String::from_utf8_lossy(&message.payload).into_owned())
+        ),
+        Event::MessagesDropped => "Some pushes were dropped".to_owned(),
+    }
+}
+
+/// The payload's string field `name`, for a JSON payload that carries it.
+fn field(message: &Message, name: &str) -> Option<String> {
+    let data: serde_json::Value = serde_json::from_slice(&message.payload).ok()?;
+    data.get(name)?.as_str().map(str::to_owned)
 }
 
 /// The push's `seq` and its latency from the sender's `sent_at_ms` to `at`.
