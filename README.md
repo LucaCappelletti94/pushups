@@ -40,6 +40,17 @@ The handler runs on the platform's delivery thread, so waking the toolkit is its
 
 Dioxus and Tauri run on tao, so their cells cover a tao app. Without the winit fix, a fresh install's first launch can get no FCM token until the app is reopened.
 
+### Upstream fixes worth having
+
+| PR | Why |
+|---|---|
+| [dioxus#5901](https://github.com/DioxusLabs/dioxus/pull/5901) | `dx` builds the iOS app icon from `Dioxus.toml`, the icon iOS shows on every notification |
+| [dioxus#5898](https://github.com/DioxusLabs/dioxus/pull/5898) | `dx bundle --macos` fills each icon size from the closest PNG, so notifications show a sharp icon instead of one scaled from the first PNG listed |
+| [dioxus#4063](https://github.com/DioxusLabs/dioxus/pull/4063), [dioxus#5693](https://github.com/DioxusLabs/dioxus/pull/5693) | `dx` sets the Android launcher icon, which FCM notifications use when the app names no notification icon |
+| [dioxus#5591](https://github.com/DioxusLabs/dioxus/pull/5591) | `dx bundle` makes an IPA that Apple's validator accepts, the route from `dx` to the App Store |
+| [dioxus#5900](https://github.com/DioxusLabs/dioxus/pull/5900) | `dx` renames its bundled JS when only this crate's JavaScript changes, so a web build stops serving the previous release's copy after an upgrade |
+| [tao#1364](https://github.com/tauri-apps/tao/pull/1364) | tao reports the push token and pushes itself, so a tao app without this crate can receive them |
+
 ## Android
 
 The crate's Gradle module holds the FCM and UnifiedPush services. `dx` bundles it through the `dioxus` feature, a Tauri app adds [`tauri-plugin-pushups`](https://github.com/LucaCappelletti94/pushups/tree/main/tauri-plugin-pushups), and any other Gradle project depends on `io.github.lucacappelletti94:pushups-android` at the crate's version or includes `android/` through `cargo metadata` as [`examples/winit`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/winit) does. A `UnifiedPushConfig` sends pushes through the device's UnifiedPush distributor when it has one.
