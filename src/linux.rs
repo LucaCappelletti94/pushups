@@ -113,7 +113,7 @@ impl Backend for Linux {
             app_id: linux.app_id,
             vapid: config
                 .unified_push
-                .map(|unified_push| base64url(&unified_push.vapid_public_key)),
+                .map(|unified_push| base64url(unified_push.vapid_public_key.as_bytes())),
             state: Mutex::new(State {
                 inbox: Inbox::new(session, QueueFile::new(dir.join("queue"))),
                 keys,

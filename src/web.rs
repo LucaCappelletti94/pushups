@@ -196,7 +196,7 @@ impl Backend for Web {
                 .map(|page| {
                     (
                         page.registration.clone(),
-                        Uint8Array::from(page.config.vapid_public_key.as_slice()),
+                        Uint8Array::from(page.config.vapid_public_key.as_bytes().as_slice()),
                     )
                 })
                 .ok_or(Error::NotConfigured)
