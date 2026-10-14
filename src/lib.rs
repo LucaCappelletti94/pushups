@@ -102,15 +102,18 @@ use web::Web as Platform;
 #[cfg(target_os = "windows")]
 use windows::Windows as Platform;
 
-pub use config::{Config, LinuxConfig, UnifiedPushConfig, WebPushConfig, WnsConfig};
+pub use config::{
+    Config, LinuxConfig, UnifiedPushConfig, VapidPublicKey, WebPushConfig, WnsConfig,
+};
 pub use context::Context;
 use dispatch::DISPATCHER;
-pub use error::Error;
+pub use error::{Error, VapidKeyError};
 pub use event::{Event, Message};
 pub use notification::Notification;
 pub use permission::Permission;
 pub use pushups_macros::{background_handler, firebase_config};
-pub use token::{Token, WebPushKeys};
+pub use token::{Token, WebPushKeys, WebPushSubscription};
+
 /// Connects the app to the platform's push service, before the toolkit's event loop starts.
 ///
 /// On Linux a process the session bus started for a push, through the activation file `install`

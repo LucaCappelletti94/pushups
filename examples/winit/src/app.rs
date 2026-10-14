@@ -5,9 +5,7 @@ use std::sync::mpsc::{Receiver, channel};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use pushups::{Config, Context, Event, Message};
+use pushups::{Config, Context, Event, Message, VapidPublicKey};
 
 // The Linux and Windows sub-configs, unused on the web, which takes its key for `WebPushConfig` instead.
 #[cfg(not(target_arch = "wasm32"))]
@@ -38,10 +36,8 @@ fn config() -> Config {
     if let Some(remote_id) = option_env!("PUSHUPS_WNS_REMOTE_ID") {
         config = config.windows(WnsConfig::new(remote_id));
     }
-    let key = option_env!("PUSHUPS_VAPID_PUBLIC_KEY")
-        .and_then(|key| URL_SAFE_NO_PAD.decode(key).ok())
-        .and_then(|key| <[u8; 65]>::try_from(key).ok());
-    if let Some(key) = key {
+    if let Some(key) = option_env!("PUSHUPS_VAPID_PUBLIC_KEY") {
+        let key = VapidPublicKey::from_base64url(key).expect("PUSHUPS_VAPID_PUBLIC_KEY is a VAPID key");
         config = config.unified_push(UnifiedPushConfig::new(key));
     }
     config
@@ -50,12 +46,10 @@ fn config() -> Config {
 /// The web configuration from `PUSHUPS_VAPID_PUBLIC_KEY` (base64url). `PUSHUPS_WEB_WORKER=static` registers the static worker, which `build.rs` writes from `pushups::SERVICE_WORKER`, in place of the Rust handler, which runs from the `sw.js` entry.
 #[cfg(target_arch = "wasm32")]
 fn config() -> Config {
-    let key = option_env!("PUSHUPS_VAPID_PUBLIC_KEY")
-        .and_then(|key| URL_SAFE_NO_PAD.decode(key).ok())
-        .and_then(|key| <[u8; 65]>::try_from(key).ok());
-    let Some(key) = key else {
+    let Some(key) = option_env!("PUSHUPS_VAPID_PUBLIC_KEY") else {
         return Config::new();
     };
+    let key = VapidPublicKey::from_base64url(key).expect("PUSHUPS_VAPID_PUBLIC_KEY is a VAPID key");
     let web = pushups::WebPushConfig::new(key);
     Config::new().web(match option_env!("PUSHUPS_WEB_WORKER") {
         Some("static") => web,
@@ -194,19 +188,16 @@ fn shown(event: &Event) -> String {
 fn describe(event: &Event) -> String {
     let at = now_ms();
     match event {
-        Event::Token(pushups::Token::Apns(token)) => {
-            let hex: String = token.iter().map(|byte| format!("{byte:02x}")).collect();
-            format!("ui token at_ms={at} apns={hex}")
+        Event::Token(token) => {
+            if let Some(subscription) = token.web_push_subscription() {
+                let json = serde_json::to_string(&subscription).expect("a subscription serialises");
+                format!("ui token at_ms={at} subscription={json}")
+            } else if let Some(hex) = token.apns_device_token() {
+                format!("ui token at_ms={at} apns={hex}")
+            } else {
+                format!("ui token at_ms={at} {token:?}")
+            }
         }
-        Event::Token(token @ pushups::Token::WebPush { endpoint, .. }) => {
-            let keys = token.web_push_keys().expect("a Web Push token has keys");
-            let subscription = serde_json::json!({
-                "endpoint": endpoint,
-                "keys": { "p256dh": keys.p256dh, "auth": keys.auth },
-            });
-            format!("ui token at_ms={at} subscription={subscription}")
-        }
-        Event::Token(token) => format!("ui token at_ms={at} {token:?}"),
         Event::RegistrationFailed(error) => format!("ui registration failed at_ms={at} {error}"),
         Event::Message(message) => format!(
             "ui message at_ms={at} started_app={} {} payload={}",
