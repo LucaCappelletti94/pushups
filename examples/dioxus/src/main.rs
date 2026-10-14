@@ -11,12 +11,12 @@ use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::STANDARD;
 use dioxus::prelude::*;
 use futures_util::StreamExt;
 use pushups::{
     Config, Context, Event, LinuxConfig, Message, Notification, Permission, UnifiedPushConfig,
-    WebPushConfig, WnsConfig,
+    VapidPublicKey, WebPushConfig, WnsConfig,
 };
 
 pushups::firebase_config!("google-services.json");
@@ -45,12 +45,10 @@ fn config() -> Config {
     if let Some(remote_id) = option_env!("PUSHUPS_WNS_REMOTE_ID") {
         config = config.windows(WnsConfig::new(remote_id));
     }
-    let key = option_env!("PUSHUPS_VAPID_PUBLIC_KEY")
-        .and_then(|key| URL_SAFE_NO_PAD.decode(key).ok())
-        .and_then(|key| <[u8; 65]>::try_from(key).ok());
-    let Some(key) = key else {
+    let Some(key) = option_env!("PUSHUPS_VAPID_PUBLIC_KEY") else {
         return config;
     };
+    let key = VapidPublicKey::from_base64url(key).expect("PUSHUPS_VAPID_PUBLIC_KEY is a VAPID key");
     let web = WebPushConfig::new(key);
     config
         .unified_push(UnifiedPushConfig::new(key))
@@ -176,15 +174,13 @@ fn copy_text(_text: &str) {}
 fn describe(event: &Event) -> String {
     let at = now_ms();
     match event {
-        Event::Token(token @ pushups::Token::WebPush { endpoint, .. }) => {
-            let keys = token.web_push_keys().expect("a Web Push token has keys");
-            let subscription = serde_json::json!({
-                "endpoint": endpoint,
-                "keys": { "p256dh": keys.p256dh, "auth": keys.auth },
-            });
-            format!("ui token at_ms={at} subscription={subscription}")
-        }
-        Event::Token(token) => format!("ui token at_ms={at} {token:?}"),
+        Event::Token(token) => match token.web_push_subscription() {
+            Some(subscription) => format!(
+                "ui token at_ms={at} subscription={}",
+                serde_json::to_string(&subscription).expect("a subscription serialises")
+            ),
+            None => format!("ui token at_ms={at} {token:?}"),
+        },
         Event::RegistrationFailed(error) => format!("ui registration failed at_ms={at} {error}"),
         Event::Message(message) => format!(
             "ui message at_ms={at} started_app={} {}",
@@ -198,6 +194,8 @@ fn describe(event: &Event) -> String {
 /// Runs in the process the push woke, before any UI exists.
 #[pushups::background_handler]
 fn on_push(_context: Context, message: Message) {
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    popup(&message);
     let entered = now_ms();
     let started = Instant::now();
     let fetched = catch_up();
@@ -229,6 +227,19 @@ fn field(message: &Message, name: &str) -> Option<String> {
     data.get(name)?.as_str().map(str::to_owned)
 }
 
+/// Shows the push as a desktop popup, which Windows and Linux leave to the app.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn popup(message: &Message) {
+    let data: serde_json::Value = serde_json::from_slice(&message.payload).unwrap_or_default();
+    let text = |name: &str| data.get(name).and_then(serde_json::Value::as_str);
+    let shown = notify_rust::Notification::new()
+        .summary(text("title").unwrap_or("pushups"))
+        .body(text("body").unwrap_or("A push arrived"))
+        .show();
+    if let Err(error) = shown {
+        log(&format!("popup failed: {error}"));
+    }
+}
 /// The push's `seq` and its latency from the sender's `sent_at_ms` to `at`.
 fn timing(message: &Message, at: u128) -> String {
     let data: serde_json::Value = serde_json::from_slice(&message.payload).unwrap_or_default();

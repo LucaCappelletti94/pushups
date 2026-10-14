@@ -1,12 +1,11 @@
 //! The app both entry points run, `main` on desktop, iOS and the web and `android_main` on Android.
 
+use std::rc::Rc;
 use std::sync::mpsc::{Receiver, channel};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use pushups::{Config, Context, Event, Message};
+use pushups::{Config, Context, Event, Message, VapidPublicKey};
 
 // The Linux and Windows sub-configs, unused on the web, which takes its key for `WebPushConfig` instead.
 #[cfg(not(target_arch = "wasm32"))]
@@ -18,6 +17,8 @@ use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowId};
+
+use crate::screen::Screen;
 
 /// Installs `pushups`, before the event loop exists.
 pub(crate) fn install() {
@@ -35,10 +36,8 @@ fn config() -> Config {
     if let Some(remote_id) = option_env!("PUSHUPS_WNS_REMOTE_ID") {
         config = config.windows(WnsConfig::new(remote_id));
     }
-    let key = option_env!("PUSHUPS_VAPID_PUBLIC_KEY")
-        .and_then(|key| URL_SAFE_NO_PAD.decode(key).ok())
-        .and_then(|key| <[u8; 65]>::try_from(key).ok());
-    if let Some(key) = key {
+    if let Some(key) = option_env!("PUSHUPS_VAPID_PUBLIC_KEY") {
+        let key = VapidPublicKey::from_base64url(key).expect("PUSHUPS_VAPID_PUBLIC_KEY is a VAPID key");
         config = config.unified_push(UnifiedPushConfig::new(key));
     }
     config
@@ -47,12 +46,10 @@ fn config() -> Config {
 /// The web configuration from `PUSHUPS_VAPID_PUBLIC_KEY` (base64url). `PUSHUPS_WEB_WORKER=static` registers the static worker, which `build.rs` writes from `pushups::SERVICE_WORKER`, in place of the Rust handler, which runs from the `sw.js` entry.
 #[cfg(target_arch = "wasm32")]
 fn config() -> Config {
-    let key = option_env!("PUSHUPS_VAPID_PUBLIC_KEY")
-        .and_then(|key| URL_SAFE_NO_PAD.decode(key).ok())
-        .and_then(|key| <[u8; 65]>::try_from(key).ok());
-    let Some(key) = key else {
+    let Some(key) = option_env!("PUSHUPS_VAPID_PUBLIC_KEY") else {
         return Config::new();
     };
+    let key = VapidPublicKey::from_base64url(key).expect("PUSHUPS_VAPID_PUBLIC_KEY is a VAPID key");
     let web = pushups::WebPushConfig::new(key);
     Config::new().web(match option_env!("PUSHUPS_WEB_WORKER") {
         Some("static") => web,
@@ -77,10 +74,7 @@ pub(crate) fn run(event_loop: EventLoop) -> Result<(), Box<dyn std::error::Error
         let answer = futures_executor::block_on(pushups::request_permission());
         log(&format!("permission {answer:?}"));
     });
-    Ok(event_loop.run_app(App {
-        window: None,
-        events,
-    })?)
+    Ok(event_loop.run_app(App::new(events))?)
 }
 
 /// Registers, asks for permission, and runs the event loop, which on the web does not block and keeps running in the page's event loop after `main` returns.
@@ -100,30 +94,58 @@ pub(crate) fn run(event_loop: EventLoop) -> Result<(), Box<dyn std::error::Error
         let answer = pushups::request_permission().await;
         log(&format!("permission {answer:?}"));
     });
-    Ok(event_loop.run_app(App {
-        window: None,
-        events,
-    })?)
+    Ok(event_loop.run_app(App::new(events))?)
 }
 
 struct App {
-    window: Option<Box<dyn Window>>,
+    window: Option<Rc<dyn Window>>,
+    screen: Screen,
     events: Receiver<Event>,
+}
+
+impl App {
+    fn new(events: Receiver<Event>) -> Self {
+        Self {
+            window: None,
+            screen: Screen::new(),
+            events,
+        }
+    }
 }
 
 impl ApplicationHandler for App {
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         let attributes = WindowAttributes::default().with_title("pushups winit example");
+        // A desktop or page window starts small, while a phone's fills the screen.
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let attributes = attributes.with_surface_size(winit::dpi::LogicalSize::new(640.0, 400.0));
+        // The page shows the canvas under its heading.
+        #[cfg(target_arch = "wasm32")]
+        let attributes = attributes.with_platform_attributes(Box::new(
+            winit::platform::web::WindowAttributesWeb::default().with_append(true),
+        ));
         match event_loop.create_window(attributes) {
-            Ok(window) => self.window = Some(window),
+            Ok(window) => {
+                let window: Rc<dyn Window> = Rc::from(window);
+                if let Err(error) = self.screen.attach(Rc::clone(&window)) {
+                    log(&format!("drawing surface failed: {error}"));
+                }
+                self.window = Some(window);
+            }
             Err(error) => log(&format!("window failed: {error}")),
         }
         log(&format!("ui ready at_ms={}", now_ms()));
     }
 
+    fn destroy_surfaces(&mut self, _event_loop: &dyn ActiveEventLoop) {
+        self.screen.detach();
+        self.window = None;
+    }
+
     fn proxy_wake_up(&mut self, _event_loop: &dyn ActiveEventLoop) {
         for event in self.events.try_iter() {
             log(&describe(&event));
+            self.screen.push(shown(&event));
         }
     }
 
@@ -133,28 +155,49 @@ impl ApplicationHandler for App {
         _id: WindowId,
         event: WindowEvent,
     ) {
-        if event == WindowEvent::CloseRequested {
-            event_loop.exit();
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::RedrawRequested => self.screen.draw(),
+            WindowEvent::SurfaceResized(_) => {
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            _ => {}
         }
+    }
+}
+
+/// The event as the window shows it, a push as the `body` its payload carries.
+fn shown(event: &Event) -> String {
+    match event {
+        Event::Token(_) => "Registered for pushes".to_owned(),
+        Event::RegistrationFailed(error) => format!("Registration failed: {error}"),
+        Event::Message(message) => {
+            let data: serde_json::Value =
+                serde_json::from_slice(&message.payload).unwrap_or_default();
+            match data.get("body").and_then(serde_json::Value::as_str) {
+                Some(body) => format!("Push: {body}"),
+                None => format!("Push: {}", String::from_utf8_lossy(&message.payload)),
+            }
+        }
+        Event::MessagesDropped => "Some pushes were dropped".to_owned(),
     }
 }
 
 fn describe(event: &Event) -> String {
     let at = now_ms();
     match event {
-        Event::Token(pushups::Token::Apns(token)) => {
-            let hex: String = token.iter().map(|byte| format!("{byte:02x}")).collect();
-            format!("ui token at_ms={at} apns={hex}")
+        Event::Token(token) => {
+            if let Some(subscription) = token.web_push_subscription() {
+                let json = serde_json::to_string(&subscription).expect("a subscription serialises");
+                format!("ui token at_ms={at} subscription={json}")
+            } else if let Some(hex) = token.apns_device_token() {
+                format!("ui token at_ms={at} apns={hex}")
+            } else {
+                format!("ui token at_ms={at} {token:?}")
+            }
         }
-        Event::Token(token @ pushups::Token::WebPush { endpoint, .. }) => {
-            let keys = token.web_push_keys().expect("a Web Push token has keys");
-            let subscription = serde_json::json!({
-                "endpoint": endpoint,
-                "keys": { "p256dh": keys.p256dh, "auth": keys.auth },
-            });
-            format!("ui token at_ms={at} subscription={subscription}")
-        }
-        Event::Token(token) => format!("ui token at_ms={at} {token:?}"),
         Event::RegistrationFailed(error) => format!("ui registration failed at_ms={at} {error}"),
         Event::Message(message) => format!(
             "ui message at_ms={at} started_app={} {} payload={}",
@@ -169,6 +212,8 @@ fn describe(event: &Event) -> String {
 /// Runs off the main thread for every push the system delivers.
 #[pushups::background_handler]
 fn on_push(_context: Context, message: Message) {
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    popup(&message);
     let entered = now_ms();
     log(&format!(
         "handler started_app={} entered_at_ms={entered} {} payload={}",
@@ -176,6 +221,20 @@ fn on_push(_context: Context, message: Message) {
         timing(&message, entered),
         String::from_utf8_lossy(&message.payload)
     ));
+}
+
+/// Shows the push as a desktop popup, which Windows and Linux leave to the app.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn popup(message: &Message) {
+    let data: serde_json::Value = serde_json::from_slice(&message.payload).unwrap_or_default();
+    let text = |name: &str| data.get(name).and_then(serde_json::Value::as_str);
+    let shown = notify_rust::Notification::new()
+        .summary(text("title").unwrap_or("pushups"))
+        .body(text("body").unwrap_or("A push arrived"))
+        .show();
+    if let Err(error) = shown {
+        log(&format!("popup failed: {error}"));
+    }
 }
 
 /// Runs in the service worker for every push, and decides what the user sees.

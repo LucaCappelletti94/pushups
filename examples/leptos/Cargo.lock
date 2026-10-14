@@ -2168,6 +2168,7 @@ dependencies = [
  "p256",
  "parking_lot",
  "pushups-macros",
+ "serde",
  "sha2 0.11.0",
  "thiserror 2.0.21",
  "wasm-bindgen",
@@ -2186,7 +2187,6 @@ name = "pushups-leptos-example"
 version = "0.0.0"
 dependencies = [
  "axum",
- "base64",
  "futures-util",
  "js-sys",
  "leptos",

@@ -7,10 +7,8 @@
 
 use std::rc::Rc;
 
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::StreamExt;
-use pushups::{Config, Event, Message, Notification, Permission, WebPushConfig};
+use pushups::{Config, Event, Message, Notification, Permission, VapidPublicKey, WebPushConfig};
 use yew::prelude::*;
 
 fn main() {
@@ -28,12 +26,10 @@ fn main() {
 }
 
 fn config() -> Config {
-    let key = option_env!("PUSHUPS_VAPID_PUBLIC_KEY")
-        .and_then(|key| URL_SAFE_NO_PAD.decode(key).ok())
-        .and_then(|key| <[u8; 65]>::try_from(key).ok());
-    let Some(key) = key else {
+    let Some(key) = option_env!("PUSHUPS_VAPID_PUBLIC_KEY") else {
         return Config::new();
     };
+    let key = VapidPublicKey::from_base64url(key).expect("PUSHUPS_VAPID_PUBLIC_KEY is a VAPID key");
     let web = WebPushConfig::new(key);
     Config::new().web(match option_env!("PUSHUPS_WEB_WORKER") {
         Some("static") => web,
@@ -123,15 +119,13 @@ fn App() -> Html {
 fn describe(event: &Event) -> String {
     let at = now_ms();
     match event {
-        Event::Token(token @ pushups::Token::WebPush { endpoint, .. }) => {
-            let keys = token.web_push_keys().expect("a Web Push token has keys");
-            let subscription = serde_json::json!({
-                "endpoint": endpoint,
-                "keys": { "p256dh": keys.p256dh, "auth": keys.auth },
-            });
-            format!("ui token at_ms={at} subscription={subscription}")
-        }
-        Event::Token(token) => format!("ui token at_ms={at} {token:?}"),
+        Event::Token(token) => match token.web_push_subscription() {
+            Some(subscription) => format!(
+                "ui token at_ms={at} subscription={}",
+                serde_json::to_string(&subscription).expect("a subscription serialises")
+            ),
+            None => format!("ui token at_ms={at} {token:?}"),
+        },
         Event::RegistrationFailed(error) => format!("ui registration failed at_ms={at} {error}"),
         Event::Message(message) => format!(
             "ui message at_ms={at} started_app={} {}",

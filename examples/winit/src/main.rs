@@ -3,6 +3,7 @@
 //! in the temporary directory, or to the console on the web.
 
 mod app;
+mod screen;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
