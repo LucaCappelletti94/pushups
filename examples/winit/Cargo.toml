@@ -12,11 +12,10 @@ name = "main"
 crate-type = ["cdylib"]
 
 [dependencies]
-base64 = "0.22"
 # The 8×8 bitmap font the window's lines are drawn in.
 font8x8 = "0.3"
 futures-executor = "0.3"
-pushups = { path = "../.." }
+pushups = { path = "../..", features = ["serde"] }
 serde_json = "1"
 # Puts the drawn pixels in the window, which winit itself leaves empty.
 softbuffer = "0.4"

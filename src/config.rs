@@ -1,3 +1,6 @@
+use crate::Error;
+use crate::token::base64url_decode_vapid_key;
+
 /// What [`install`](crate::install) needs beyond the platform's own configuration.
 ///
 /// Each push service that needs values from the app gets its own part, set with its own
@@ -47,19 +50,54 @@ impl Config {
     }
 }
 
+/// The VAPID public key of the app's server, an uncompressed P-256 point.
+///
+/// Servers publish it as base64url, which [`from_base64url`](Self::from_base64url) decodes.
+/// Whether the bytes are a point on the curve is checked at registration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct VapidPublicKey([u8; 65]);
+
+impl VapidPublicKey {
+    /// The key from the unpadded base64url its server publishes, 87 characters.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidVapidKey`] when `text` holds a character outside the base64url alphabet,
+    /// padding included, or is not 87 characters long.
+    pub fn from_base64url(text: &str) -> Result<Self, Error> {
+        base64url_decode_vapid_key(text)
+            .map(Self)
+            .map_err(Error::InvalidVapidKey)
+    }
+
+    /// The key's 65 bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 65] {
+        &self.0
+    }
+}
+
+impl From<[u8; 65]> for VapidPublicKey {
+    fn from(bytes: [u8; 65]) -> Self {
+        Self(bytes)
+    }
+}
+
 /// The UnifiedPush part of [`Config`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnifiedPushConfig {
-    pub(crate) vapid_public_key: [u8; 65],
+    pub(crate) vapid_public_key: VapidPublicKey,
 }
 
 impl UnifiedPushConfig {
-    /// A configuration for the VAPID public key of the app's server, an uncompressed P-256 point.
+    /// A configuration for the VAPID public key of the app's server.
     ///
     /// Distributors that deliver through FCM refuse a registration without it.
     #[must_use]
-    pub fn new(vapid_public_key: [u8; 65]) -> Self {
-        Self { vapid_public_key }
+    pub fn new(vapid_public_key: impl Into<VapidPublicKey>) -> Self {
+        Self {
+            vapid_public_key: vapid_public_key.into(),
+        }
     }
 }
 
@@ -102,7 +140,7 @@ impl WnsConfig {
 /// The Web Push part of [`Config`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebPushConfig {
-    pub(crate) vapid_public_key: [u8; 65],
+    pub(crate) vapid_public_key: VapidPublicKey,
     pub(crate) service_worker_path: Option<String>,
     pub(crate) rust_handler: bool,
 }
@@ -113,11 +151,11 @@ impl WebPushConfig {
     /// crate into the app's assets.
     pub const DEFAULT_SERVICE_WORKER_PATH: &str = "/pushups-sw.js";
 
-    /// A configuration for the app's VAPID public key, an uncompressed P-256 point.
+    /// A configuration for the app's VAPID public key.
     #[must_use]
-    pub fn new(vapid_public_key: [u8; 65]) -> Self {
+    pub fn new(vapid_public_key: impl Into<VapidPublicKey>) -> Self {
         Self {
-            vapid_public_key,
+            vapid_public_key: vapid_public_key.into(),
             service_worker_path: None,
             rust_handler: false,
         }

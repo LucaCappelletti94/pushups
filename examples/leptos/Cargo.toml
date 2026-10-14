@@ -11,12 +11,11 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 axum = { version = "0.8", optional = true }
-base64 = "0.22"
 futures-util = { version = "0.3", default-features = false }
 leptos = "0.8.22"
 leptos_axum = { version = "0.8.10", optional = true }
 leptos_router = "0.8.17"
-pushups = { path = "../..", features = ["stream"] }
+pushups = { path = "../..", features = ["stream", "serde"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
 

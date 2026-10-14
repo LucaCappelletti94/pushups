@@ -32,4 +32,24 @@ pub enum Error {
     /// service worker.
     #[error("not running in a service worker")]
     NotInServiceWorker,
+    /// A VAPID public key given as base64url is not the 87 characters of a 65-byte key.
+    #[error("invalid VAPID public key: {0}")]
+    InvalidVapidKey(VapidKeyError),
+}
+
+/// Why [`VapidPublicKey::from_base64url`](crate::VapidPublicKey::from_base64url) refused a key.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum VapidKeyError {
+    /// A character outside the base64url alphabet, the first in the text. Padding counts as one.
+    #[error("{character:?} at byte {index} is not base64url")]
+    Character {
+        /// The character's byte offset in the text.
+        index: usize,
+        /// The character.
+        character: char,
+    },
+    /// Text of this many characters, where a 65-byte key takes 87.
+    #[error("{0} characters, where a 65-byte key takes 87")]
+    Length(usize),
 }

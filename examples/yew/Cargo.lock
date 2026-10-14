@@ -187,12 +187,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd307490d624467aa6f74b0eabb77633d1f758a7b25f12bceb0b22e08d9726f6"
 
 [[package]]
-name = "base64"
-version = "0.22.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
-
-[[package]]
 name = "base64ct"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1434,6 +1428,7 @@ dependencies = [
  "p256",
  "parking_lot",
  "pushups-macros",
+ "serde",
  "sha2",
  "thiserror 2.0.21",
  "wasm-bindgen",
@@ -1461,7 +1456,6 @@ dependencies = [
 name = "pushups-yew-example"
 version = "0.0.0"
 dependencies = [
- "base64",
  "futures-util",
  "js-sys",
  "pushups",

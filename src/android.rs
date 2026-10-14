@@ -63,7 +63,7 @@ impl Backend for Android {
     fn install(config: Config) -> Result<(), Error> {
         if let Some(unified_push) = config.unified_push {
             // A second `install` keeps the first key, as it keeps the first runtime.
-            let _ = VAPID.set(base64url(&unified_push.vapid_public_key));
+            let _ = VAPID.set(base64url(unified_push.vapid_public_key.as_bytes()));
         }
         runtime().map(|_| ())
     }

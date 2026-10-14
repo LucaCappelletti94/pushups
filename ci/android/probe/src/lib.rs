@@ -43,11 +43,13 @@ fn on_push(_context: pushups::Context, message: Message) {
 fn describe(event: &Event) -> String {
     match event {
         Event::Token(Token::Fcm(token)) => format!("token {token}"),
-        Event::Token(token @ Token::WebPush { endpoint, .. }) => match token.web_push_keys() {
-            Some(keys) => format!("webpush {endpoint} {} {}", keys.p256dh, keys.auth),
+        Event::Token(token) => match token.web_push_subscription() {
+            Some(subscription) => format!(
+                "webpush {} {} {}",
+                subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth
+            ),
             None => format!("token {token:?}"),
         },
-        Event::Token(other) => format!("token {other:?}"),
         Event::RegistrationFailed(error) => format!("failed {error}"),
         Event::Message(message) => describe_message(message),
         Event::MessagesDropped => "dropped".to_owned(),
