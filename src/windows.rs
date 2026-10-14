@@ -175,7 +175,7 @@ pub(crate) struct Windows;
 impl Backend for Windows {
     fn install(config: Config) -> Result<(), Error> {
         let wns = config.windows.ok_or(Error::NotConfigured)?;
-        let _guard = SETUP.lock();
+        let guard = SETUP.lock();
         if RUNTIME.get().is_some() {
             return Ok(());
         }
@@ -217,6 +217,10 @@ impl Backend for Windows {
         // The handler must be in before `Register()`, or the runtime throws a COM exception.
         let _ = manager.PushReceived(&handler).map_err(Error::platform)?;
         manager.Register().map_err(Error::platform)?;
+        // Published before the push that started the app is handled, so a handler that calls
+        // `register` finds it, and the lock released, so one that calls `install` returns at once.
+        let _ = RUNTIME.set(Runtime { remote_id });
+        drop(guard);
         let args = bindings::AppInstance::GetCurrent()
             .map_err(Error::platform)?
             .GetActivatedEventArgs()
@@ -229,7 +233,6 @@ impl Backend for Windows {
                 .map_err(Error::platform)?;
             deliver(&push, true)?;
         }
-        let _ = RUNTIME.set(Runtime { remote_id });
         Ok(())
     }
 

@@ -53,9 +53,18 @@ fn describe_message(message: &Message) -> String {
     )
 }
 
+/// Runs for every push. In a process Windows started for the push, it also calls `register`, which
+/// must find the runtime `install` is still setting up.
 #[pushups::background_handler]
 fn on_push(_context: pushups::Context, message: Message) {
     append("handled.log", &describe_message(&message));
+    if message.started_app {
+        let answer = match pushups::register() {
+            Ok(()) => "ok".to_owned(),
+            Err(error) => format!("failed {error:?}"),
+        };
+        append("handled.log", &format!("register {answer}"));
+    }
 }
 
 fn on_event(event: Event) {

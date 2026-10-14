@@ -172,6 +172,11 @@ if ($delivered) {
             Note "- the closed app was not started within $PushBound"
             $passed = $false
         }
+        $register = Wait-Until $PushBound { First-Line (Join-Path $beside 'handled.log') '^register ' }
+        if ($register -eq 'register ok') { Note '- `register` from that background handler succeeded' } else {
+            Note "- ``register`` from that background handler answered: $register"
+            $passed = $false
+        }
         New-Item -ItemType Directory -Force $beside | Out-Null
         $process = Get-Process -Name 'pushups-w0-probe' -ErrorAction SilentlyContinue | Select-Object -First 1
         $started = [pscustomobject]@{ Label = 'push-started'; Out = $beside; Process = $process }
