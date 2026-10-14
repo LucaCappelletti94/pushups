@@ -45,18 +45,13 @@ fn on_push(_context: pushups::Context, message: Message) {
 fn on_event(event: Event) {
     match event {
         Event::Token(token) => {
-            if let (pushups::Token::WebPush { endpoint, .. }, Some(keys)) =
-                (&token, token.web_push_keys())
-            {
-                let subscription = serde_json::json!({
-                    "endpoint": endpoint,
-                    "keys": { "p256dh": keys.p256dh, "auth": keys.auth },
-                });
+            if let Some(subscription) = token.web_push_subscription() {
+                let json = serde_json::to_string(&subscription).expect("a subscription serialises");
                 let partial = out_dir().join("subscription.json.part");
-                if fs::write(&partial, subscription.to_string()).is_ok() {
+                if fs::write(&partial, json).is_ok() {
                     let _ = fs::rename(partial, out_dir().join("subscription.json"));
                 }
-                append("events.log", &format!("token {endpoint}"));
+                append("events.log", &format!("token {}", subscription.endpoint));
             } else {
                 append("events.log", &format!("token {token:?}"));
             }

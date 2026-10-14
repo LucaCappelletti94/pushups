@@ -3,7 +3,7 @@
 
 use js_sys::{Array, Object, Reflect, Uint8Array};
 use parking_lot::Mutex;
-use pushups::{Config, Event, Message, Notification, Permission, Token, WebPushConfig};
+use pushups::{Config, Event, Message, Notification, Permission, WebPushConfig};
 use wasm_bindgen::prelude::*;
 
 /// What the handler received, in arrival order, until the harness takes it.
@@ -134,17 +134,18 @@ fn event_object(event: &Event) -> Result<JsValue, JsValue> {
     let object = Object::new();
     let set = |name: &str, value: JsValue| Reflect::set(&object, &JsValue::from_str(name), &value);
     match event {
-        Event::Token(token @ Token::WebPush { endpoint, .. }) => {
-            set("kind", "token".into())?;
-            set("endpoint", endpoint.into())?;
-            if let Some(keys) = token.web_push_keys() {
-                set("p256dh", keys.p256dh.into())?;
-                set("auth", keys.auth.into())?;
-            }
-        }
         Event::Token(token) => {
             set("kind", "token".into())?;
-            set("other", format!("{token:?}").into())?;
+            match token.web_push_subscription() {
+                Some(subscription) => {
+                    set("endpoint", subscription.endpoint.into())?;
+                    set("p256dh", subscription.keys.p256dh.into())?;
+                    set("auth", subscription.keys.auth.into())?;
+                }
+                None => {
+                    set("other", format!("{token:?}").into())?;
+                }
+            }
         }
         Event::RegistrationFailed(error) => {
             set("kind", "registrationFailed".into())?;
