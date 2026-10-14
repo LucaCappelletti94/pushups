@@ -49,7 +49,7 @@ pub mod apple {
             started_app,
         };
         // The panic hook already reported a panic, and the push stays queued or delivered.
-        let _ = std::panic::catch_unwind(|| handler(Context { _private: () }, message));
+        let _ = std::panic::catch_unwind(|| handler(Context::default(), message));
     }
 }
 
@@ -156,6 +156,16 @@ pub use linkme;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 #[linkme::distributed_slice]
 pub static BACKGROUND_HANDLERS: [fn(crate::Context, crate::Message)];
+
+/// Runs the app's background handler for one push on Linux and Windows, if it has one, once the
+/// push is persisted or delivered. A panic in the handler is caught here, after the panic hook
+/// reported it.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub(crate) fn run_background_handler(message: crate::Message) {
+    if let Some(handler) = BACKGROUND_HANDLERS.first() {
+        let _ = std::panic::catch_unwind(|| handler(crate::Context::default(), message));
+    }
+}
 
 #[cfg(test)]
 mod tests {

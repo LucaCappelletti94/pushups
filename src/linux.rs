@@ -27,9 +27,8 @@ use crate::dispatch::DISPATCHER;
 use crate::inbox::Inbox;
 use crate::queue::{Entry, QueueFile};
 use crate::session::Session;
-use crate::token::base64url;
 use crate::webpush_crypto::Keys;
-use crate::{Config, Context, Error, Message, Permission};
+use crate::{Config, Error, Event, Message, Permission};
 
 const CONNECTOR_PATH: &str = "/org/unifiedpush/Connector";
 const DISTRIBUTOR_PATH: &str = "/org/unifiedpush/Distributor";
@@ -71,10 +70,6 @@ struct Activity {
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
-fn platform(error: impl std::fmt::Display) -> Error {
-    Error::Platform(error.to_string())
-}
-
 pub(crate) struct Linux;
 
 impl Backend for Linux {
@@ -88,7 +83,7 @@ impl Backend for Linux {
         let connection = connection::Builder::session()
             .and_then(|builder| builder.serve_at(CONNECTOR_PATH, Connector))
             .and_then(connection::Builder::build)
-            .map_err(platform)?;
+            .map_err(Error::platform)?;
         let dir = data_dir(
             env::var_os("XDG_DATA_HOME"),
             env::var_os("HOME"),
@@ -99,10 +94,10 @@ impl Backend for Linux {
             .recursive(true)
             .mode(0o700)
             .create(&dir)
-            .map_err(platform)?;
-        let keys = load_keys(&dir.join("keys")).map_err(platform)?;
-        let token = load_token(&dir.join("token")).map_err(platform)?;
-        write_activation_file(&linux.app_id).map_err(platform)?;
+            .map_err(Error::platform)?;
+        let keys = load_keys(&dir.join("keys")).map_err(Error::platform)?;
+        let token = load_token(&dir.join("token")).map_err(Error::platform)?;
+        write_activation_file(&linux.app_id).map_err(Error::platform)?;
         let session = if headless {
             Session::Headless
         } else {
@@ -113,7 +108,7 @@ impl Backend for Linux {
             app_id: linux.app_id,
             vapid: config
                 .unified_push
-                .map(|unified_push| base64url(unified_push.vapid_public_key.as_bytes())),
+                .map(|unified_push| unified_push.vapid_public_key.as_base64url()),
             state: Mutex::new(State {
                 inbox: Inbox::new(session, QueueFile::new(dir.join("queue"))),
                 keys,
@@ -143,7 +138,7 @@ impl Backend for Linux {
         let reply = runtime
             .connection
             .request_name_with_flags(runtime.app_id.as_str(), flags)
-            .map_err(platform)?;
+            .map_err(Error::platform)?;
         if !matches!(
             reply,
             RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner
@@ -164,7 +159,7 @@ impl Backend for Linux {
         let distributor = match find_distributor(&runtime.connection) {
             Ok(distributor) => distributor,
             Err(reason) => {
-                DISPATCHER.emit(Entry::RegistrationFailed(reason).into_event());
+                DISPATCHER.emit(Event::registration_failed(reason));
                 return Ok(());
             }
         };
@@ -173,11 +168,11 @@ impl Backend for Linux {
             .name("pushups register".to_owned())
             .spawn(move || {
                 if let Err(reason) = send_register(runtime, &distributor) {
-                    DISPATCHER.emit(Entry::RegistrationFailed(reason).into_event());
+                    DISPATCHER.emit(Event::registration_failed(reason));
                 }
             })
             .map(drop)
-            .map_err(platform)
+            .map_err(Error::platform)
     }
 
     fn request_permission() -> impl Future<Output = Result<Permission, Error>> {
@@ -320,7 +315,7 @@ impl Connector {
             message
         };
         DISPATCHER.flush();
-        run_background_handler(message);
+        crate::__private::run_background_handler(message);
         Ok(reply)
     }
 
@@ -358,8 +353,7 @@ impl Connector {
         {
             let state = call.0.state.lock();
             if known_token(&state, &args) {
-                let reason = "the distributor unregistered the app".to_owned();
-                state.inbox.receive(Entry::RegistrationFailed(reason));
+                state.inbox.receive(Entry::unregistered());
             }
         }
         DISPATCHER.flush();
@@ -372,14 +366,6 @@ fn known_token(state: &State, args: &HashMap<String, OwnedValue>) -> bool {
     args.get("token")
         .and_then(|token| <&str>::try_from(token).ok())
         == Some(state.token.as_str())
-}
-
-/// Runs the app's `#[background_handler]`, if it has one, catching a panic.
-fn run_background_handler(message: Message) {
-    if let Some(handler) = crate::__private::BACKGROUND_HANDLERS.first() {
-        // The panic hook already reported a panic, and the push stays queued or delivered.
-        let _ = std::panic::catch_unwind(|| handler(Context { _private: () }, message));
-    }
 }
 
 /// The distributor to register with, or why there is none.

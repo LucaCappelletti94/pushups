@@ -22,7 +22,6 @@ use crate::dispatch::DISPATCHER;
 use crate::inbox::{self, Inbox};
 use crate::queue::{Entry, QueueFile};
 use crate::session::Session;
-use crate::token::base64url;
 use crate::{Config, Error, Event, Message, Permission, Token};
 
 /// What `Native.init` hands over, once per process.
@@ -63,7 +62,7 @@ impl Backend for Android {
     fn install(config: Config) -> Result<(), Error> {
         if let Some(unified_push) = config.unified_push {
             // A second `install` keeps the first key, as it keeps the first runtime.
-            let _ = VAPID.set(base64url(unified_push.vapid_public_key.as_bytes()));
+            let _ = VAPID.set(unified_push.vapid_public_key.as_base64url());
         }
         runtime().map(|_| ())
     }
@@ -85,7 +84,7 @@ impl Backend for Android {
                 )?
                 .v()
             })
-            .map_err(|error| Error::Platform(error.to_string()))
+            .map_err(Error::platform)
     }
 
     async fn request_permission() -> Result<Permission, Error> {
@@ -106,14 +105,12 @@ impl Backend for Android {
             });
         if let Err(error) = asked {
             PERMISSIONS.lock().remove(&id);
-            return Err(Error::Platform(error.to_string()));
+            return Err(Error::platform(error));
         }
         match reply.await {
             Ok(true) => Ok(Permission::Granted),
             Ok(false) => Ok(Permission::Denied),
-            Err(oneshot::Canceled) => Err(Error::Platform(
-                "the permission request ended without an answer".to_owned(),
-            )),
+            Err(oneshot::Canceled) => Err(Error::permission_unanswered()),
         }
     }
 
@@ -276,9 +273,7 @@ pub extern "system" fn Java_rs_pushups_Native_onUnregistered<'caller>(
     _unowned: EnvUnowned<'caller>,
     _class: JClass<'caller>,
 ) {
-    receive(Entry::RegistrationFailed(
-        "the distributor unregistered the app".to_owned(),
-    ));
+    receive(Entry::unregistered());
 }
 
 /// `Native.onRegistered(token, error)`, the answer to [`register`]. Exactly one is non-null.
@@ -297,7 +292,7 @@ pub extern "system" fn Java_rs_pushups_Native_onRegistered<'caller>(
                 } else {
                     error.try_to_string(env)?
                 };
-                Event::RegistrationFailed(Error::Platform(reason))
+                Event::registration_failed(reason)
             } else {
                 Event::Token(Token::Fcm(token.try_to_string(env)?))
             };

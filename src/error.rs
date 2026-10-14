@@ -37,6 +37,26 @@ pub enum Error {
     InvalidVapidKey(VapidKeyError),
 }
 
+#[cfg(any(
+    target_os = "android",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+impl Error {
+    /// A platform error, kept as its description.
+    pub(crate) fn platform(error: impl std::fmt::Display) -> Self {
+        Self::Platform(error.to_string())
+    }
+
+    /// A permission request whose answer never came back.
+    #[cfg(any(target_os = "android", target_os = "ios", target_os = "macos"))]
+    pub(crate) fn permission_unanswered() -> Self {
+        Self::Platform("the permission request ended without an answer".to_owned())
+    }
+}
+
 /// Why [`VapidPublicKey::from_base64url`](crate::VapidPublicKey::from_base64url) refused a key.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]

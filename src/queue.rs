@@ -17,7 +17,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
-use crate::{Error, Event, Message, Token};
+use crate::{Event, Message, Token};
 
 /// Names the format and its version.
 pub(crate) const HEADER: &[u8; 8] = b"PUSHUPS\x01";
@@ -43,6 +43,12 @@ pub(crate) enum Entry {
 }
 
 impl Entry {
+    /// The distributor dropped the app's registration, on Android or Linux.
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    pub(crate) fn unregistered() -> Self {
+        Self::RegistrationFailed("the distributor unregistered the app".to_owned())
+    }
+
     pub(crate) fn into_event(self) -> Event {
         match self {
             Self::Message(message) => Event::Message(message),
@@ -58,7 +64,7 @@ impl Entry {
                 auth,
                 expires: None,
             }),
-            Self::RegistrationFailed(reason) => Event::RegistrationFailed(Error::Platform(reason)),
+            Self::RegistrationFailed(reason) => Event::registration_failed(reason),
         }
     }
 
