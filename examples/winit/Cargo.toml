@@ -23,6 +23,9 @@ winit = "=0.31.0-beta.3"
 
 [target.'cfg(target_os = "android")'.dependencies]
 winit = { version = "=0.31.0-beta.3", features = ["android-native-activity"] }
+# The popup for a push, which Windows and Linux leave to the app.
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+notify-rust = "4"
 # The web build, which `Trunk` starts from `index.html` and which `build.rs` writes its worker beside.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"

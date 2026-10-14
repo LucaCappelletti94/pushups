@@ -212,6 +212,8 @@ fn describe(event: &Event) -> String {
 /// Runs off the main thread for every push the system delivers.
 #[pushups::background_handler]
 fn on_push(_context: Context, message: Message) {
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    popup(&message);
     let entered = now_ms();
     log(&format!(
         "handler started_app={} entered_at_ms={entered} {} payload={}",
@@ -219,6 +221,20 @@ fn on_push(_context: Context, message: Message) {
         timing(&message, entered),
         String::from_utf8_lossy(&message.payload)
     ));
+}
+
+/// Shows the push as a desktop popup, which Windows and Linux leave to the app.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn popup(message: &Message) {
+    let data: serde_json::Value = serde_json::from_slice(&message.payload).unwrap_or_default();
+    let text = |name: &str| data.get(name).and_then(serde_json::Value::as_str);
+    let shown = notify_rust::Notification::new()
+        .summary(text("title").unwrap_or("pushups"))
+        .body(text("body").unwrap_or("A push arrived"))
+        .show();
+    if let Err(error) = shown {
+        log(&format!("popup failed: {error}"));
+    }
 }
 
 /// Runs in the service worker for every push, and decides what the user sees.

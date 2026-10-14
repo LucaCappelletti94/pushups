@@ -10,10 +10,10 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
-use dioxus::prelude::*;
-use futures_util::StreamExt;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use dioxus::prelude::*;
+use futures_util::StreamExt;
 use pushups::{
     Config, Context, Event, LinuxConfig, Message, Notification, Permission, UnifiedPushConfig,
     VapidPublicKey, WebPushConfig, WnsConfig,
@@ -192,6 +192,8 @@ fn describe(event: &Event) -> String {
 /// Runs in the process the push woke, before any UI exists.
 #[pushups::background_handler]
 fn on_push(_context: Context, message: Message) {
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    popup(&message);
     let entered = now_ms();
     let started = Instant::now();
     let fetched = catch_up();
@@ -203,6 +205,20 @@ fn on_push(_context: Context, message: Message) {
     ));
 }
 
+/// Shows the push as a desktop popup, which Windows and Linux leave to the app.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn popup(message: &Message) {
+    let data: serde_json::Value = serde_json::from_slice(&message.payload).unwrap_or_default();
+    let text = |name: &str| data.get(name).and_then(serde_json::Value::as_str);
+    let shown = notify_rust::Notification::new()
+        .summary(text("title").unwrap_or("pushups"))
+        .body(text("body").unwrap_or("A push arrived"))
+        .show();
+    if let Err(error) = shown {
+        log(&format!("popup failed: {error}"));
+    }
+}
+
 /// The push's `seq` and its latency from the sender's `sent_at_ms` to `at`.
 fn timing(message: &Message, at: u128) -> String {
     let data: serde_json::Value = serde_json::from_slice(&message.payload).unwrap_or_default();
@@ -212,7 +228,10 @@ fn timing(message: &Message, at: u128) -> String {
         "seq={} sent_at_ms={} since_sent_ms={}",
         field("seq").unwrap_or("-"),
         sent.map_or_else(|| "-".to_owned(), |sent| sent.to_string()),
-        sent.map_or_else(|| "-".to_owned(), |sent| at.saturating_sub(sent).to_string()),
+        sent.map_or_else(
+            || "-".to_owned(),
+            |sent| at.saturating_sub(sent).to_string()
+        ),
     )
 }
 
@@ -224,7 +243,11 @@ fn catch_up() -> String {
         stream.write_all(b"GET /catch-up HTTP/1.0\r\nHost: pushups\r\n\r\n")?;
         let mut response = String::new();
         stream.read_to_string(&mut response)?;
-        Ok(response.lines().next().unwrap_or("empty response").to_owned())
+        Ok(response
+            .lines()
+            .next()
+            .unwrap_or("empty response")
+            .to_owned())
     };
     attempt().unwrap_or_else(|error| format!("failed: {error}"))
 }
@@ -275,7 +298,11 @@ fn log(line: &str) {
     let line = format!("pushups-example {line}");
     println!("{line}");
     let path = std::env::temp_dir().join("pushups-example.log");
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         // One write per line, so lines from the handler thread and the UI never interleave.
         let _ = file.write_all(format!("{line}\n").as_bytes());
     }
