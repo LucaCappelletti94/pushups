@@ -9,14 +9,15 @@ case "$example" in winit | tauri) ;; *) exit 2 ;; esac
 
 ci=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$ci/../.." && pwd)
+# shellcheck source=ci/vapid.sh
+. "$ci/../vapid.sh"
 mkdir -p "$root/target"
 out=$(mktemp -d "$root/target/linux-example.XXXXXX")
 trap 'rm -rf "$out"' EXIT
 
 # A fresh VAPID key pair for the app's server, the private PEM and the base64url public point.
-openssl ecparam -name prime256v1 -genkey -noout -out "$out/vapid.pem"
-openssl ec -in "$out/vapid.pem" -pubout -outform DER 2>/dev/null | tail -c 65 \
-  | base64 -w0 | tr '+/' '-_' | tr -d '=' > "$out/vapid.b64url"
+vapid_generate "$out"
+vapid_public_b64url "$out/vapid.pem" > "$out/vapid.b64url"
 
 (cd "$ci/probe" && cargo build --quiet --release --bin send)
 (

@@ -26,7 +26,7 @@ rm -rf "$here/build/repo"
 (cd "$here" && ./gradlew --no-daemon --quiet :pushups:publishReleasePublicationToBundleRepository)
 [ "$mode" = local ] && exit 0
 
-version=$(cd "$here/../.." && cargo pkgid -p pushups | sed 's/.*[#@]//')
+version=$("$here/../crate-version.sh")
 bundle=$here/build/pushups-android-$version.zip
 # Central's bundle is the Maven layout with signatures and checksums, without repository metadata.
 (cd "$here/build/repo" && rm -f "$bundle" && find io -type f ! -name 'maven-metadata.xml*' | sort | zip -q "$bundle" -@)
