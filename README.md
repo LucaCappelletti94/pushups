@@ -86,23 +86,33 @@ remote-notifications = true
 The app gives its VAPID public key and serves `pushups::SERVICE_WORKER` at `/pushups-sw.js`, which the `dioxus` feature has `dx` do, or sets `rust_handler` to run its own wasm as the worker, as [`examples/yew`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/yew) and [`examples/leptos`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/leptos) show. On iOS only home-screen web apps get pushes, and they reach the page when it is next shown ([WebKit bug 268797](https://bugs.webkit.org/show_bug.cgi?id=268797)).
 
 ```rust
-use pushups::{Config, WebPushConfig};
+use pushups::{Config, VapidPublicKey, WebPushConfig};
 
-let config = Config::new().web(WebPushConfig::new([4; 65]));
+let key = VapidPublicKey::from_base64url(
+    "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+)?;
+let config = Config::new().web(WebPushConfig::new(key));
 # let _ = config;
+# Ok::<(), pushups::Error>(())
 ```
+
+`Token::web_push_subscription` gives the endpoint and keys the server sends to, and with the `serde` feature it serialises as the browser's `PushSubscription.toJSON()`, which `web-push` and `pywebpush` read. UnifiedPush tokens on Android and Linux take the same form.
 
 ## Linux
 
 The crate speaks UnifiedPush over D-Bus to the user's distributor, such as KDE's, and a push to a closed app starts it through D-Bus activation for the background handler.
 
 ```rust
-use pushups::{Config, LinuxConfig, UnifiedPushConfig};
+use pushups::{Config, LinuxConfig, UnifiedPushConfig, VapidPublicKey};
 
+let key = VapidPublicKey::from_base64url(
+    "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+)?;
 let config = Config::new()
     .linux(LinuxConfig::new("org.example.App"))
-    .unified_push(UnifiedPushConfig::new([4; 65]));
+    .unified_push(UnifiedPushConfig::new(key));
 # let _ = config;
+# Ok::<(), pushups::Error>(())
 ```
 
 ## Windows

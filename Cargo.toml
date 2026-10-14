@@ -17,6 +17,8 @@ links = "pushups"
 stream = ["dep:futures-channel", "dep:futures-core"]
 # Lets `dx` bundle the Android module and the static service worker from this crate.
 dioxus = ["dep:manganis"]
+# `Serialize` on `WebPushSubscription`, in the shape of the browser's `PushSubscription.toJSON()`.
+serde = ["dep:serde"]
 
 [workspace]
 members = ["pushups-macros"]
@@ -28,6 +30,7 @@ futures-channel = { version = "0.3", optional = true, default-features = false, 
 futures-core = { version = "0.3", optional = true, default-features = false }
 parking_lot = "0.12"
 pushups-macros = { version = "0.1.0", path = "pushups-macros" }
+serde = { version = "1", optional = true, features = ["derive"] }
 thiserror = "2"
 
 [target.'cfg(target_os = "android")'.dependencies]
@@ -79,7 +82,10 @@ wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["Navigator", "Notification", "RegistrationOptions", "ServiceWorkerContainer", "ServiceWorkerRegistration", "Window", "console"] }
 
 [dev-dependencies]
+# The reference decoder the base64url tests compare against.
+base64 = "0.22"
 futures-executor = "0.3"
+serde_json = "1"
 tempfile = "3"
 
 # The fake distributor of tests/linux.rs.

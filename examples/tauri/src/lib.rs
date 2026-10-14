@@ -3,9 +3,9 @@
 //! wall-clock time, to logcat under `pushups-example` on Android, so `ci/android/example.sh` can
 //! time send to delivery.
 
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use pushups::{Config, Context, Event, LinuxConfig, Message, UnifiedPushConfig, WnsConfig};
+use pushups::{
+    Config, Context, Event, LinuxConfig, Message, UnifiedPushConfig, VapidPublicKey, WnsConfig,
+};
 
 #[cfg(target_os = "android")]
 pushups::firebase_config!("google-services.json");
@@ -34,10 +34,9 @@ fn config() -> Config {
     if let Some(remote_id) = option_env!("PUSHUPS_WNS_REMOTE_ID") {
         config = config.windows(WnsConfig::new(remote_id));
     }
-    let key = option_env!("PUSHUPS_VAPID_PUBLIC_KEY")
-        .and_then(|key| URL_SAFE_NO_PAD.decode(key).ok())
-        .and_then(|key| <[u8; 65]>::try_from(key).ok());
-    if let Some(key) = key {
+    if let Some(key) = option_env!("PUSHUPS_VAPID_PUBLIC_KEY") {
+        let key =
+            VapidPublicKey::from_base64url(key).expect("PUSHUPS_VAPID_PUBLIC_KEY is a VAPID key");
         config = config.unified_push(UnifiedPushConfig::new(key));
     }
     config
@@ -46,15 +45,13 @@ fn config() -> Config {
 fn describe(event: &Event) -> String {
     let at = now_ms();
     match event {
-        Event::Token(token @ pushups::Token::WebPush { endpoint, .. }) => {
-            let keys = token.web_push_keys().expect("a Web Push token has keys");
-            let subscription = serde_json::json!({
-                "endpoint": endpoint,
-                "keys": { "p256dh": keys.p256dh, "auth": keys.auth },
-            });
-            format!("ui token at_ms={at} subscription={subscription}")
-        }
-        Event::Token(token) => format!("ui token at_ms={at} {token:?}"),
+        Event::Token(token) => match token.web_push_subscription() {
+            Some(subscription) => format!(
+                "ui token at_ms={at} subscription={}",
+                serde_json::to_string(&subscription).expect("a subscription serialises")
+            ),
+            None => format!("ui token at_ms={at} {token:?}"),
+        },
         Event::RegistrationFailed(error) => format!("ui registration failed at_ms={at} {error}"),
         Event::Message(message) => format!(
             "ui message at_ms={at} started_app={} {} payload={}",
