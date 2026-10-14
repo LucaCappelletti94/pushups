@@ -3,14 +3,18 @@
 # delivery table with real pushes through ntfy.sh. Reads /out/vapid.pem and /out/vapid.hex, writes
 # the probe's logs to /out/run and its coverage profiles to /out/profraw.
 set -euo pipefail
+# shellcheck source=ci/linux/lib.sh
+. "$(dirname "$0")/lib.sh"
 
 bin=/work/ci/linux/probe/target/x86_64-unknown-linux-gnu/debug
 probe=$bin/pushups-linux-probe
+# shellcheck disable=SC2034
 send=$bin/send
 app_id=rs.pushups.LinuxProbe
 
-export PROBE_OUT=/out/run
-export PROBE_VAPID_HEX=$(cat /out/vapid.hex)
+export PROBE_OUT=$run_dir
+PROBE_VAPID_HEX=$(cat /out/vapid.hex)
+export PROBE_VAPID_HEX
 export LLVM_PROFILE_FILE=/out/profraw/%p-%m.profraw
 # The host's user, whose uid need not be the container's, must be able to delete what lands here.
 umask 0000
@@ -22,33 +26,10 @@ busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DB
     HOME "$HOME" XDG_DATA_HOME "$XDG_DATA_HOME" PROBE_OUT "$PROBE_OUT" \
     PROBE_VAPID_HEX "$PROBE_VAPID_HEX" LLVM_PROFILE_FILE "$LLVM_PROFILE_FILE"
 
-fail() {
-    echo "scenario: $*" >&2
-    for log in events handled; do
-        echo "--- $log.log" >&2
-        cat "$PROBE_OUT/$log.log" >&2 2>/dev/null || true
-    done
-    echo "--- distributor" >&2
-    cat /tmp/pw-testbed-distributor.log >&2 || true
-    exit 1
-}
-
-# Waits up to $3 seconds for a line of file $1 containing $2.
-await_line() {
-    local deadline=$((SECONDS + $3))
-    while [ "$SECONDS" -lt "$deadline" ]; do
-        if grep -qF -- "$2" "$PROBE_OUT/$1" 2>/dev/null; then
-            grep -F -- "$2" "$PROBE_OUT/$1" | tail -1
-            return 0
-        fi
-        sleep 0.2
-    done
-    fail "no line with '$2' in $1 within $3 s"
-}
-
-push() {
-    "$send" "$PROBE_OUT/subscription.json" /out/vapid.pem "$1" || fail "the push service refused $1"
-}
+# shellcheck disable=SC2034
+# shellcheck disable=SC2034
+fail_name=scenario
+fail_logs=("$PROBE_OUT/events.log" "$PROBE_OUT/handled.log")
 
 probe_running() {
     pgrep -f "$probe" >/dev/null

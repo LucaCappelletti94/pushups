@@ -5,7 +5,7 @@
 # Usage: ci/check-versions.sh [tag]
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
-crate=$(cd "$root" && cargo pkgid -p pushups | sed 's/.*[#@]//')
+crate=$("$root/ci/crate-version.sh")
 module=$(sed -n '/pushups.module_version/{n;s/.*android:value="\([^"]*\)".*/\1/p}' "$root/android/src/main/AndroidManifest.xml")
 echo "crate $crate, Android module $module${1:+, tag $1}"
 [ "$module" = "$crate" ] || { echo "android/src/main/AndroidManifest.xml says $module, Cargo.toml says $crate" >&2; exit 1; }

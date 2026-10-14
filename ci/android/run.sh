@@ -13,6 +13,8 @@ key=$(realpath "$2")
 name=${3:-android}
 ci=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$ci/../.." && pwd)
+# shellcheck source=ci/vapid.sh
+. "$ci/../vapid.sh"
 build=$ci/build
 out=$build/runs
 package=rs.pushups.example
@@ -40,8 +42,8 @@ if ! adb shell pm list packages io.heckel.ntfy | grep -q io.heckel.ntfy; then
 fi
 
 # The app server's side of Web Push: a fresh VAPID key pair and the `web-push` crate's sender.
-openssl ecparam -name prime256v1 -genkey -noout -out "$out/vapid.pem"
-vapid_hex=$(openssl ec -in "$out/vapid.pem" -pubout -outform DER 2>/dev/null | tail -c 65 | od -An -v -tx1 | tr -d ' \n')
+vapid_generate "$out"
+vapid_hex=$(vapid_public_hex "$out/vapid.pem")
 (cd "$root/ci/linux/probe" && cargo build --quiet --bin send)
 
 # The screen stays on and unlocked while the tests run, since install checks, the prompt and the
@@ -119,7 +121,7 @@ adb shell pm enable io.heckel.ntfy >/dev/null
 # A tap into a running singleTop Activity, plain and androidx.
 run_variant single-top "config-real background-handler" single-top SingleTopTapTest
 # A Kotlin module of another version than the crate, which the handshake stops before any other export.
-run_variant module-mismatch config-real module-mismatch ModuleMismatchTest crate "$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml" | head -1)"
+run_variant module-mismatch config-real module-mismatch ModuleMismatchTest crate "$("$ci/../crate-version.sh")"
 # A library without the handshake, as one built with a crate older than the module.
 run_variant no-handshake config-real no-handshake LibraryWithoutPushupsTest
 

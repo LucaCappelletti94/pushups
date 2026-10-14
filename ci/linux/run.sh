@@ -5,6 +5,8 @@ set -euo pipefail
 
 ci=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$ci/../.." && pwd)
+# shellcheck source=ci/vapid.sh
+. "$ci/../vapid.sh"
 mkdir -p "$root/target"
 out=$(mktemp -d "$root/target/linux-run.XXXXXX")
 trap 'rm -rf "$out"' EXIT
@@ -17,8 +19,8 @@ target=x86_64-unknown-linux-gnu
 )
 
 # A fresh VAPID key pair for the app's server, as the private PEM and the raw public point in hex.
-openssl ecparam -name prime256v1 -genkey -noout -out "$out/vapid.pem"
-openssl ec -in "$out/vapid.pem" -pubout -outform DER 2>/dev/null | tail -c 65 | od -An -v -tx1 | tr -d ' \n' > "$out/vapid.hex"
+vapid_generate "$out"
+vapid_public_hex "$out/vapid.pem" > "$out/vapid.hex"
 chmod -R a+rwX "$out"
 
 PUSHUPS_TESTBED_OUT="$out" "$ci/testbed.sh" bash /work/ci/linux/scenario.sh
