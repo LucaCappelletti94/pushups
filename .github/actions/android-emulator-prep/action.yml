@@ -1,0 +1,41 @@
+---
+name: Android emulator prep
+description: Temurin 17, the Rust Android target, the KVM udev rule and the Firebase and FCM files
+
+inputs:
+  target:
+    description: The Rust Android target to add to the stable toolchain
+    required: true
+  google-services-json:
+    description: Where the Firebase configuration lands
+    required: true
+  google-services-json-secret:
+    description: The Firebase configuration to write
+    required: true
+  fcm-service-account:
+    description: The FCM service account key to write
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: "17"
+    - run: rustup target add --toolchain stable ${{ inputs.target }}
+      shell: bash
+    # The emulator needs KVM, which the runner's user cannot open by default.
+    - shell: bash
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+    - name: Write the Firebase configuration and the FCM key
+      shell: bash
+      env:
+        GOOGLE_SERVICES_JSON: ${{ inputs.google-services-json-secret }}
+        FCM_SERVICE_ACCOUNT: ${{ inputs.fcm-service-account }}
+      run: |
+        printf '%s' "$GOOGLE_SERVICES_JSON" > ${{ inputs.google-services-json }}
+        printf '%s' "$FCM_SERVICE_ACCOUNT" > "$RUNNER_TEMP/fcm-service-account.json"

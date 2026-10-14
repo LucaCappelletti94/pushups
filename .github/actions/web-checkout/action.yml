@@ -1,0 +1,24 @@
+---
+name: Web checkout
+description: Node 24 with the npm cache, the ci/web dependencies and an optional Rust tool
+
+inputs:
+  tool:
+    description: The Rust tool to install with taiki-e/install-action
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - if: inputs.tool != ''
+      uses: taiki-e/install-action@v2
+      with:
+        tool: ${{ inputs.tool }}
+    - uses: actions/setup-node@v7
+      with:
+        node-version: "24"
+        cache: npm
+        cache-dependency-path: ci/web/package-lock.json
+    - run: npm ci
+      shell: bash
+      working-directory: ci/web
