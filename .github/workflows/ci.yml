@@ -16,6 +16,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  DIOXUS_CLI_VERSION: "0.7.10"
 
 jobs:
   fmt:
@@ -139,25 +140,13 @@ jobs:
       github.event.pull_request.user.login != 'dependabot[bot]')
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
+      - run: rustup toolchain install stable --profile minimal --component llvm-tools,clippy,rustfmt
+      - uses: ./.github/actions/android-emulator-prep
         with:
-          distribution: temurin
-          java-version: "17"
-      - run: |
-          rustup toolchain install stable --profile minimal --component llvm-tools,clippy,rustfmt
-          rustup target add --toolchain stable x86_64-linux-android
-      # The emulator needs KVM, which the runner's user cannot open by default.
-      - run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Write the Firebase configuration and the FCM key
-        env:
-          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
-          FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT }}
-        run: |
-          printf '%s' "$GOOGLE_SERVICES_JSON" > ci/android/probe/google-services.json
-          printf '%s' "$FCM_SERVICE_ACCOUNT" > "$RUNNER_TEMP/fcm-service-account.json"
+          target: x86_64-linux-android
+          google-services-json: ci/android/probe/google-services.json
+          google-services-json-secret: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          fcm-service-account: ${{ secrets.FCM_SERVICE_ACCOUNT }}
       - name: Lint the probe under every configuration it is built with
         working-directory: ci/android/probe
         run: |
@@ -194,16 +183,9 @@ jobs:
           rustup toolchain install nightly --profile minimal --component llvm-tools,clippy,rustfmt --target wasm32-unknown-unknown
           version=$(grep -A1 '^name = "wasm-bindgen"$' ci/web/probe/Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
           echo "wasm-bindgen=$version" >> "$GITHUB_OUTPUT"
-      - uses: taiki-e/install-action@v2
+      - uses: ./.github/actions/web-checkout
         with:
           tool: wasm-bindgen@${{ steps.tools.outputs.wasm-bindgen }}
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: ci/web/package-lock.json
-      - run: npm ci
-        working-directory: ci/web
       - name: Lint the probe
         working-directory: ci/web/probe
         run: |
@@ -327,7 +309,7 @@ jobs:
           rustup target add --toolchain stable aarch64-linux-android
       - uses: taiki-e/install-action@v2
         with:
-          tool: dioxus-cli@0.7.10
+          tool: dioxus-cli@${{ env.DIOXUS_CLI_VERSION }}
       # The example compiles a Firebase configuration in, and the fixture stands in for the
       # real one, which never leaves the maintainer's machine.
       - run: cp tests/fixtures/google-services.json examples/dioxus/google-services.json
@@ -347,28 +329,16 @@ jobs:
       github.event.pull_request.user.login != 'dependabot[bot]')
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "17"
-      - run: |
-          rustup toolchain install stable --profile minimal
-          rustup target add --toolchain stable x86_64-linux-android
+      - run: rustup toolchain install stable --profile minimal
       - uses: taiki-e/install-action@v2
         with:
-          tool: dioxus-cli@0.7.10
-      # The emulator needs KVM, which the runner's user cannot open by default.
-      - run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Write the Firebase configuration and the FCM key
-        env:
-          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
-          FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT }}
-        run: |
-          printf '%s' "$GOOGLE_SERVICES_JSON" > examples/dioxus/google-services.json
-          printf '%s' "$FCM_SERVICE_ACCOUNT" > "$RUNNER_TEMP/fcm-service-account.json"
+          tool: dioxus-cli@${{ env.DIOXUS_CLI_VERSION }}
+      - uses: ./.github/actions/android-emulator-prep
+        with:
+          target: x86_64-linux-android
+          google-services-json: examples/dioxus/google-services.json
+          google-services-json-secret: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          fcm-service-account: ${{ secrets.FCM_SERVICE_ACCOUNT }}
       - name: Build the APK for the emulator
         working-directory: examples/dioxus
         # The runner image exports its NDK path as a shell variable, which `env` cannot read.
@@ -393,28 +363,16 @@ jobs:
       github.event.pull_request.user.login != 'dependabot[bot]')
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "17"
-      - run: |
-          rustup toolchain install stable --profile minimal
-          rustup target add --toolchain stable x86_64-linux-android
+      - run: rustup toolchain install stable --profile minimal
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-ndk
-      # The emulator needs KVM, which the runner's user cannot open by default.
-      - run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Write the Firebase configuration and the FCM key
-        env:
-          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
-          FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT }}
-        run: |
-          printf '%s' "$GOOGLE_SERVICES_JSON" > examples/winit/google-services.json
-          printf '%s' "$FCM_SERVICE_ACCOUNT" > "$RUNNER_TEMP/fcm-service-account.json"
+      - uses: ./.github/actions/android-emulator-prep
+        with:
+          target: x86_64-linux-android
+          google-services-json: examples/winit/google-services.json
+          google-services-json-secret: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          fcm-service-account: ${{ secrets.FCM_SERVICE_ACCOUNT }}
       - name: Build the library with cargo-ndk and the APK with Gradle, the module found through cargo metadata
         working-directory: examples/winit
         # The runner image exports its NDK path as a shell variable, which `env` cannot read.
@@ -449,28 +407,16 @@ jobs:
       github.event.pull_request.user.login != 'dependabot[bot]')
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "17"
-      - run: |
-          rustup toolchain install stable --profile minimal
-          rustup target add --toolchain stable x86_64-linux-android
+      - run: rustup toolchain install stable --profile minimal
       - uses: taiki-e/install-action@v2
         with:
           tool: tauri-cli@2.12.1
-      # The emulator needs KVM, which the runner's user cannot open by default.
-      - run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Write the Firebase configuration and the FCM key
-        env:
-          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
-          FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT }}
-        run: |
-          printf '%s' "$GOOGLE_SERVICES_JSON" > examples/tauri/google-services.json
-          printf '%s' "$FCM_SERVICE_ACCOUNT" > "$RUNNER_TEMP/fcm-service-account.json"
+      - uses: ./.github/actions/android-emulator-prep
+        with:
+          target: x86_64-linux-android
+          google-services-json: examples/tauri/google-services.json
+          google-services-json-secret: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          fcm-service-account: ${{ secrets.FCM_SERVICE_ACCOUNT }}
       - name: Generate the Android project and build the APK, the module coming from the plugin
         working-directory: examples/tauri
         # The runner image exports its NDK path as a shell variable, which `env` cannot read.
@@ -498,17 +444,10 @@ jobs:
       - run: |
           rustup toolchain install stable --profile minimal
           rustup target add --toolchain stable wasm32-unknown-unknown
-      - uses: taiki-e/install-action@v2
+      - uses: ./.github/actions/web-checkout
         with:
-          tool: dioxus-cli@0.7.10
+          tool: dioxus-cli@${{ env.DIOXUS_CLI_VERSION }}
       - run: cp tests/fixtures/google-services.json examples/dioxus/google-services.json
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: ci/web/package-lock.json
-      - run: npm ci
-        working-directory: ci/web
       - name: Build the web app in both worker modes
         working-directory: examples/dioxus
         run: |
@@ -529,16 +468,9 @@ jobs:
       - run: |
           rustup toolchain install stable --profile minimal
           rustup target add --toolchain stable wasm32-unknown-unknown
-      - uses: taiki-e/install-action@v2
+      - uses: ./.github/actions/web-checkout
         with:
           tool: trunk@0.21.14
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: ci/web/package-lock.json
-      - run: npm ci
-        working-directory: ci/web
       - name: Build the Yew app in both worker modes
         working-directory: examples/yew
         run: |
@@ -561,16 +493,9 @@ jobs:
       - run: |
           rustup toolchain install stable --profile minimal
           rustup target add --toolchain stable wasm32-unknown-unknown
-      - uses: taiki-e/install-action@v2
+      - uses: ./.github/actions/web-checkout
         with:
           tool: trunk@0.21.14
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: ci/web/package-lock.json
-      - run: npm ci
-        working-directory: ci/web
       - name: Build the winit app in both worker modes
         working-directory: examples/winit
         run: |
@@ -593,16 +518,9 @@ jobs:
       - run: |
           rustup toolchain install stable --profile minimal
           rustup target add --toolchain stable wasm32-unknown-unknown
-      - uses: taiki-e/install-action@v2
+      - uses: ./.github/actions/web-checkout
         with:
           tool: cargo-leptos@0.3.11
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: ci/web/package-lock.json
-      - run: npm ci
-        working-directory: ci/web
       - name: Both worker modes, served by the app's own server, with real pushes
         run: ci/web/leptos.sh
 
@@ -617,7 +535,7 @@ jobs:
           rustup target add --toolchain stable aarch64-apple-ios aarch64-apple-darwin
       - uses: taiki-e/install-action@v2
         with:
-          tool: dioxus-cli@0.7.10
+          tool: dioxus-cli@${{ env.DIOXUS_CLI_VERSION }}
       - run: cp tests/fixtures/google-services.json examples/dioxus/google-services.json
       # Each app exports its background handler, which the crate finds by name, so the linker must keep it.
       - name: Build each app, unsigned, and check the background handler is exported
