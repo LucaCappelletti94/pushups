@@ -10,10 +10,10 @@
 // --rust checks that the app's Rust handler ran in the worker for the push.
 import { readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { extname, join, normalize, relative } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import puppeteer from "puppeteer-core";
 import webpush from "web-push";
+import { attachWorkerConsoles, pushWithRetry, serveSite } from "./webpush.mjs";
 
 const [command, ...args] = process.argv.slice(2);
 if (command === "keys") {
@@ -34,29 +34,10 @@ const rust = flags.includes("--rust");
 const vapid = JSON.parse(readFileSync(keys, "utf8"));
 webpush.setVapidDetails("mailto:pushups-ci@users.noreply.github.com", vapid.publicKey, vapid.privateKey);
 const STEP_MS = 60_000;
-const PUSH_GONE_RETRY_MS = 30_000;
-const types = {
-  ".html": "text/html",
-  ".js": "text/javascript",
-  ".wasm": "application/wasm",
-  ".png": "image/png",
-  ".webmanifest": "application/manifest+json",
-};
 // A site directory is served here, while an `http` URL is the app's own server, already running.
 const server = site.startsWith("http")
   ? null
-  : createServer((request, response) => {
-    const path = new URL(request.url, "http://x").pathname;
-    const file = normalize(join(site, path === "/" ? "index.html" : path));
-    try {
-      if (relative(site, file).startsWith("..")) throw new Error("outside the site");
-      const body = readFileSync(file);
-      response.writeHead(200, { "content-type": types[extname(file)] ?? "application/octet-stream" });
-      response.end(body);
-    } catch {
-      response.writeHead(404).end();
-    }
-  });
+  : createServer(serveSite(site));
 if (server) await new Promise((done) => server.listen(0, "127.0.0.1", done));
 const origin = server ? `http://127.0.0.1:${server.address().port}` : new URL(site).origin;
 
@@ -77,13 +58,7 @@ const awaitLine = async (what, test) => {
 
 const browser = await puppeteer.launch({ headless: true, channel: "chrome", args: ["--no-first-run"] });
 // The worker's console carries the Rust handler's lines, read as the page's are.
-browser.on("targetcreated", (target) => {
-  if (target.type() !== "service_worker") return;
-  target.worker().then(
-    (worker) => worker?.on("console", (message) => lines.push(message.text())),
-    (error) => console.log(`could not attach to ${target.url()}: ${error.message}`),
-  );
-});
+attachWorkerConsoles(browser, (text) => lines.push(text), { log: console.log });
 try {
   await browser.setPermission(origin, { permission: { name: "notifications" }, state: "granted" });
   const open = async () => {
@@ -136,21 +111,13 @@ try {
     expect(errors.length === 0, `Chrome finds the page installable (${JSON.stringify(errors)})`);
   }
 
-  // FCM answers 410 to a subscription it has not propagated yet, so a 410 is resent for a while, as the harness does.
-  const send = async (seq) => {
+  const send = (seq) => {
     const payload = JSON.stringify({ seq: String(seq), sent_at_ms: String(Date.now()) });
-    const deadline = performance.now() + PUSH_GONE_RETRY_MS;
-    for (;;) {
-      try {
-        const sent = await webpush.sendNotification(subscription, payload, { TTL: 300, timeout: STEP_MS });
-        expect(sent.statusCode === 201 || sent.statusCode === 200, `push ${seq} is accepted (HTTP ${sent.statusCode})`);
-        return;
-      } catch (error) {
-        if (error.statusCode !== 410 || performance.now() > deadline) throw error;
-        console.log(`push ${seq}: HTTP 410, retrying`);
-        await sleep(1000);
-      }
-    }
+    return pushWithRetry(subscription, payload, {
+      timeout: STEP_MS,
+      onSent: (sent) => expect(sent.statusCode === 201 || sent.statusCode === 200, `push ${seq} is accepted (HTTP ${sent.statusCode})`),
+      on410: () => console.log(`push ${seq}: HTTP 410, retrying`),
+    });
   };
   await send(1);
   await awaitLine("message on the open page", (l) => l.includes("ui message") && l.includes("seq=1 "));
