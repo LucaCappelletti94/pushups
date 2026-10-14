@@ -22,7 +22,7 @@ mod linux {
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
-    use pushups::{Config, Event, LinuxConfig, UnifiedPushConfig};
+    use pushups::{Config, Error, Event, LinuxConfig, UnifiedPushConfig};
     use zbus::zvariant::{OwnedValue, Value};
 
     const CHILD: &str = "PUSHUPS_TEST_CHILD";
@@ -30,6 +30,9 @@ mod linux {
     const MARK: &str = "PUSHUPS_TEST_MARK";
     const HOLD: &str = "hold";
     const REFUSE: &str = "refuse";
+    const UNREGISTER: &str = "unregister";
+    const NO_DISTRIBUTOR: &str = "no-distributor";
+    const DATA_IS_FILE: &str = "data-is-file";
     const APP_ID: &str = "rs.pushups.LinuxTest";
     /// How long a scenario may wait on the child, generous for a loaded runner.
     const BOUND: Duration = Duration::from_secs(20);
@@ -39,21 +42,26 @@ mod linux {
             child(&scenario);
             return;
         }
-        for scenario in [HOLD, REFUSE] {
+        for scenario in [HOLD, REFUSE, UNREGISTER, NO_DISTRIBUTOR, DATA_IS_FILE] {
             run(scenario);
             println!("linux scenario {scenario}: ok");
         }
     }
 
-    /// The fake distributor, which holds every `Register` call or refuses it.
+    /// The fake distributor, which holds every `Register` call, refuses it, or accepts it and
+    /// then unregisters the app.
     struct Distributor {
-        hold: bool,
+        scenario: &'static str,
         calls: Arc<AtomicUsize>,
     }
 
     #[zbus::interface(name = "org.unifiedpush.Distributor2")]
     impl Distributor {
-        async fn register(&self, args: HashMap<String, OwnedValue>) -> HashMap<String, OwnedValue> {
+        async fn register(
+            &self,
+            args: HashMap<String, OwnedValue>,
+            #[zbus(connection)] connection: &zbus::Connection,
+        ) -> HashMap<String, OwnedValue> {
             if args
                 .get("service")
                 .and_then(|value| <&str>::try_from(value).ok())
@@ -61,9 +69,31 @@ mod linux {
             {
                 self.calls.fetch_add(1, Ordering::SeqCst);
             }
-            if self.hold {
+            match self.scenario {
                 // KUnifiedPush queues the call unanswered while it believes the machine is offline.
-                std::future::pending::<()>().await;
+                HOLD => std::future::pending::<()>().await,
+                UNREGISTER => {
+                    let token = args
+                        .get("token")
+                        .and_then(|value| <&str>::try_from(value).ok())
+                        .expect("Register carries the app's token");
+                    let unregistered = HashMap::from([("token", Value::from(token))]);
+                    // The app may exit as soon as it saw the event, before its reply arrives.
+                    let _ = connection
+                        .call_method(
+                            Some(APP_ID),
+                            "/org/unifiedpush/Connector",
+                            Some("org.unifiedpush.Connector2"),
+                            "Unregistered",
+                            &(unregistered,),
+                        )
+                        .await;
+                    return HashMap::from([(
+                        "success".to_owned(),
+                        owned("REGISTRATION_SUCCEEDED"),
+                    )]);
+                }
+                _ => {}
             }
             HashMap::from([
                 ("success".to_owned(), owned("REGISTRATION_FAILED")),
@@ -114,51 +144,62 @@ mod linux {
         done()
     }
 
-    fn run(scenario: &str) {
+    fn run(scenario: &'static str) {
         let (_daemon, address) = start_bus();
         let calls = Arc::new(AtomicUsize::new(0));
-        let _distributor = zbus::blocking::connection::Builder::address(address.as_str())
-            .expect("the bus address parses")
-            .name("org.unifiedpush.Distributor.fake")
-            .expect("the distributor name is valid")
-            .serve_at(
-                "/org/unifiedpush/Distributor",
-                Distributor {
-                    hold: scenario == HOLD,
-                    calls: Arc::clone(&calls),
-                },
-            )
-            .expect("the distributor object is served")
-            .build()
-            .expect("the distributor connects");
+        let _distributor = (scenario != NO_DISTRIBUTOR).then(|| {
+            zbus::blocking::connection::Builder::address(address.as_str())
+                .expect("the bus address parses")
+                .name("org.unifiedpush.Distributor.fake")
+                .expect("the distributor name is valid")
+                .serve_at(
+                    "/org/unifiedpush/Distributor",
+                    Distributor {
+                        scenario,
+                        calls: Arc::clone(&calls),
+                    },
+                )
+                .expect("the distributor object is served")
+                .build()
+                .expect("the distributor connects")
+        });
         let data = tempfile::tempdir().expect("a temporary data directory");
         let mark = data.path().join("register-returned");
+        let data_home = if scenario == DATA_IS_FILE {
+            let file = data.path().join("not-a-directory");
+            std::fs::write(&file, b"").expect("the blocking file is written");
+            file
+        } else {
+            data.path().to_owned()
+        };
         let mut app = Reaped(
             Command::new(std::env::current_exe().expect("this binary's path"))
                 .env(CHILD, scenario)
                 .env(MARK, &mark)
                 .env("DBUS_SESSION_BUS_ADDRESS", &address)
-                .env("XDG_DATA_HOME", data.path())
+                .env("XDG_DATA_HOME", &data_home)
                 .env_remove("UNIFIEDPUSH_DISTRIBUTOR")
                 .spawn()
                 .expect("the app process starts"),
         );
-        assert!(
-            wait_until(|| calls.load(Ordering::SeqCst) == 1 && mark.exists()),
-            "scenario {scenario}: within {BOUND:?} the distributor got {} Register calls and register {}",
-            calls.load(Ordering::SeqCst),
-            if mark.exists() {
-                "returned"
-            } else {
-                "had not returned"
-            },
-        );
-        let took = std::fs::read_to_string(&mark).expect("the mark is readable");
-        assert!(
-            took.trim().parse::<u64>().is_ok_and(|ms| ms < 2_000),
-            "scenario {scenario}: register took {took} ms"
-        );
-        if scenario == REFUSE {
+        if matches!(scenario, HOLD | REFUSE | UNREGISTER) {
+            assert!(
+                wait_until(|| calls.load(Ordering::SeqCst) == 1 && mark.exists()),
+                "scenario {scenario}: within {BOUND:?} the distributor got {} Register calls and register {}",
+                calls.load(Ordering::SeqCst),
+                if mark.exists() {
+                    "returned"
+                } else {
+                    "had not returned"
+                },
+            );
+            let took = std::fs::read_to_string(&mark).expect("the mark is readable");
+            assert!(
+                took.trim().parse::<u64>().is_ok_and(|ms| ms < 2_000),
+                "scenario {scenario}: register took {took} ms"
+            );
+        }
+        if scenario != HOLD {
             let mut status = None;
             assert!(
                 wait_until(|| {
@@ -176,12 +217,19 @@ mod linux {
 
     /// The app side, run in the child process on the private bus.
     fn child(scenario: &str) {
-        pushups::install(
+        let installed = pushups::install(
             Config::new()
                 .linux(LinuxConfig::new(APP_ID))
                 .unified_push(UnifiedPushConfig::new([4; 65])),
-        )
-        .expect("install connects to the private bus");
+        );
+        if scenario == DATA_IS_FILE {
+            assert!(
+                matches!(installed, Err(Error::Platform(_))),
+                "install with a data directory it cannot create gave {installed:?}"
+            );
+            return;
+        }
+        installed.expect("install connects to the private bus");
         let (events, received) = mpsc::channel();
         pushups::set_handler(move |event| {
             let _ = events.send(event);
@@ -191,31 +239,31 @@ mod linux {
         let took = started.elapsed().as_millis();
         let mark = std::env::var_os(MARK).expect("the parent names the mark");
         std::fs::write(Path::new(&mark), took.to_string()).expect("the mark is written");
-        match scenario {
+        let expected: &[&str] = match scenario {
             // The parent ends this process once it saw the held call and the mark.
-            HOLD => std::thread::sleep(BOUND * 2),
-            REFUSE => {
-                let deadline = Instant::now() + BOUND;
-                loop {
-                    let left = deadline.saturating_duration_since(Instant::now());
-                    match received.recv_timeout(left) {
-                        Ok(Event::RegistrationFailed(error)) => {
-                            let error = error.to_string();
-                            assert!(error.contains("VAPID_REQUIRED"), "{error}");
-                            assert!(
-                                error.contains("org.unifiedpush.Distributor.fake"),
-                                "{error}"
-                            );
-                            return;
-                        }
-                        Ok(_) => {}
-                        Err(error) => {
-                            panic!("no RegistrationFailed within {BOUND:?} of a refusal: {error}")
-                        }
-                    }
-                }
+            HOLD => {
+                std::thread::sleep(BOUND * 2);
+                return;
             }
+            REFUSE => &["VAPID_REQUIRED", "org.unifiedpush.Distributor.fake"],
+            UNREGISTER => &["the distributor unregistered the app"],
+            NO_DISTRIBUTOR => &["no UnifiedPush distributor"],
             other => panic!("unknown scenario {other}"),
+        };
+        let deadline = Instant::now() + BOUND;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match received.recv_timeout(left) {
+                Ok(Event::RegistrationFailed(error)) => {
+                    let error = error.to_string();
+                    for part in expected {
+                        assert!(error.contains(part), "{scenario}: {error}");
+                    }
+                    return;
+                }
+                Ok(_) => {}
+                Err(error) => panic!("{scenario}: no RegistrationFailed within {BOUND:?}: {error}"),
+            }
         }
     }
 }
