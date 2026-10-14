@@ -19,7 +19,7 @@ use parking_lot::Mutex;
 
 use crate::backend::Backend;
 use crate::dispatch::DISPATCHER;
-use crate::inbox::Inbox;
+use crate::inbox::{self, Inbox};
 use crate::queue::{Entry, QueueFile};
 use crate::session::Session;
 use crate::token::base64url;
@@ -192,7 +192,7 @@ pub extern "system" fn Java_rs_pushups_Native_onSession<'caller>(
     active: jboolean,
 ) {
     if let Some(runtime) = RUNTIME.get() {
-        runtime.inbox.lock().on_session(active);
+        inbox::session_changed(&runtime.inbox, active);
     }
 }
 
