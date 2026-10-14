@@ -3,17 +3,7 @@
 # with WNS_TENANT_ID, WNS_APP_ID, WNS_OBJECT_ID and WNS_CLIENT_SECRET set.
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-
-# The Foundation package metapackage 2.5.1 depends on, the release ci/windows/bindings.sh pins.
-$Foundation = '2.3.12'
-# WNS may take minutes to answer a channel request.
-$ChannelBound = [TimeSpan]::FromSeconds(240)
-$PushBound = [TimeSpan]::FromSeconds(90)
-$ExitBound = [TimeSpan]::FromSeconds(20)
-
-foreach ($name in 'WNS_TENANT_ID', 'WNS_APP_ID', 'WNS_OBJECT_ID', 'WNS_CLIENT_SECRET') {
-    if (-not [Environment]::GetEnvironmentVariable($name)) { throw "$name is not set" }
-}
+. (Join-Path $PSScriptRoot 'wns.ps1')
 
 $work = Join-Path ($env:RUNNER_TEMP ?? [IO.Path]::GetTempPath()) 'w0'
 $app = Join-Path $work 'app'
@@ -22,26 +12,6 @@ New-Item -ItemType Directory -Force $app | Out-Null
 $exe = Join-Path $app 'pushups-w0-probe.exe'
 $verdict = [Collections.Generic.List[string]]::new()
 $passed = $true
-
-function Note([string] $line) {
-    Write-Host $line
-    $verdict.Add($line)
-}
-
-# Runs `$done` until it returns something or `$bound` passes on a monotonic clock.
-function Wait-Until([TimeSpan] $bound, [scriptblock] $done) {
-    $clock = [Diagnostics.Stopwatch]::StartNew()
-    while ($clock.Elapsed -lt $bound) {
-        $result = & $done
-        if ($result) { return $result }
-        Start-Sleep -Milliseconds 250
-    }
-    return $null
-}
-
-function First-Line([string] $file, [string] $pattern) {
-    Get-Content $file -ErrorAction SilentlyContinue | Where-Object { $_ -match $pattern } | Select-Object -First 1
-}
 
 function Start-Probe([string] $label, [string] $remoteId) {
     $out = Join-Path $work "out-$label"
@@ -84,16 +54,6 @@ function Wait-Channel($probe) {
     $uri
 }
 
-function Send-Push([string] $uri, [string] $token, [string] $payload) {
-    $response = Invoke-WebRequest -Method Post -Uri $uri -TimeoutSec 60 -SkipHttpErrorCheck `
-        -Headers @{ Authorization = "Bearer $token"; 'X-WNS-Type' = 'wns/raw' } `
-        -ContentType 'application/octet-stream' -Body ([Text.Encoding]::UTF8.GetBytes($payload))
-    $wns = foreach ($header in 'X-WNS-Status', 'X-WNS-NotificationStatus', 'X-WNS-Error-Description') {
-        if ($response.Headers.ContainsKey($header)) { "$header=$($response.Headers[$header] -join ',')" }
-    }
-    "HTTP $($response.StatusCode) $($wns -join ' ')"
-}
-
 Note "## W0 on $((Get-CimInstance Win32_OperatingSystem).Caption) $([Environment]::OSVersion.Version)"
 # The Appx module is Windows PowerShell's.
 $runtimes = powershell.exe -NoProfile -Command "Get-AppxPackage -Name 'Microsoft.WindowsAppRuntime*' | ForEach-Object { `$_.Name + ' ' + `$_.Version }"
@@ -121,22 +81,8 @@ if ($channels.Count -eq 0) {
     Note '- no channel, so no push was sent'
     $passed = $false
 } else {
-    try {
-        $token = (Invoke-RestMethod -Method Post -TimeoutSec 60 `
-                -Uri "https://login.microsoftonline.com/$env:WNS_TENANT_ID/oauth2/v2.0/token" `
-                -Body @{
-                grant_type = 'client_credentials'
-                client_id = $env:WNS_APP_ID
-                client_secret = $env:WNS_CLIENT_SECRET
-                scope = 'https://wns.windows.com/.default'
-            }).access_token
-        Write-Host "::add-mask::$token"
-        Note '- access token issued for https://wns.windows.com/.default'
-    } catch {
-        $reason = if ($_.ErrorDetails) { $_.ErrorDetails.Message } else { $_.Exception.Message }
-        Note "- access token refused: $reason"
-        $passed = $false
-    }
+    $token = Get-WnsToken
+    if (-not $token) { $passed = $false }
 }
 
 $delivered = $null
@@ -187,5 +133,5 @@ if ($delivered) {
     } else { $passed = $false }
 }
 
-if ($env:GITHUB_STEP_SUMMARY) { $verdict | Add-Content $env:GITHUB_STEP_SUMMARY }
+Write-Step-Summary
 if (-not $passed) { exit 1 }
