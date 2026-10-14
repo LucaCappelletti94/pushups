@@ -1,5 +1,6 @@
 //! The app both entry points run, `main` on desktop, iOS and the web and `android_main` on Android.
 
+use std::rc::Rc;
 use std::sync::mpsc::{Receiver, channel};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,6 +17,8 @@ use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowId};
+
+use crate::screen::Screen;
 
 /// Installs `pushups`, before the event loop exists.
 pub(crate) fn install() {
@@ -71,10 +74,7 @@ pub(crate) fn run(event_loop: EventLoop) -> Result<(), Box<dyn std::error::Error
         let answer = futures_executor::block_on(pushups::request_permission());
         log(&format!("permission {answer:?}"));
     });
-    Ok(event_loop.run_app(App {
-        window: None,
-        events,
-    })?)
+    Ok(event_loop.run_app(App::new(events))?)
 }
 
 /// Registers, asks for permission, and runs the event loop, which on the web does not block and keeps running in the page's event loop after `main` returns.
@@ -94,30 +94,58 @@ pub(crate) fn run(event_loop: EventLoop) -> Result<(), Box<dyn std::error::Error
         let answer = pushups::request_permission().await;
         log(&format!("permission {answer:?}"));
     });
-    Ok(event_loop.run_app(App {
-        window: None,
-        events,
-    })?)
+    Ok(event_loop.run_app(App::new(events))?)
 }
 
 struct App {
-    window: Option<Box<dyn Window>>,
+    window: Option<Rc<dyn Window>>,
+    screen: Screen,
     events: Receiver<Event>,
+}
+
+impl App {
+    fn new(events: Receiver<Event>) -> Self {
+        Self {
+            window: None,
+            screen: Screen::new(),
+            events,
+        }
+    }
 }
 
 impl ApplicationHandler for App {
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         let attributes = WindowAttributes::default().with_title("pushups winit example");
+        // A desktop or page window starts small, while a phone's fills the screen.
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let attributes = attributes.with_surface_size(winit::dpi::LogicalSize::new(640.0, 400.0));
+        // The page shows the canvas under its heading.
+        #[cfg(target_arch = "wasm32")]
+        let attributes = attributes.with_platform_attributes(Box::new(
+            winit::platform::web::WindowAttributesWeb::default().with_append(true),
+        ));
         match event_loop.create_window(attributes) {
-            Ok(window) => self.window = Some(window),
+            Ok(window) => {
+                let window: Rc<dyn Window> = Rc::from(window);
+                if let Err(error) = self.screen.attach(Rc::clone(&window)) {
+                    log(&format!("drawing surface failed: {error}"));
+                }
+                self.window = Some(window);
+            }
             Err(error) => log(&format!("window failed: {error}")),
         }
         log(&format!("ui ready at_ms={}", now_ms()));
     }
 
+    fn destroy_surfaces(&mut self, _event_loop: &dyn ActiveEventLoop) {
+        self.screen.detach();
+        self.window = None;
+    }
+
     fn proxy_wake_up(&mut self, _event_loop: &dyn ActiveEventLoop) {
         for event in self.events.try_iter() {
             log(&describe(&event));
+            self.screen.push(shown(&event));
         }
     }
 
@@ -127,9 +155,33 @@ impl ApplicationHandler for App {
         _id: WindowId,
         event: WindowEvent,
     ) {
-        if event == WindowEvent::CloseRequested {
-            event_loop.exit();
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::RedrawRequested => self.screen.draw(),
+            WindowEvent::SurfaceResized(_) => {
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            _ => {}
         }
+    }
+}
+
+/// The event as the window shows it, a push as the `body` its payload carries.
+fn shown(event: &Event) -> String {
+    match event {
+        Event::Token(_) => "Registered for pushes".to_owned(),
+        Event::RegistrationFailed(error) => format!("Registration failed: {error}"),
+        Event::Message(message) => {
+            let data: serde_json::Value =
+                serde_json::from_slice(&message.payload).unwrap_or_default();
+            match data.get("body").and_then(serde_json::Value::as_str) {
+                Some(body) => format!("Push: {body}"),
+                None => format!("Push: {}", String::from_utf8_lossy(&message.payload)),
+            }
+        }
+        Event::MessagesDropped => "Some pushes were dropped".to_owned(),
     }
 }
 
