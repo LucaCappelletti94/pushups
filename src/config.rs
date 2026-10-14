@@ -75,6 +75,12 @@ impl VapidPublicKey {
     pub const fn as_bytes(&self) -> &[u8; 65] {
         &self.0
     }
+
+    /// The key's 87 base64url characters, the form the UnifiedPush transports send.
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    pub(crate) fn as_base64url(&self) -> String {
+        crate::token::base64url(&self.0)
+    }
 }
 
 impl From<[u8; 65]> for VapidPublicKey {

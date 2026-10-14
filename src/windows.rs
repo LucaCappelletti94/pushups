@@ -58,7 +58,7 @@ use crate::backend::Backend;
 #[cfg(target_os = "windows")]
 use crate::dispatch::DISPATCHER;
 #[cfg(target_os = "windows")]
-use crate::{Config, Context, Error, Event, Message, Permission, Token};
+use crate::{Config, Error, Event, Message, Permission, Token};
 
 /// The 100-nanosecond ticks from 1601 to the Unix epoch, the base of `Windows.Foundation.DateTime`.
 const EPOCH_1601_TO_1970: i64 = 11_644_473_600 * 10_000_000;
@@ -104,12 +104,6 @@ static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 #[cfg(target_os = "windows")]
 static SETUP: Mutex<()> = Mutex::new(());
 
-/// Maps a platform error into the crate's, keeping its description.
-#[cfg(target_os = "windows")]
-fn platform(error: impl std::fmt::Display) -> Error {
-    Error::Platform(error.to_string())
-}
-
 /// The bootstrapper's entry point, from the DLL next to the app's exe. Loaded at run time, so an
 /// app shipped without it still starts and gets an error from `install`.
 #[cfg(target_os = "windows")]
@@ -141,13 +135,13 @@ fn deliver(
     started_app: bool,
 ) -> Result<(), Error> {
     let deferral = push.GetDeferral().ok();
-    let payload = push.Payload().map_err(platform).map(|payload| {
+    let payload = push.Payload().map_err(Error::platform).map(|payload| {
         let message = Message {
             payload: payload.to_vec(),
             started_app,
         };
         DISPATCHER.emit(Event::Message(message.clone()));
-        run_background_handler(message);
+        crate::__private::run_background_handler(message);
     });
     // The deferral keeps the task alive while the handler runs, so it completes last.
     if let Some(deferral) = deferral.as_ref() {
@@ -172,15 +166,6 @@ fn on_push_received(
         return Ok(());
     };
     deliver(args, false).map_err(|error| windows_core::Error::new(E_FAIL, error.to_string()))
-}
-
-/// Runs the app's `#[background_handler]`, if it has one, catching a panic.
-#[cfg(target_os = "windows")]
-fn run_background_handler(message: Message) {
-    if let Some(handler) = crate::__private::BACKGROUND_HANDLERS.first() {
-        // The panic hook already reported a panic, and the push is out by then.
-        let _ = std::panic::catch_unwind(|| handler(Context { _private: () }, message));
-    }
 }
 
 #[cfg(target_os = "windows")]
@@ -221,8 +206,8 @@ impl Backend for Windows {
                 "the Windows App SDK runtime could not be started: {status}"
             )));
         }
-        let manager = bindings::PushNotificationManager::Default().map_err(platform)?;
-        if !bindings::PushNotificationManager::IsSupported().map_err(platform)? {
+        let manager = bindings::PushNotificationManager::Default().map_err(Error::platform)?;
+        if !bindings::PushNotificationManager::IsSupported().map_err(Error::platform)? {
             return Err(Error::Unsupported);
         }
         let handler = TypedEventHandler::<
@@ -230,18 +215,18 @@ impl Backend for Windows {
             bindings::PushNotificationReceivedEventArgs,
         >::new(on_push_received);
         // The handler must be in before `Register()`, or the runtime throws a COM exception.
-        let _ = manager.PushReceived(&handler).map_err(platform)?;
-        manager.Register().map_err(platform)?;
+        let _ = manager.PushReceived(&handler).map_err(Error::platform)?;
+        manager.Register().map_err(Error::platform)?;
         let args = bindings::AppInstance::GetCurrent()
-            .map_err(platform)?
+            .map_err(Error::platform)?
             .GetActivatedEventArgs()
-            .map_err(platform)?;
-        if args.Kind().map_err(platform)? == bindings::ExtendedActivationKind::Push {
+            .map_err(Error::platform)?;
+        if args.Kind().map_err(Error::platform)? == bindings::ExtendedActivationKind::Push {
             let push = args
                 .Data()
-                .map_err(platform)?
+                .map_err(Error::platform)?
                 .cast::<bindings::PushNotificationReceivedEventArgs>()
-                .map_err(platform)?;
+                .map_err(Error::platform)?;
             deliver(&push, true)?;
         }
         let _ = RUNTIME.set(Runtime { remote_id });
@@ -280,21 +265,24 @@ fn create_channel(remote_id: windows_core::GUID) -> Result<Token, Error> {
     let create = bindings::PushNotificationManager::Default()
         .and_then(|manager| manager.CreateChannelAsync(remote_id))
         .and_then(|operation| operation.join())
-        .map_err(platform)?;
-    let status = create.Status().map_err(platform)?;
+        .map_err(Error::platform)?;
+    let status = create.Status().map_err(Error::platform)?;
     if status != bindings::PushNotificationChannelStatus::CompletedSuccess {
         let extended = create.ExtendedError().unwrap_or(windows_core::HRESULT(0));
         return Err(Error::Platform(format!(
             "WNS failed the channel: {status:?} {extended}"
         )));
     }
-    let channel = create.Channel().map_err(platform)?;
+    let channel = create.Channel().map_err(Error::platform)?;
     let channel_uri = channel
         .Uri()
         .and_then(|uri| uri.ToString())
-        .map_err(platform)?
+        .map_err(Error::platform)?
         .to_string();
-    let ticks = channel.ExpirationTime().map_err(platform)?.UniversalTime;
+    let ticks = channel
+        .ExpirationTime()
+        .map_err(Error::platform)?
+        .UniversalTime;
     let expires = channel_expiry(ticks)
         .ok_or_else(|| Error::Platform(format!("the channel expiry is out of range: {ticks}")))?;
     Ok(Token::Wns {

@@ -114,11 +114,9 @@ impl Backend for Apple {
                     | UNAuthorizationOptions::Sound,
                 &answered,
             );
-        reply.await.unwrap_or_else(|oneshot::Canceled| {
-            Err(Error::Platform(
-                "the permission request ended without an answer".to_owned(),
-            ))
-        })
+        reply
+            .await
+            .unwrap_or_else(|oneshot::Canceled| Err(Error::permission_unanswered()))
     }
 
     /// Binds the process to the handler just set, and hands it the queue.
@@ -145,7 +143,7 @@ fn data_directory() -> Result<PathBuf, Error> {
         .bundleIdentifier()
         .map_or_else(|| "pushups".to_owned(), |id| id.to_string());
     let directory = PathBuf::from(base.to_string()).join(bundle).join("pushups");
-    std::fs::create_dir_all(&directory).map_err(|error| Error::Platform(error.to_string()))?;
+    std::fs::create_dir_all(&directory).map_err(Error::platform)?;
     Ok(directory)
 }
 
@@ -189,7 +187,7 @@ fn token(token: Vec<u8>) {
 }
 
 fn registration_failed(error: String) {
-    DISPATCHER.emit(Event::RegistrationFailed(Error::Platform(error)));
+    DISPATCHER.emit(Event::registration_failed(error));
 }
 
 /// The app's background handler, if `#[pushups::background_handler]` exported one.

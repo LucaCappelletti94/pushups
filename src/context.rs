@@ -3,8 +3,22 @@ use std::ffi::c_void;
 
 /// What a [`background_handler`](crate::background_handler) runs with, on every platform.
 ///
-/// On Android it carries the raw `JavaVM` and `Context`, in the shape `ndk_context::AndroidContext` uses, so the handler can hand them to `jni::JavaVM::from_raw` or to `ndk_context::initialize_android_context`. They are valid only until the handler returns, and the `Context` is a local reference of the calling thread. On Apple it carries nothing yet.
+/// On Android it carries the raw `JavaVM` and `Context`, in the shape `ndk_context::AndroidContext` uses, so the handler can hand them to `jni::JavaVM::from_raw` or to `ndk_context::initialize_android_context`. They are valid only until the handler returns, and the `Context` is a local reference of the calling thread. Elsewhere it carries nothing yet, and `Context::default()` builds one, so a test can call a handler directly.
+///
+/// ```
+/// # #[cfg(not(target_os = "android"))] {
+/// use pushups::{Context, Message};
+///
+/// fn on_push(_context: Context, message: Message) -> usize {
+///     message.payload.len()
+/// }
+///
+/// let message = Message { payload: b"{}".to_vec(), started_app: false };
+/// assert_eq!(on_push(Context::default(), message), 2);
+/// # }
+/// ```
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(not(target_os = "android"), derive(Default))]
 pub struct Context {
     #[cfg(target_os = "android")]
     pub(crate) vm: *mut c_void,

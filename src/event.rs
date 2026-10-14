@@ -14,6 +14,20 @@ pub enum Event {
     MessagesDropped,
 }
 
+#[cfg(any(
+    target_os = "android",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "macos",
+    test
+))]
+impl Event {
+    /// The platform's reason it gave no token.
+    pub(crate) fn registration_failed(reason: impl Into<String>) -> Self {
+        Self::RegistrationFailed(crate::Error::Platform(reason.into()))
+    }
+}
+
 /// A received push.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
