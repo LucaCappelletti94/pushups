@@ -5,11 +5,12 @@
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { extname, join, normalize, resolve } from "node:path";
+import { join, normalize, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
 import puppeteer from "puppeteer-core";
 import webpush from "web-push";
+import { attachWorkerConsoles, pushWithRetry, serveSite } from "./webpush.mjs";
 
 const [engine, outArgument, ...only] = process.argv.slice(2);
 if (!["chrome", "firefox"].includes(engine) || !outArgument) {
@@ -17,13 +18,10 @@ if (!["chrome", "firefox"].includes(engine) || !outArgument) {
 }
 const out = resolve(outArgument);
 const site = resolve(import.meta.dirname, "site");
-const TYPES = { ".html": "text/html", ".js": "text/javascript", ".wasm": "application/wasm" };
 const WAIT_MS = 30_000;
 // A fresh Chrome profile checks in with Google before its first subscription, which took 33 s.
 const SUBSCRIBE_MS = 120_000;
 const PUSH_TIMEOUT_MS = 15_000;
-// FCM answered 410 to a subscription made a quarter second earlier in 4 of 12 tries, and 201 three seconds later.
-const PUSH_GONE_RETRY_MS = 30_000;
 
 const vapid = webpush.generateVAPIDKeys();
 webpush.setVapidDetails("mailto:pushups-ci@users.noreply.github.com", vapid.publicKey, vapid.privateKey);
@@ -63,6 +61,8 @@ function scopedWorker() {
   ]);
 }
 
+const siteHandler = serveSite(site);
+
 function serve() {
   const server = createServer((request, response) => {
     const path = normalize(new URL(request.url, "http://localhost").pathname);
@@ -71,18 +71,7 @@ function serve() {
       response.end(scopedWorker());
       return;
     }
-    const file = join(site, path === "/" ? "index.html" : path);
-    if (!file.startsWith(site)) {
-      response.writeHead(403).end();
-      return;
-    }
-    try {
-      const body = readFileSync(file);
-      response.writeHead(200, { "Content-Type": TYPES[extname(file)] ?? "application/octet-stream" });
-      response.end(body);
-    } catch {
-      response.writeHead(404).end();
-    }
+    siteHandler(request, response);
   });
   return new Promise((done) => {
     server.listen(0, "127.0.0.1", () => done({ server, origin: `http://127.0.0.1:${server.address().port}` }));
@@ -122,21 +111,17 @@ async function saveWorkers(browser, label) {
   }
 }
 
-/** Sends one push, retrying a 410 for a while, since FCM gives it for a subscription it has not propagated yet. */
+/** Sends one push with the probe's token as the subscription. */
 async function push(token, payload) {
-  const subscription = { endpoint: token.endpoint, keys: { p256dh: token.p256dh, auth: token.auth } };
-  const deadline = performance.now() + PUSH_GONE_RETRY_MS;
-  for (;;) {
-    try {
-      const sent = await webpush.sendNotification(subscription, payload, { TTL: 300, timeout: PUSH_TIMEOUT_MS });
-      log(`sent ${JSON.stringify(payload)}: HTTP ${sent.statusCode}`);
-      return;
-    } catch (error) {
-      if (error.statusCode !== 410 || performance.now() > deadline) throw error;
-      log(`sending ${JSON.stringify(payload)}: HTTP 410, retrying`);
-      await sleep(1000);
-    }
-  }
+  await pushWithRetry(
+    { endpoint: token.endpoint, keys: { p256dh: token.p256dh, auth: token.auth } },
+    payload,
+    {
+      timeout: PUSH_TIMEOUT_MS,
+      onSent: (sent) => log(`sent ${JSON.stringify(payload)}: HTTP ${sent.statusCode}`),
+      on410: () => log(`sending ${JSON.stringify(payload)}: HTTP 410, retrying`),
+    },
+  );
 }
 
 class Probe {
@@ -237,16 +222,7 @@ async function withBrowser(origin, permission, body) {
       },
     };
   const browser = await puppeteer.launch({ headless: true, ...options });
-  browser.on("targetcreated", (target) => {
-    if (target.type() !== "service_worker") return;
-    target.worker().then(
-      (worker) => {
-        worker?.on("console", (message) => log(`worker: ${message.text()}`));
-        worker?.on("error", (error) => log(`worker error: ${error.message}`));
-      },
-      (error) => log(`could not attach to ${target.url()}: ${error.message}`),
-    );
-  });
+  attachWorkerConsoles(browser, (text) => log(`worker: ${text}`), { log, onError: log });
   try {
     await browser.setPermission(origin, { permission: { name: "notifications" }, state: permission });
     await body(browser);
