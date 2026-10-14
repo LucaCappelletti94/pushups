@@ -4,6 +4,8 @@
 use crate::dispatch::DISPATCHER;
 use crate::queue::{Entry, QueueFile};
 use crate::session::{Route, Session};
+#[cfg(any(target_os = "android", test))]
+use parking_lot::Mutex;
 
 /// The session and the queue it writes to. Callers keep it under the lock that orders their
 /// events and call `DISPATCHER.flush()` once the lock is released.
@@ -19,7 +21,7 @@ impl Inbox {
 
     /// A UI session began (`true`) or ended (`false`), which only Android reports while running.
     /// A session that begins after a handler was set binds to it and drains the queue into it.
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", test))]
     pub(crate) fn on_session(&mut self, active: bool) {
         let (next, drain) = self.session.on_session(active);
         if drain {
@@ -65,5 +67,46 @@ impl Inbox {
             }
             Err(_) => self.session = unread,
         }
+    }
+}
+
+/// A UI session began (`true`) or ended (`false`) on the inbox behind `inbox`, then delivers what
+/// the session drained once the lock is released.
+#[cfg(any(target_os = "android", test))]
+pub(crate) fn session_changed(inbox: &Mutex<Inbox>, active: bool) {
+    inbox.lock().on_session(active);
+    DISPATCHER.flush();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::Event;
+
+    /// A headless process whose handler is set queues to the file, and the UI session that then
+    /// begins hands the queue to that handler with no later event needed to deliver it.
+    #[test]
+    fn a_session_beginning_after_a_headless_handler_delivers_the_queue() {
+        let dir = tempfile::tempdir().unwrap();
+        let inbox = Mutex::new(Inbox::new(
+            Session::Headless,
+            QueueFile::new(dir.path().join("queue")),
+        ));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        DISPATCHER.set_handler(Arc::new(move |event| sink.lock().push(event)));
+        inbox.lock().handler_set();
+        inbox.lock().receive(Entry::FcmToken("queued".to_owned()));
+        assert!(
+            seen.lock().is_empty(),
+            "a headless process persists its events"
+        );
+        session_changed(&inbox, true);
+        assert_eq!(
+            *seen.lock(),
+            vec![Event::Token(crate::Token::Fcm("queued".to_owned()))]
+        );
     }
 }
