@@ -243,8 +243,14 @@ pub(crate) async fn notification_for(message: Message) -> pushups::Notification 
     let at = now_ms();
     let line = timing(&message, at);
     log(&format!("worker push at_ms={at} {line}"));
-    pushups::Notification::new("pushups from Rust")
-        .body(format!("pushups winit example, {line}"))
+    let data: serde_json::Value = serde_json::from_slice(&message.payload).unwrap_or_default();
+    let text = |name: &str| {
+        data.get(name)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    pushups::Notification::new(text("title").unwrap_or_else(|| "pushups from Rust".to_owned()))
+        .body(text("body").unwrap_or_else(|| format!("pushups winit example, {line}")))
         .navigate("/")
 }
 
