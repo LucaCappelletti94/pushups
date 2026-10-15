@@ -125,7 +125,7 @@ fn App() -> Element {
             }
             p { class: "muted", "permission: " {permission.read().clone().unwrap_or_default()} }
             for line in lines.read().iter() {
-                p { class: "line", "{line}" }
+                p { class: "line", {line.clone()} }
             }
         }
     }
