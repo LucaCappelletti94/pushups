@@ -14,7 +14,7 @@ use futures_channel::oneshot;
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{Global, JByteArray, JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jlong};
-use jni::{EnvUnowned, JavaVM, jni_sig, jni_str};
+use jni::{Env, EnvUnowned, JavaVM, jni_sig, jni_str};
 use parking_lot::Mutex;
 
 use crate::backend::Backend;
@@ -133,6 +133,15 @@ fn receive(entry: Entry) {
     DISPATCHER.flush();
 }
 
+/// Runs `body` in the calling native method's environment, where a JNI error throws a
+/// `RuntimeException` back to the Kotlin caller and returns `T`'s default.
+pub(crate) fn throwing<'local, T: Default>(
+    unowned: &mut EnvUnowned<'local>,
+    body: impl FnOnce(&mut Env<'local>) -> jni::errors::Result<T>,
+) -> T {
+    unowned.with_env(body).resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `Native.handshake(moduleVersion)`, from `PushupsProvider.onCreate` before any other export.
 /// Whether the Kotlin module is this crate's version. Its signature never changes, so a module
 /// and a crate of any two versions can make this call.
@@ -142,9 +151,7 @@ pub extern "system" fn Java_rs_pushups_Native_handshake<'caller>(
     _class: JClass<'caller>,
     module_version: JString<'caller>,
 ) -> jboolean {
-    let module = unowned
-        .with_env(|env| -> jni::errors::Result<String> { module_version.try_to_string(env) })
-        .resolve::<ThrowRuntimeExAndDefault>();
+    let module = throwing(&mut unowned, |env| module_version.try_to_string(env));
     if module == env!("CARGO_PKG_VERSION") {
         return true;
     }
@@ -160,25 +167,23 @@ pub extern "system" fn Java_rs_pushups_Native_init<'caller>(
     _context: JObject<'caller>,
     files_dir: JString<'caller>,
 ) {
-    unowned
-        .with_env(|env| -> jni::errors::Result<()> {
-            let files_dir = PathBuf::from(files_dir.try_to_string(env)?);
-            // Looked up inside a call from Kotlin, so the app's class loader finds it.
-            let pushups = env.find_class(jni_str!("rs/pushups/Pushups"))?;
-            let pushups = env.new_global_ref(pushups)?;
-            let vm = env.get_java_vm()?;
-            // The provider runs once per process, and a second call has nothing new to give.
-            let _ = RUNTIME.set(Runtime {
-                vm,
-                pushups,
-                inbox: Mutex::new(Inbox::new(
-                    Session::default(),
-                    QueueFile::new(files_dir.join(QUEUE_FILE)),
-                )),
-            });
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+    throwing(&mut unowned, |env| {
+        let files_dir = PathBuf::from(files_dir.try_to_string(env)?);
+        // Looked up inside a call from Kotlin, so the app's class loader finds it.
+        let pushups = env.find_class(jni_str!("rs/pushups/Pushups"))?;
+        let pushups = env.new_global_ref(pushups)?;
+        let vm = env.get_java_vm()?;
+        // The provider runs once per process, and a second call has nothing new to give.
+        let _ = RUNTIME.set(Runtime {
+            vm,
+            pushups,
+            inbox: Mutex::new(Inbox::new(
+                Session::default(),
+                QueueFile::new(files_dir.join(QUEUE_FILE)),
+            )),
+        });
+        Ok(())
+    });
 }
 
 /// `Native.onSession(active)`, when a UI session begins or ends.
@@ -200,12 +205,10 @@ pub extern "system" fn Java_rs_pushups_Native_onToken<'caller>(
     _class: JClass<'caller>,
     token: JString<'caller>,
 ) {
-    unowned
-        .with_env(|env| -> jni::errors::Result<()> {
-            receive(Entry::FcmToken(token.try_to_string(env)?));
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+    throwing(&mut unowned, |env| {
+        receive(Entry::FcmToken(token.try_to_string(env)?));
+        Ok(())
+    });
 }
 
 /// `Native.onMessage(payload, startedApp)`, from `onMessageReceived` and notification taps.
@@ -216,16 +219,14 @@ pub extern "system" fn Java_rs_pushups_Native_onMessage<'caller>(
     payload: JByteArray<'caller>,
     started_app: jboolean,
 ) {
-    unowned
-        .with_env(|env| -> jni::errors::Result<()> {
-            let payload = env.convert_byte_array(&payload)?;
-            receive(Entry::Message(Message {
-                payload,
-                started_app,
-            }));
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+    throwing(&mut unowned, |env| {
+        let payload = env.convert_byte_array(&payload)?;
+        receive(Entry::Message(Message {
+            payload,
+            started_app,
+        }));
+        Ok(())
+    });
 }
 
 /// `Native.onMessagesDropped()`, from `onDeletedMessages`.
@@ -246,25 +247,23 @@ pub extern "system" fn Java_rs_pushups_Native_onWebPushToken<'caller>(
     p256dh: JByteArray<'caller>,
     auth: JByteArray<'caller>,
 ) {
-    unowned
-        .with_env(|env| -> jni::errors::Result<()> {
-            let endpoint = endpoint.try_to_string(env)?;
-            let p256dh = env.convert_byte_array(&p256dh)?;
-            let auth = env.convert_byte_array(&auth)?;
-            let entry = match (<[u8; 65]>::try_from(p256dh), <[u8; 16]>::try_from(auth)) {
-                (Ok(p256dh), Ok(auth)) => Entry::WebPushToken {
-                    endpoint,
-                    p256dh,
-                    auth,
-                },
-                _ => Entry::RegistrationFailed(
-                    "the distributor's endpoint has no valid Web Push keys".to_owned(),
-                ),
-            };
-            receive(entry);
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+    throwing(&mut unowned, |env| {
+        let endpoint = endpoint.try_to_string(env)?;
+        let p256dh = env.convert_byte_array(&p256dh)?;
+        let auth = env.convert_byte_array(&auth)?;
+        let entry = match (<[u8; 65]>::try_from(p256dh), <[u8; 16]>::try_from(auth)) {
+            (Ok(p256dh), Ok(auth)) => Entry::WebPushToken {
+                endpoint,
+                p256dh,
+                auth,
+            },
+            _ => Entry::RegistrationFailed(
+                "the distributor's endpoint has no valid Web Push keys".to_owned(),
+            ),
+        };
+        receive(entry);
+        Ok(())
+    });
 }
 
 /// `Native.onUnregistered()`, when the UnifiedPush distributor dropped the registration.
@@ -284,22 +283,20 @@ pub extern "system" fn Java_rs_pushups_Native_onRegistered<'caller>(
     token: JString<'caller>,
     error: JString<'caller>,
 ) {
-    unowned
-        .with_env(|env| -> jni::errors::Result<()> {
-            let event = if token.is_null() {
-                let reason = if error.is_null() {
-                    "FCM gave neither a token nor an error".to_owned()
-                } else {
-                    error.try_to_string(env)?
-                };
-                Event::registration_failed(reason)
+    throwing(&mut unowned, |env| {
+        let event = if token.is_null() {
+            let reason = if error.is_null() {
+                "FCM gave neither a token nor an error".to_owned()
             } else {
-                Event::Token(Token::Fcm(token.try_to_string(env)?))
+                error.try_to_string(env)?
             };
-            DISPATCHER.emit(event);
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+            Event::registration_failed(reason)
+        } else {
+            Event::Token(Token::Fcm(token.try_to_string(env)?))
+        };
+        DISPATCHER.emit(event);
+        Ok(())
+    });
 }
 
 /// `Native.onPermissionResult(requestId, granted)`, the answer to [`request_permission`].
