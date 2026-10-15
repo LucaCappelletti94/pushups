@@ -1,5 +1,7 @@
 [application]
 name = "pushups-dioxus-example"
+# `dx` uses this file as it is, in place of the manifest it renders.
+android_manifest = "android/AndroidManifest.xml"
 
 [web.app]
 title = "pushups example"
