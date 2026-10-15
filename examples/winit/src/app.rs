@@ -58,8 +58,8 @@ fn config() -> Config {
     })
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-/// Registers, asks for permission, and runs the event loop until the app exits.
+/// Registers, asks for permission, and runs the event loop. On the web the loop does not block
+/// and keeps running in the page's event loop after `main` returns.
 pub(crate) fn run(event_loop: EventLoop) -> Result<(), Box<dyn std::error::Error>> {
     let proxy = event_loop.create_proxy();
     let (sender, events) = channel();
@@ -71,31 +71,26 @@ pub(crate) fn run(event_loop: EventLoop) -> Result<(), Box<dyn std::error::Error
     if let Err(error) = pushups::register() {
         log(&format!("register failed: {error}"));
     }
+    request_permission();
+    Ok(event_loop.run_app(App::new(events))?)
+}
+
+/// Asks for permission and logs the answer, off the thread that runs the event loop.
+#[cfg(not(target_arch = "wasm32"))]
+fn request_permission() {
     std::thread::spawn(|| {
         let answer = futures_executor::block_on(pushups::request_permission());
         log(&format!("permission {answer:?}"));
     });
-    Ok(event_loop.run_app(App::new(events))?)
 }
 
-/// Registers, asks for permission, and runs the event loop, which on the web does not block and keeps running in the page's event loop after `main` returns.
+/// Asks for permission and logs the answer, in the page's event loop.
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn run(event_loop: EventLoop) -> Result<(), Box<dyn std::error::Error>> {
-    let proxy = event_loop.create_proxy();
-    let (sender, events) = channel();
-    pushups::set_handler(move |event| {
-        // A closed channel means the app is exiting.
-        let _ = sender.send(event);
-        proxy.wake_up();
-    });
-    if let Err(error) = pushups::register() {
-        log(&format!("register failed: {error}"));
-    }
-    wasm_bindgen_futures::spawn_local(async move {
+fn request_permission() {
+    wasm_bindgen_futures::spawn_local(async {
         let answer = pushups::request_permission().await;
         log(&format!("permission {answer:?}"));
     });
-    Ok(event_loop.run_app(App::new(events))?)
 }
 
 struct App {
