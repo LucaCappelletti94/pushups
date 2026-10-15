@@ -20,10 +20,13 @@ impl Inbox {
     }
 
     /// A UI session began (`true`) or ended (`false`), which only Android reports while running.
-    /// A session that begins after a handler was set binds to it and drains the queue into it.
+    /// A session that begins after a handler was set binds to it and drains the queue into it,
+    /// and a handler kept from the session before binds only while the thread that set it runs.
     #[cfg(any(target_os = "android", test))]
     pub(crate) fn on_session(&mut self, active: bool) {
-        let (next, drain) = self.session.on_session(active);
+        let (next, drain) = self
+            .session
+            .on_session(active, DISPATCHER.handler_thread_alive());
         if drain {
             self.drain_into(next, Session::Unbound);
         } else {

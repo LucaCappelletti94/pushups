@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
+#[cfg(any(target_os = "android", test))]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::{Mutex, MutexGuard};
 
@@ -24,8 +26,35 @@ pub(crate) struct Dispatcher {
 
 struct State {
     handler: Option<Arc<Handler>>,
+    /// Cleared when the thread that set `handler` exits.
+    #[cfg(any(target_os = "android", test))]
+    setter_alive: Option<Arc<AtomicBool>>,
     queue: VecDeque<Event>,
     delivering: bool,
+}
+
+/// A flag per thread, cleared by its thread-local destructor when the thread exits.
+#[cfg(any(target_os = "android", test))]
+struct ThreadAlive(Arc<AtomicBool>);
+
+#[cfg(any(target_os = "android", test))]
+impl Drop for ThreadAlive {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+thread_local! {
+    static THREAD_ALIVE: ThreadAlive = ThreadAlive(Arc::new(AtomicBool::new(true)));
+}
+
+/// The calling thread's flag. A thread already tearing down its thread-locals counts as exited.
+#[cfg(any(target_os = "android", test))]
+fn current_thread_alive() -> Arc<AtomicBool> {
+    THREAD_ALIVE
+        .try_with(|alive| Arc::clone(&alive.0))
+        .unwrap_or_else(|_| Arc::new(AtomicBool::new(false)))
 }
 
 impl Dispatcher {
@@ -33,6 +62,8 @@ impl Dispatcher {
         Self {
             state: Mutex::new(State {
                 handler: None,
+                #[cfg(any(target_os = "android", test))]
+                setter_alive: None,
                 queue: VecDeque::new(),
                 delivering: false,
             }),
@@ -43,7 +74,21 @@ impl Dispatcher {
     pub(crate) fn set_handler(&self, handler: Arc<Handler>) {
         let mut state = self.state.lock();
         state.handler = Some(handler);
+        #[cfg(any(target_os = "android", test))]
+        {
+            state.setter_alive = Some(current_thread_alive());
+        }
         self.deliver(state);
+    }
+
+    /// Whether a handler is set and the thread that set it still runs.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn handler_thread_alive(&self) -> bool {
+        self.state
+            .lock()
+            .setter_alive
+            .as_ref()
+            .is_some_and(|alive| alive.load(Ordering::Acquire))
     }
 
     #[cfg_attr(
@@ -324,5 +369,19 @@ mod tests {
         dispatcher.set_handler(Arc::new(|_| {}));
         let received: Vec<Event> = futures_executor::block_on_stream(events).collect();
         assert_eq!(received, [message(1), message(2)]);
+    }
+
+    #[test]
+    fn the_handler_reports_whether_the_thread_that_set_it_still_runs() {
+        let dispatcher = Arc::new(Dispatcher::new());
+        assert!(!dispatcher.handler_thread_alive(), "no handler is set");
+        let (_, handler) = recorder();
+        dispatcher.set_handler(handler);
+        assert!(dispatcher.handler_thread_alive());
+        let setter = Arc::clone(&dispatcher);
+        thread::spawn(move || setter.set_handler(recorder().1))
+            .join()
+            .unwrap();
+        assert!(!dispatcher.handler_thread_alive());
     }
 }
