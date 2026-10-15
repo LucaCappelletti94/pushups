@@ -13,7 +13,7 @@ use std::process::ExitCode;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use pushups::{Config, Event, LinuxConfig, Message, UnifiedPushConfig};
+use pushups::{Config, Event, LinuxConfig, Message, UnifiedPushConfig, VapidPublicKey};
 
 const APP_ID: &str = "rs.pushups.LinuxProbe";
 const RUN_BOUND: Duration = Duration::from_secs(300);
@@ -62,20 +62,16 @@ fn on_event(event: Event) {
     }
 }
 
-fn vapid_public_key() -> Option<[u8; 65]> {
-    let hex = std::env::var("PROBE_VAPID_HEX").ok()?;
-    let bytes: Vec<u8> = (0..hex.len())
-        .step_by(2)
-        .map(|index| u8::from_str_radix(hex.get(index..index + 2)?, 16).ok())
-        .collect::<Option<_>>()?;
-    bytes.try_into().ok()
-}
-
 fn main() -> ExitCode {
     let _ = fs::create_dir_all(out_dir());
-    let Some(vapid) = vapid_public_key() else {
-        append("events.log", "PROBE_VAPID_HEX is not a 65-byte hex key");
-        return ExitCode::FAILURE;
+    let vapid = match VapidPublicKey::from_base64url(
+        &std::env::var("PROBE_VAPID_B64URL").unwrap_or_default(),
+    ) {
+        Ok(vapid) => vapid,
+        Err(error) => {
+            append("events.log", &format!("PROBE_VAPID_B64URL: {error}"));
+            return ExitCode::FAILURE;
+        }
     };
     let config = Config::new()
         .linux(LinuxConfig::new(APP_ID))

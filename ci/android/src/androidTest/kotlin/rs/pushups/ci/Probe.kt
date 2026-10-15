@@ -6,9 +6,9 @@ object Probe {
     @JvmStatic
     external fun install(): String?
 
-    /** `null`, or the error of `pushups::install` with a UnifiedPush part for the hex VAPID key. */
+    /** `null`, or the error of `pushups::install` with a UnifiedPush part for the base64url VAPID key. */
     @JvmStatic
-    external fun installWithVapid(vapidHex: String): String?
+    external fun installWithVapid(vapid: String): String?
 
     /** Sets a handler that records every event as a line. */
     @JvmStatic
