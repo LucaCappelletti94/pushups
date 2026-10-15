@@ -1,6 +1,6 @@
 #!/bin/bash
 # Runs inside the test bed (ci/linux/testbed.sh) and walks the probe through the plan's Linux
-# delivery table with real pushes through ntfy.sh. Reads /out/vapid.pem and /out/vapid.hex, writes
+# delivery table with real pushes through ntfy.sh. Reads /out/vapid.pem and /out/vapid.b64url, writes
 # the probe's logs to /out/run and its coverage profiles to /out/profraw.
 set -euo pipefail
 # shellcheck source=ci/linux/lib.sh
@@ -13,8 +13,8 @@ send=$bin/send
 app_id=rs.pushups.LinuxProbe
 
 export PROBE_OUT=$run_dir
-PROBE_VAPID_HEX=$(cat /out/vapid.hex)
-export PROBE_VAPID_HEX
+PROBE_VAPID_B64URL=$(cat /out/vapid.b64url)
+export PROBE_VAPID_B64URL
 export LLVM_PROFILE_FILE=/out/profraw/%p-%m.profraw
 # The host's user, whose uid need not be the container's, must be able to delete what lands here.
 umask 0000
@@ -24,7 +24,7 @@ mkdir -p "$PROBE_OUT" /out/profraw
 busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus \
     UpdateActivationEnvironment 'a{ss}' 5 \
     HOME "$HOME" XDG_DATA_HOME "$XDG_DATA_HOME" PROBE_OUT "$PROBE_OUT" \
-    PROBE_VAPID_HEX "$PROBE_VAPID_HEX" LLVM_PROFILE_FILE "$LLVM_PROFILE_FILE"
+    PROBE_VAPID_B64URL "$PROBE_VAPID_B64URL" LLVM_PROFILE_FILE "$LLVM_PROFILE_FILE"
 
 # shellcheck disable=SC2034
 # shellcheck disable=SC2034

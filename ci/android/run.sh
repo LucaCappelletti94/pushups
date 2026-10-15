@@ -43,7 +43,7 @@ fi
 
 # The app server's side of Web Push: a fresh VAPID key pair and the `web-push` crate's sender.
 vapid_generate "$out"
-vapid_hex=$(vapid_public_hex "$out/vapid.pem")
+vapid_b64url=$(vapid_public_b64url "$out/vapid.pem")
 (cd "$root/ci/linux/probe" && cargo build --quiet --bin send)
 
 # The screen stays on and unlocked while the tests run, since install checks, the prompt and the
@@ -113,10 +113,10 @@ run_variant no-background-handler config-real default NoBackgroundHandlerTest
 run_variant unconfigured "" default RegistrationFailsTest expect "FCM is not configured"
 run_variant mismatched config-mismatched default RegistrationFailsTest expect "FCM is not configured"
 run_variant rejected config-fixture default RegistrationFailsTest expect "Please set a valid API key"
-run_variant unifiedpush "config-real background-handler" default UnifiedPushTest vapid "$vapid_hex" endpoint https://ntfy.sh/
+run_variant unifiedpush "config-real background-handler" default UnifiedPushTest vapid "$vapid_b64url" endpoint https://ntfy.sh/
 # With ntfy disabled the device has no distributor, so the same configuration registers through FCM.
 adb shell pm disable-user --user 0 io.heckel.ntfy >/dev/null
-run_variant unifiedpush-fallback "config-real background-handler" default UnifiedPushFallbackTest vapid "$vapid_hex"
+run_variant unifiedpush-fallback "config-real background-handler" default UnifiedPushFallbackTest vapid "$vapid_b64url"
 adb shell pm enable io.heckel.ntfy >/dev/null
 # A tap into a running singleTop Activity, plain and androidx.
 run_variant single-top "config-real background-handler" single-top SingleTopTapTest

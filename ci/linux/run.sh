@@ -18,9 +18,9 @@ target=x86_64-unknown-linux-gnu
   RUSTFLAGS="-Cinstrument-coverage" cargo build --quiet --target "$target"
 )
 
-# A fresh VAPID key pair for the app's server, as the private PEM and the raw public point in hex.
+# A fresh VAPID key pair for the app's server, as the private PEM and the raw public point in base64url.
 vapid_generate "$out"
-vapid_public_hex "$out/vapid.pem" > "$out/vapid.hex"
+vapid_public_b64url "$out/vapid.pem" > "$out/vapid.b64url"
 chmod -R a+rwX "$out"
 
 PUSHUPS_TESTBED_OUT="$out" "$ci/testbed.sh" bash /work/ci/linux/scenario.sh
