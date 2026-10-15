@@ -48,7 +48,9 @@ fn main() {
             #[cfg(feature = "tao-1364")]
             TaoEvent::PushRegistration(token) => log(&format!("tao token bytes={}", token.len())),
             #[cfg(feature = "tao-1364")]
-            TaoEvent::PushRegistrationError(error) => log(&format!("tao registration failed {error}")),
+            TaoEvent::PushRegistrationError(error) => {
+                log(&format!("tao registration failed {error}"))
+            }
             #[cfg(feature = "tao-1364")]
             TaoEvent::RemoteNotification { payload, .. } => log(&format!(
                 "tao push payload={}",
@@ -62,11 +64,10 @@ fn main() {
 fn describe(event: &Event) -> String {
     let at = now_ms();
     match event {
-        Event::Token(pushups::Token::Apns(token)) => {
-            let hex: String = token.iter().map(|byte| format!("{byte:02x}")).collect();
-            format!("ui token at_ms={at} apns={hex}")
-        }
-        Event::Token(token) => format!("ui token at_ms={at} {token:?}"),
+        Event::Token(token) => match token.apns_device_token() {
+            Some(hex) => format!("ui token at_ms={at} apns={hex}"),
+            None => format!("ui token at_ms={at} {token:?}"),
+        },
         Event::RegistrationFailed(error) => format!("ui registration failed at_ms={at} {error}"),
         Event::Message(message) => format!(
             "ui message at_ms={at} started_app={} payload={}",
@@ -99,7 +100,11 @@ fn log(line: &str) {
     let line = format!("pushups-tao-example {line}");
     println!("{line}");
     let path = std::env::temp_dir().join("pushups-example.log");
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         // One write per line, so lines from the handler thread and the UI never interleave.
         let _ = file.write_all(format!("{line}\n").as_bytes());
     }

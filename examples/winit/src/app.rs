@@ -37,7 +37,8 @@ fn config() -> Config {
         config = config.windows(WnsConfig::new(remote_id));
     }
     if let Some(key) = option_env!("PUSHUPS_VAPID_PUBLIC_KEY") {
-        let key = VapidPublicKey::from_base64url(key).expect("PUSHUPS_VAPID_PUBLIC_KEY is a VAPID key");
+        let key =
+            VapidPublicKey::from_base64url(key).expect("PUSHUPS_VAPID_PUBLIC_KEY is a VAPID key");
         config = config.unified_push(UnifiedPushConfig::new(key));
     }
     config
@@ -173,14 +174,11 @@ fn shown(event: &Event) -> String {
     match event {
         Event::Token(_) => "Registered for pushes".to_owned(),
         Event::RegistrationFailed(error) => format!("Registration failed: {error}"),
-        Event::Message(message) => {
-            let data: serde_json::Value =
-                serde_json::from_slice(&message.payload).unwrap_or_default();
-            match data.get("body").and_then(serde_json::Value::as_str) {
-                Some(body) => format!("Push: {body}"),
-                None => format!("Push: {}", String::from_utf8_lossy(&message.payload)),
-            }
-        }
+        Event::Message(message) => format!(
+            "Push: {}",
+            field(message, "body")
+                .unwrap_or_else(|| String::from_utf8_lossy(&message.payload).into_owned())
+        ),
         Event::MessagesDropped => "Some pushes were dropped".to_owned(),
     }
 }
@@ -226,11 +224,11 @@ fn on_push(_context: Context, message: Message) {
 /// Shows the push as a desktop popup, which Windows and Linux leave to the app.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 fn popup(message: &Message) {
-    let data: serde_json::Value = serde_json::from_slice(&message.payload).unwrap_or_default();
-    let text = |name: &str| data.get(name).and_then(serde_json::Value::as_str);
+    let title = field(message, "title").unwrap_or_else(|| "pushups".to_owned());
+    let body = field(message, "body").unwrap_or_else(|| "A push arrived".to_owned());
     let shown = notify_rust::Notification::new()
-        .summary(text("title").unwrap_or("pushups"))
-        .body(text("body").unwrap_or("A push arrived"))
+        .summary(&title)
+        .body(&body)
         .show();
     if let Err(error) = shown {
         log(&format!("popup failed: {error}"));
@@ -243,15 +241,17 @@ pub(crate) async fn notification_for(message: Message) -> pushups::Notification 
     let at = now_ms();
     let line = timing(&message, at);
     log(&format!("worker push at_ms={at} {line}"));
-    let data: serde_json::Value = serde_json::from_slice(&message.payload).unwrap_or_default();
-    let text = |name: &str| {
-        data.get(name)
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned)
-    };
-    pushups::Notification::new(text("title").unwrap_or_else(|| "pushups from Rust".to_owned()))
-        .body(text("body").unwrap_or_else(|| format!("pushups winit example, {line}")))
-        .navigate("/")
+    pushups::Notification::new(
+        field(&message, "title").unwrap_or_else(|| "pushups from Rust".to_owned()),
+    )
+    .body(field(&message, "body").unwrap_or_else(|| format!("pushups winit example, {line}")))
+    .navigate("/")
+}
+
+/// The payload's string field `name`, for a JSON payload that carries it.
+fn field(message: &Message, name: &str) -> Option<String> {
+    let data: serde_json::Value = serde_json::from_slice(&message.payload).ok()?;
+    data.get(name)?.as_str().map(str::to_owned)
 }
 
 /// The push's `seq` and its latency from the sender's `sent_at_ms` to `at`, for a JSON payload
