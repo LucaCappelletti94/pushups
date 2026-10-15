@@ -56,7 +56,6 @@ pub mod apple {
 #[cfg(target_os = "android")]
 pub mod android {
     use jni::EnvUnowned;
-    use jni::errors::ThrowRuntimeExAndDefault;
     use jni::objects::{JByteArray, JObjectArray, JString};
     pub use jni::sys::{JNIEnv, jboolean, jbyteArray, jclass, jobject, jobjectArray, jstring};
 
@@ -81,30 +80,28 @@ pub mod android {
     ) -> jobjectArray {
         // SAFETY: the JVM passed `env` to the native method running now.
         let mut unowned = unsafe { EnvUnowned::from_raw(env) };
-        unowned
-            .with_env(|env| -> jni::errors::Result<_> {
-                // SAFETY: a `String` local reference of this call, wrapped once.
-                let package_name = unsafe { JString::from_raw(env, package_name) };
-                let package_name = package_name.try_to_string(env)?;
-                let Some(client) = super::select_client(clients, &package_name) else {
-                    return Ok(JObjectArray::<JString>::default());
-                };
-                let values = [
-                    client.application_id,
-                    client.api_key,
-                    client.gcm_sender_id,
-                    client.project_id,
-                ];
-                let empty = JString::from_str(env, "")?;
-                let array = JObjectArray::<JString>::new(env, values.len(), &empty)?;
-                for (index, value) in values.into_iter().enumerate() {
-                    let value = JString::from_str(env, value)?;
-                    array.set_element(env, index, &value)?;
-                }
-                Ok(array)
-            })
-            .resolve::<ThrowRuntimeExAndDefault>()
-            .into_raw()
+        crate::android::throwing(&mut unowned, |env| {
+            // SAFETY: a `String` local reference of this call, wrapped once.
+            let package_name = unsafe { JString::from_raw(env, package_name) };
+            let package_name = package_name.try_to_string(env)?;
+            let Some(client) = super::select_client(clients, &package_name) else {
+                return Ok(JObjectArray::<JString>::default());
+            };
+            let values = [
+                client.application_id,
+                client.api_key,
+                client.gcm_sender_id,
+                client.project_id,
+            ];
+            let empty = JString::from_str(env, "")?;
+            let array = JObjectArray::<JString>::new(env, values.len(), &empty)?;
+            for (index, value) in values.into_iter().enumerate() {
+                let value = JString::from_str(env, value)?;
+                array.set_element(env, index, &value)?;
+            }
+            Ok(array)
+        })
+        .into_raw()
     }
 
     /// Runs the app's background handler for one push.
@@ -126,26 +123,24 @@ pub mod android {
     ) {
         // SAFETY: the JVM passed `env` to the native method running now.
         let mut unowned = unsafe { EnvUnowned::from_raw(env) };
-        unowned
-            .with_env(|env| -> jni::errors::Result<()> {
-                // SAFETY: a `byte[]` local reference of this call, wrapped once.
-                let payload = unsafe { JByteArray::from_raw(env, payload) };
-                let payload = env.convert_byte_array(&payload)?;
-                let vm = env.get_java_vm()?;
-                let context = Context {
-                    vm: vm.get_raw().cast(),
-                    context: context.cast(),
-                };
-                handler(
-                    context,
-                    Message {
-                        payload,
-                        started_app,
-                    },
-                );
-                Ok(())
-            })
-            .resolve::<ThrowRuntimeExAndDefault>();
+        crate::android::throwing(&mut unowned, |env| {
+            // SAFETY: a `byte[]` local reference of this call, wrapped once.
+            let payload = unsafe { JByteArray::from_raw(env, payload) };
+            let payload = env.convert_byte_array(&payload)?;
+            let vm = env.get_java_vm()?;
+            let context = Context {
+                vm: vm.get_raw().cast(),
+                context: context.cast(),
+            };
+            handler(
+                context,
+                Message {
+                    payload,
+                    started_app,
+                },
+            );
+            Ok(())
+        });
     }
 }
 
