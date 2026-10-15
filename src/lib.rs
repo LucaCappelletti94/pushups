@@ -158,10 +158,12 @@ pub async fn request_permission() -> Result<Permission, Error> {
 ///
 /// Events that arrive before the first handler is set, such as the push that started the app,
 /// are kept and delivered to that first handler, in the order they arrived. On Android the
-/// pushes that arrived while the app had no UI wait on disk and go to the first handler of the
-/// next UI session. The handler runs on whichever thread delivers the event, one event at a
-/// time and never concurrently with itself. Waking the toolkit's event loop, through a tao or
-/// winit `EventLoopProxy` for instance, is the handler's job.
+/// pushes that arrived while the app had no UI wait on disk for the next UI session. They go to
+/// the handler already set if the thread that set it still runs, as a toolkit whose event loop
+/// outlives its Activity keeps it, and otherwise to the next handler set. The handler runs on
+/// whichever thread delivers the event, one event at a time and never concurrently with itself.
+/// Waking the toolkit's event loop, through a tao or winit `EventLoopProxy` for instance, is the
+/// handler's job.
 pub fn set_handler(handler: impl Fn(Event) + Send + Sync + 'static) {
     DISPATCHER.set_handler(Arc::new(handler));
     Platform::handler_set();
