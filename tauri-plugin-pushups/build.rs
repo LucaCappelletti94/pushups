@@ -42,7 +42,35 @@ fn main() {
     }
     println!("cargo::rerun-if-env-changed=DEP_PUSHUPS_ANDROID");
     println!("cargo::rerun-if-env-changed=WRY_ANDROID_LIBRARY");
+    rerun_with_tauri_projects();
     tauri_plugin::Builder::new(&[]).android_path(copy).build();
+}
+
+/// Asks cargo to run this script again when the Tauri CLI names another generated project, or
+/// when `tauri android init` or `tauri ios init` rewrites the file this script edits, since the
+/// edit lives in that file and a cached run would leave it out.
+fn rerun_with_tauri_projects() {
+    println!("cargo::rerun-if-env-changed=TAURI_ANDROID_PROJECT_PATH");
+    println!("cargo::rerun-if-env-changed=TAURI_IOS_PROJECT_PATH");
+    println!("cargo::rerun-if-env-changed=TAURI_IOS_APP_NAME");
+    let mut edited = Vec::new();
+    if let Some(project) = std::env::var_os("TAURI_ANDROID_PROJECT_PATH") {
+        edited.push(Path::new(&project).join("app/src/main/AndroidManifest.xml"));
+    }
+    if let (Some(project), Ok(app)) = (
+        std::env::var_os("TAURI_IOS_PROJECT_PATH"),
+        std::env::var("TAURI_IOS_APP_NAME"),
+    ) {
+        edited.push(
+            Path::new(&project)
+                .join(format!("{app}_iOS"))
+                .join(format!("{app}_iOS.entitlements")),
+        );
+    }
+    // A missing path would make cargo rerun this script on every build.
+    for file in edited.iter().filter(|file| file.exists()) {
+        println!("cargo::rerun-if-changed={}", file.display());
+    }
 }
 
 /// Copies `from` into `to`, writing only files whose content differs, so Gradle sees no change on
