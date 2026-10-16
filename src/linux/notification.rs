@@ -23,6 +23,7 @@ use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::{Fd, OwnedValue, Value};
 
 use super::{ACTIVATED_ENV, Call, RUNTIME, Runtime};
+use crate::config::AppNotifications;
 use crate::dispatch::DISPATCHER;
 use crate::queue::Entry;
 use crate::{Error, Message, Notification};
@@ -292,6 +293,14 @@ fn notify(
         .as_deref()
         .filter(|icon| icon.starts_with('/'))
         .unwrap_or("");
+    let app_name = runtime
+        .notifications
+        .as_ref()
+        .map_or(runtime.app_id.as_str(), |app| app.display_name.as_str());
+    let app_icon = match (local_icon, &runtime.notifications) {
+        ("", Some(app)) => app.icon.as_str(),
+        _ => local_icon,
+    };
     let mut hints = HashMap::from([
         ("x-canonical-app-name", Value::from(runtime.app_id.as_str())),
         ("desktop-entry", Value::from(runtime.app_id.as_str())),
@@ -306,9 +315,9 @@ fn notify(
             Some(NOTIFICATIONS_NAME),
             "Notify",
             &(
-                runtime.app_id.as_str(),
+                app_name,
                 replaces,
-                local_icon,
+                app_icon,
                 notification.title.as_str(),
                 notification.body.as_deref().unwrap_or(""),
                 notify_actions(notification),
@@ -484,8 +493,16 @@ pub(super) fn object_path(app_id: &str) -> String {
     format!("/{}", app_id.replace('.', "/").replace('-', "_"))
 }
 
-/// The desktop entry the portal needs to accept the app id, hidden from launchers.
-pub(super) fn desktop_file(app_id: &str, executable: &Path) -> String {
+/// The key that marks a desktop entry as written by this crate, which `install` may rewrite.
+const MARK: &str = "X-Pushups=true";
+
+/// The desktop entry the portal needs to accept the app id, hidden from launchers, named by the
+/// app's display name and icon when it has them.
+pub(super) fn desktop_file(
+    app_id: &str,
+    notifications: Option<&AppNotifications>,
+    executable: &Path,
+) -> String {
     let mut quoted = String::new();
     for character in executable.to_string_lossy().chars() {
         if matches!(character, '"' | '`' | '$' | '\\') {
@@ -493,45 +510,71 @@ pub(super) fn desktop_file(app_id: &str, executable: &Path) -> String {
         }
         quoted.push(character);
     }
+    let name = notifications.map_or(app_id, |app| app.display_name.as_str());
+    let icon = notifications.map_or_else(String::new, |app| {
+        format!("Icon={}\n", desktop_string(&app.icon))
+    });
     format!(
-        "[Desktop Entry]\nType=Application\nName={app_id}\nExec=\"{quoted}\"\nNoDisplay=true\nDBusActivatable=true\n"
+        "[Desktop Entry]\nType=Application\nName={}\n{icon}Exec=\"{quoted}\"\nNoDisplay=true\nDBusActivatable=true\n{MARK}\n",
+        desktop_string(name)
     )
 }
 
-/// Whether a desktop entry for the app exists in the user's or the system's data directories.
-pub(super) fn has_desktop_file(
-    app_id: &str,
-    data_home: Option<&Path>,
-    data_dirs: Option<OsString>,
-) -> bool {
+/// `value` escaped as a desktop entry string, with a leading space kept as `\s`.
+fn desktop_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for (index, character) in value.chars().enumerate() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\t' => escaped.push_str("\\t"),
+            '\r' => escaped.push_str("\\r"),
+            ' ' if index == 0 => escaped.push_str("\\s"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
+/// Whether a desktop entry for the app exists in the system's data directories.
+fn has_system_desktop_file(app_id: &str, data_dirs: Option<OsString>) -> bool {
     let dirs = data_dirs
         .filter(|dirs| !dirs.is_empty())
         .unwrap_or_else(|| OsString::from("/usr/local/share:/usr/share"));
-    data_home
-        .map(Path::to_path_buf)
-        .into_iter()
-        .chain(std::env::split_paths(&dirs))
-        .any(|dir| {
-            dir.join("applications")
-                .join(format!("{app_id}.desktop"))
-                .exists()
-        })
+    std::env::split_paths(&dirs).any(|dir| {
+        dir.join("applications")
+            .join(format!("{app_id}.desktop"))
+            .exists()
+    })
 }
 
-/// Writes the hidden desktop entry when no other names the app, so a packaged app's own wins.
-/// True when an entry was in place already.
-pub(super) fn write_desktop_file(app_id: &str, data_home: &Path) -> io::Result<bool> {
-    if has_desktop_file(app_id, Some(data_home), std::env::var_os("XDG_DATA_DIRS")) {
+/// Writes the hidden desktop entry when no other names the app, so a packaged app's own wins,
+/// and rewrites one this crate wrote in the data home when it differs. True when an entry was
+/// in place already.
+pub(super) fn write_desktop_file(
+    app_id: &str,
+    notifications: Option<&AppNotifications>,
+    data_home: &Path,
+    data_dirs: Option<OsString>,
+) -> io::Result<bool> {
+    let dir: PathBuf = data_home.join("applications");
+    let path = dir.join(format!("{app_id}.desktop"));
+    let in_place = match fs::read_to_string(&path) {
+        Ok(existing) if existing.lines().any(|line| line == MARK) => Some(existing),
+        Ok(_) => return Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    if in_place.is_none() && has_system_desktop_file(app_id, data_dirs) {
         return Ok(true);
     }
-    let dir: PathBuf = data_home.join("applications");
+    let entry = desktop_file(app_id, notifications, &std::env::current_exe()?);
+    if in_place.as_deref() == Some(entry.as_str()) {
+        return Ok(true);
+    }
     fs::create_dir_all(&dir)?;
-    let executable = std::env::current_exe()?;
-    fs::write(
-        dir.join(format!("{app_id}.desktop")),
-        desktop_file(app_id, &executable),
-    )?;
-    Ok(false)
+    fs::write(&path, entry)?;
+    Ok(in_place.is_some())
 }
 
 #[cfg(test)]
@@ -544,34 +587,77 @@ mod tests {
     }
 
     #[test]
-    fn the_desktop_entry_is_hidden_and_quotes_its_executable() {
+    fn the_desktop_entry_is_hidden_marked_and_quotes_its_executable() {
         assert_eq!(
-            desktop_file("org.example.App", Path::new("/opt/my \"app\"/bin/$app")),
-            "[Desktop Entry]\nType=Application\nName=org.example.App\nExec=\"/opt/my \\\"app\\\"/bin/\\$app\"\nNoDisplay=true\nDBusActivatable=true\n"
+            desktop_file(
+                "org.example.App",
+                None,
+                Path::new("/opt/my \"app\"/bin/$app")
+            ),
+            "[Desktop Entry]\nType=Application\nName=org.example.App\nExec=\"/opt/my \\\"app\\\"/bin/\\$app\"\nNoDisplay=true\nDBusActivatable=true\nX-Pushups=true\n"
         );
     }
 
     #[test]
-    fn a_desktop_entry_in_the_system_data_dirs_is_found() {
+    fn the_display_name_and_icon_are_escaped_into_the_entry() {
+        let app = AppNotifications {
+            display_name: " My\\App\n".to_owned(),
+            icon: "/opt/icons/a\tb.png".to_owned(),
+        };
+        assert_eq!(
+            desktop_file("org.example.App", Some(&app), Path::new("/bin/app")),
+            "[Desktop Entry]\nType=Application\nName=\\sMy\\\\App\\n\nIcon=/opt/icons/a\\tb.png\nExec=\"/bin/app\"\nNoDisplay=true\nDBusActivatable=true\nX-Pushups=true\n"
+        );
+    }
+
+    #[test]
+    fn only_a_marked_entry_in_the_data_home_is_rewritten() {
         let home = tempfile::tempdir().expect("a data home");
         let system = tempfile::tempdir().expect("a system data dir");
-        let dirs = std::env::join_paths([system.path()]).expect("one data dir");
-        assert!(!has_desktop_file(
-            "org.example.App",
-            Some(home.path()),
-            Some(dirs.clone())
-        ));
+        let dirs = || Some(std::env::join_paths([system.path()]).expect("one data dir"));
+        let entry = home.path().join("applications/org.example.App.desktop");
+        let app = AppNotifications {
+            display_name: "Example".to_owned(),
+            icon: "example".to_owned(),
+        };
+        let write = |app| write_desktop_file("org.example.App", app, home.path(), dirs());
+
+        assert!(
+            !write(None).expect("a first entry"),
+            "no entry was in place"
+        );
+        let first = fs::read_to_string(&entry).expect("the written entry");
+        assert!(
+            write(None).expect("the same entry"),
+            "the entry was in place"
+        );
+        assert!(
+            write(Some(&app)).expect("a rewrite"),
+            "a rewrite keeps the entry in place"
+        );
+        let named = fs::read_to_string(&entry).expect("the rewritten entry");
+        assert_ne!(named, first);
+        assert!(named.contains("\nName=Example\n"), "{named}");
+
+        fs::write(&entry, "[Desktop Entry]\nName=Own\n").expect("an unmarked entry");
+        assert!(write(Some(&app)).expect("the unmarked entry"));
+        assert_eq!(
+            fs::read_to_string(&entry).expect("the unmarked entry"),
+            "[Desktop Entry]\nName=Own\n"
+        );
+
+        fs::remove_file(&entry).expect("no entry in the data home");
         fs::create_dir_all(system.path().join("applications")).expect("applications");
         fs::write(
             system.path().join("applications/org.example.App.desktop"),
             "",
         )
         .expect("a packaged entry");
-        assert!(has_desktop_file(
-            "org.example.App",
-            Some(home.path()),
-            Some(dirs)
-        ));
+        assert!(write(Some(&app)).expect("the packaged entry"));
+        assert!(
+            !entry.exists(),
+            "an entry was written beside the packaged one"
+        );
     }
 
     #[test]

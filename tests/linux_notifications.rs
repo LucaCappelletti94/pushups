@@ -40,8 +40,16 @@ mod linux {
     const FRESH_ENTRY: &str = "fresh-entry";
     /// A notification server that never answers `Notify`.
     const HUNG: &str = "hung";
+    /// An app with a display name and icon writes them into its entry and passes them to `Notify`.
+    const NAMED: &str = "named";
+    /// An entry this crate wrote with other contents, which `install` rewrites and keeps the portal for.
+    const STALE_ENTRY: &str = "stale-entry";
     /// The desktop entry the parent puts in place for the scenarios that need one already.
     const PACKAGED_ENTRY: &str = "[Desktop Entry]\nType=Application\nName=Packaged\n";
+    /// An entry an earlier run of this crate wrote, before the app had a display name.
+    const STALE_MARKED_ENTRY: &str =
+        "[Desktop Entry]\nType=Application\nName=rs.pushups.LinuxNotifyTest\nX-Pushups=true\n";
+    const APP_NAME: &str = "Notify Test";
     const APP_ID: &str = "rs.pushups.LinuxNotifyTest";
     const APP_PATH: &str = "/rs/pushups/LinuxNotifyTest";
     const APPLICATION: &str = "org.freedesktop.Application";
@@ -70,6 +78,8 @@ mod linux {
             NO_SERVICE,
             FRESH_ENTRY,
             HUNG,
+            NAMED,
+            STALE_ENTRY,
         ] {
             run(scenario);
             println!("linux notification scenario {scenario}: ok");
@@ -312,7 +322,14 @@ mod linux {
     fn serve(scenario: &str, address: &str, log: &Log) -> Services {
         let portal = matches!(
             scenario,
-            PORTAL | PORTAL_CLOSED | LAUNCHED | NO_BACKEND | FALLBACK | FRESH_ENTRY
+            PORTAL
+                | PORTAL_CLOSED
+                | LAUNCHED
+                | NO_BACKEND
+                | FALLBACK
+                | FRESH_ENTRY
+                | NAMED
+                | STALE_ENTRY
         )
         .then(|| {
             let mut builder = connect(address)
@@ -332,7 +349,7 @@ mod linux {
             builder.build().expect("the portal connects")
         });
         let notifications = match scenario {
-            FALLBACK | FRESH_ENTRY | NO_BACKEND => Some(
+            FALLBACK | FRESH_ENTRY | NO_BACKEND | NAMED => Some(
                 connect(address)
                     .name(NOTIFICATIONS_NAME)
                     .expect("the notifications name is valid")
@@ -383,14 +400,16 @@ mod linux {
                 (MARKS, &marks),
             ],
         );
-        if matches!(scenario, PORTAL | NO_BACKEND | HUNG) {
-            let applications = data_home.join("applications");
+        let applications = data_home.join("applications");
+        let entry = match scenario {
+            PORTAL | NO_BACKEND | HUNG => Some(PACKAGED_ENTRY),
+            STALE_ENTRY => Some(STALE_MARKED_ENTRY),
+            _ => None,
+        };
+        if let Some(entry) = entry {
             std::fs::create_dir_all(&applications).expect("the applications directory");
-            std::fs::write(
-                applications.join(format!("{APP_ID}.desktop")),
-                PACKAGED_ENTRY,
-            )
-            .expect("the packaged desktop entry");
+            std::fs::write(applications.join(format!("{APP_ID}.desktop")), entry)
+                .expect("the desktop entry in place");
         }
         let log: Log = Arc::default();
         let fakes = serve(scenario, &address, &log);
@@ -425,6 +444,8 @@ mod linux {
                     .expect("the notification server runs"),
             ),
             FRESH_ENTRY => check_fresh_entry(&marks, &data_home, &log),
+            NAMED => check_named(&marks, &data_home, &log),
+            STALE_ENTRY => check_stale_entry(&marks, &data_home, &log),
             _ => {}
         }
         let mut status = None;
@@ -533,6 +554,76 @@ mod linux {
         );
     }
 
+    /// The entry `install` wrote for the app id, which must exist.
+    fn entry(scenario: &str, data_home: &Path) -> String {
+        std::fs::read_to_string(
+            data_home
+                .join("applications")
+                .join(format!("{APP_ID}.desktop")),
+        )
+        .unwrap_or_else(|error| panic!("{scenario}: no desktop entry, {error}"))
+    }
+
+    /// A fresh entry carries the display name, the icon and the crate's mark, and `Notify` names
+    /// the app and its icon for a notification without one of its own.
+    fn check_named(marks: &Path, data_home: &Path, log: &Log) {
+        assert!(
+            wait_until(|| marks.join("shown").exists()),
+            "{NAMED}: no notification shown"
+        );
+        let icon = marks.join("icon.png");
+        let icon = icon.to_string_lossy();
+        let desktop = entry(NAMED, data_home);
+        for line in [
+            format!("Name={APP_NAME}"),
+            format!("Icon={icon}"),
+            "X-Pushups=true".to_owned(),
+        ] {
+            assert!(
+                desktop.lines().any(|l| l == line),
+                "{NAMED}: no {line} in {desktop}"
+            );
+        }
+        let recorded = log.lock().expect("the log").clone();
+        assert_eq!(
+            recorded,
+            [
+                format!(
+                    "notify app={APP_NAME} replaces=0 summary=Named body= actions=[] icon={icon} image=-"
+                ),
+                format!(
+                    "notify app={APP_NAME} replaces=0 summary=Own body= actions=[] icon=/usr/share/own.png image=/usr/share/own.png"
+                ),
+            ],
+            "{NAMED}: the calls"
+        );
+    }
+
+    /// An entry this crate marked is rewritten with the display name, and counts as in place, so
+    /// the notification still goes through the portal.
+    fn check_stale_entry(marks: &Path, data_home: &Path, log: &Log) {
+        assert!(
+            wait_until(|| marks.join("shown").exists()),
+            "{STALE_ENTRY}: no notification shown"
+        );
+        let desktop = entry(STALE_ENTRY, data_home);
+        assert!(
+            desktop.lines().any(|l| l == format!("Name={APP_NAME}"))
+                && desktop.lines().any(|l| l == "X-Pushups=true")
+                && desktop.contains("DBusActivatable=true"),
+            "{STALE_ENTRY}: the entry was not rewritten, {desktop}"
+        );
+        let recorded = log.lock().expect("the log").clone();
+        assert_eq!(
+            recorded,
+            [
+                format!("register {APP_ID}"),
+                "add stale-1 title=Stale body=- action=- target=- icon=-".to_owned(),
+            ],
+            "{STALE_ENTRY}: the calls"
+        );
+    }
+
     /// The first process installs, which writes the activation file, and exits. A tap, or a
     /// launcher's `Open`, then makes the bus start a headless process, which starts the UI with
     /// the call's activation token. The UI drains the tap, or finds nothing for a launch.
@@ -622,8 +713,16 @@ mod linux {
         invoked(server, 8, "default");
     }
 
-    fn config() -> Config {
-        Config::new().linux(LinuxConfig::new(APP_ID))
+    /// The app's configuration, with the display name and icon for the scenarios that check them
+    /// and for the portal, whose packaged entry they must leave alone.
+    fn config(scenario: &str) -> Config {
+        let linux = LinuxConfig::new(APP_ID);
+        Config::new().linux(match scenario {
+            PORTAL | NAMED | STALE_ENTRY => {
+                linux.app_notifications(APP_NAME, mark("icon.png").to_string_lossy())
+            }
+            _ => linux,
+        })
     }
 
     /// Waits for the next message, or none within `within`.
@@ -661,7 +760,7 @@ mod linux {
     fn child(scenario: &str) {
         let activated = std::env::var_os("PUSHUPS_DBUS_ACTIVATED").is_some();
         // A process the bus started for a tap stays inside `install`, and starts the UI process.
-        pushups::install(config()).expect("install connects to the private bus");
+        pushups::install(config(scenario)).expect("install connects to the private bus");
         assert!(
             !activated,
             "{scenario}: a headless process returned from install"
@@ -715,6 +814,23 @@ mod linux {
                     .data("fresh-data")
                     .show()
                     .expect("the fallback shows the notification");
+                std::fs::write(mark("shown"), b"").expect("the shown mark");
+            }
+            NAMED => {
+                Notification::new("Named")
+                    .show()
+                    .expect("the fallback shows the notification");
+                Notification::new("Own")
+                    .icon("/usr/share/own.png")
+                    .show()
+                    .expect("the fallback shows the notification with its own icon");
+                std::fs::write(mark("shown"), b"").expect("the shown mark");
+            }
+            STALE_ENTRY => {
+                Notification::new("Stale")
+                    .tag("stale-1")
+                    .show()
+                    .expect("the portal shows the notification");
                 std::fs::write(mark("shown"), b"").expect("the shown mark");
             }
             HUNG => {
