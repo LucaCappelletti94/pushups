@@ -87,26 +87,26 @@ function Click-Toast([string] $label, [string] $title, [string] $logDir, [string
     $toast = Find-ToastElement $title
     if (-not $toast) {
         if (-not (Open-NotificationCenter)) {
-            Note "- $label: the notification centre could not be opened on this runner"
+            Note "- ${label}: the notification centre could not be opened on this runner"
             return $false
         }
         $toast = Wait-Until $ToastBound { Find-ToastElement $title }
     }
     if (-not $toast) {
-        Note "- $label: no toast named `$title within $ToastBound, not reachable on this runner"
+        Note "- ${label}: no toast named '$title' within $ToastBound, not reachable on this runner"
         return $false
     }
     if (-not (Invoke-Element $toast)) {
-        Note "- $label: the toast had no clickable pattern and no screen rectangle"
+        Note "- ${label}: the toast had no clickable pattern and no screen rectangle"
         return $false
     }
-    Note "- $label: the toast was clicked"
+    Note "- ${label}: the toast was clicked"
     $got = Wait-Until $ToastBound { First-Line (Join-Path $logDir 'events.log') $expected }
     if (-not $got) {
-        Note "- $label: no tap line within $ToastBound of the click"
+        Note "- ${label}: no tap line within $ToastBound of the click"
         return $false
     }
-    Note "- $label: $got"
+    Note "- ${label}: $got"
     return $true
 }
 
