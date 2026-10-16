@@ -31,6 +31,9 @@ const NONCE_INFO: [u8; 24] = *b"Content-Encoding: nonce\0";
 /// 16-byte authentication secret.
 pub(crate) struct Keys {
     secret: SecretKey,
+    /// The uncompressed encoding of `secret`'s public key, derived once since every decryption
+    /// and every token needs it.
+    public: [u8; KEYID_LEN],
     auth: [u8; AUTH_LEN],
 }
 
@@ -78,6 +81,14 @@ pub(crate) enum DecryptError {
 }
 
 impl Keys {
+    fn new(secret: SecretKey, auth: [u8; AUTH_LEN]) -> Self {
+        Self {
+            public: uncompressed(&secret.public_key()),
+            secret,
+            auth,
+        }
+    }
+
     /// Generate a fresh P-256 secret key and authentication secret.
     pub(crate) fn generate() -> Result<Self, DecryptError> {
         let mut secret = [0u8; 32];
@@ -85,7 +96,7 @@ impl Keys {
         getrandom::fill(&mut secret).map_err(|_| DecryptError::Randomness)?;
         getrandom::fill(&mut auth).map_err(|_| DecryptError::Randomness)?;
         let secret = SecretKey::from_bytes(&secret.into()).map_err(|_| DecryptError::Randomness)?;
-        Ok(Self { secret, auth })
+        Ok(Self::new(secret, auth))
     }
 
     /// Read a key pair from its 48-byte serialization, the 32-byte secret scalar followed by
@@ -98,7 +109,7 @@ impl Keys {
         let secret_bytes: [u8; 32] = secret_bytes.try_into().ok()?;
         let auth: [u8; AUTH_LEN] = auth.try_into().ok()?;
         let secret = SecretKey::from_bytes(&secret_bytes.into()).ok()?;
-        Some(Self { secret, auth })
+        Some(Self::new(secret, auth))
     }
 
     /// Serialize the key pair as the 32-byte secret scalar and the 16-byte authentication
@@ -113,20 +124,7 @@ impl Keys {
 
     /// The uncompressed P-256 public key, the `p256dh` the subscription exposes.
     pub(crate) fn public_key(&self) -> [u8; KEYID_LEN] {
-        let public = self.secret.public_key();
-        let point = public.as_affine();
-        let mut bytes = [0u8; KEYID_LEN];
-        let (prefix, coordinates) = bytes.split_at_mut(1);
-        if let Some(slot) = prefix.first_mut() {
-            *slot = UNCOMPRESSED_PREFIX;
-        }
-        for (slot, coordinate) in coordinates
-            .iter_mut()
-            .zip(point.x().iter().chain(point.y().iter()))
-        {
-            *slot = *coordinate;
-        }
-        bytes
+        self.public
     }
 
     /// The 16-byte authentication secret.
@@ -170,23 +168,40 @@ impl Keys {
         let (content_key, nonce) = derive_content_key(
             &self.auth,
             salt,
-            &self.public_key(),
+            &self.public,
             keyid,
             shared.raw_secret_bytes(),
         )?;
         let cipher = Aes128Gcm::new(&content_key.into());
-        let plaintext = cipher
+        let mut plaintext = cipher
             .decrypt(&nonce.into(), record)
             .map_err(|_| DecryptError::AuthenticationFailure)?;
         let Some(delimiter) = plaintext.iter().rposition(|octet| *octet != 0) else {
             return Err(DecryptError::MissingPaddingDelimiter);
         };
-        let (message, tail) = plaintext.split_at(delimiter);
-        if tail.first() != Some(&PADDING_DELIMITER) {
+        if plaintext.get(delimiter) != Some(&PADDING_DELIMITER) {
             return Err(DecryptError::BadPaddingDelimiter);
         }
-        Ok(message.to_vec())
+        plaintext.truncate(delimiter);
+        Ok(plaintext)
     }
+}
+
+/// The 65-octet uncompressed SEC1 encoding of `public`, `0x04` then the x and y coordinates.
+fn uncompressed(public: &PublicKey) -> [u8; KEYID_LEN] {
+    let point = public.as_affine();
+    let mut bytes = [0u8; KEYID_LEN];
+    let (prefix, coordinates) = bytes.split_at_mut(1);
+    if let Some(slot) = prefix.first_mut() {
+        *slot = UNCOMPRESSED_PREFIX;
+    }
+    for (slot, coordinate) in coordinates
+        .iter_mut()
+        .zip(point.x().iter().chain(point.y().iter()))
+    {
+        *slot = *coordinate;
+    }
+    bytes
 }
 
 /// Derive the AES-GCM content key and nonce, the RFC 8291 key combining and the RFC 8188
