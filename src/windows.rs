@@ -67,9 +67,10 @@ const EPOCH_1601_TO_1970: i64 = 11_644_473_600 * 10_000_000;
 #[cfg(target_os = "windows")]
 const RUNTIME_CHANNEL: u32 = 0x0002_0005;
 
-/// `MddBootstrapInitializeOptions_OnPackageIdentity_NOOP`, so a packaged build skips it.
+/// `MddBootstrapInitializeOptions_OnPackageIdentity_NOOP` (`0x0010` in `MddBootstrap.h`), so a
+/// packaged build skips the bootstrap and a failure comes back as an `HRESULT`.
 #[cfg(target_os = "windows")]
-const BOOTSTRAP_OPTIONS: u32 = 5;
+const ON_PACKAGE_IDENTITY_NOOP: u32 = 0x0010;
 
 /// `E_FAIL`, the only code a delivery error has to report back to the runtime.
 #[cfg(target_os = "windows")]
@@ -198,7 +199,7 @@ impl Backend for Windows {
                     build: 0,
                     revision: 0,
                 },
-                BOOTSTRAP_OPTIONS,
+                ON_PACKAGE_IDENTITY_NOOP,
             )
         };
         if status.is_err() {
