@@ -24,10 +24,26 @@ fn main() {
         "--out",
         out,
         "--flat",
+        // The classes and enums `src/windows.rs` reaches. The generator skips a method whose types
+        // are not listed, and its warnings fail this run, so a missing one is a visible error.
         "--filter",
-        "Microsoft.Windows.PushNotifications",
+        "Microsoft.Windows.PushNotifications.PushNotificationManager",
         "--filter",
-        "Microsoft.Windows.AppLifecycle",
+        "Microsoft.Windows.PushNotifications.PushNotificationCreateChannelResult",
+        "--filter",
+        "Microsoft.Windows.PushNotifications.PushNotificationCreateChannelStatus",
+        "--filter",
+        "Microsoft.Windows.PushNotifications.PushNotificationChannel",
+        "--filter",
+        "Microsoft.Windows.PushNotifications.PushNotificationChannelStatus",
+        "--filter",
+        "Microsoft.Windows.PushNotifications.PushNotificationReceivedEventArgs",
+        "--filter",
+        "Microsoft.Windows.AppLifecycle.AppInstance",
+        "--filter",
+        "Microsoft.Windows.AppLifecycle.AppActivationArguments",
+        "--filter",
+        "Microsoft.Windows.AppLifecycle.ExtendedActivationKind",
     ];
     let warnings = windows_bindgen::bindgen(&argv);
     if !warnings.is_empty() {
