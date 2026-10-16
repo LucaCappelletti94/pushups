@@ -9,8 +9,10 @@ use web_sys::ServiceWorkerRegistration;
 
 use crate::backend::Backend;
 use crate::dispatch::DISPATCHER;
-use crate::web_parts::{WorkerMode, permission_from, web_push_token, worker_script};
-use crate::{Config, Error, Event, Message, Notification, Permission, WebPushConfig};
+use crate::web_parts::{
+    permission_from, rust_worker_url, static_worker_url, subscription_key, web_push_token,
+};
+use crate::{Config, Error, Event, Message, Notification, Permission, VapidPublicKey};
 
 #[wasm_bindgen(module = "/js/pushups-sw.js")]
 extern "C" {
@@ -42,7 +44,7 @@ extern "C" {
 
 /// What `install` set up on this page.
 struct Page {
-    config: WebPushConfig,
+    vapid_public_key: VapidPublicKey,
     registration: Promise,
     handler_set: bool,
 }
@@ -51,39 +53,43 @@ thread_local! {
     static PAGE: RefCell<Option<Page>> = const { RefCell::new(None) };
 }
 
-fn js_error(value: &JsValue) -> Error {
-    Error::Platform(value.dyn_ref::<js_sys::Error>().map_or_else(
-        || format!("{value:?}"),
-        |error| String::from(error.message()),
-    ))
+fn js_error(value: JsValue) -> Error {
+    Error::Platform(match value.dyn_into::<js_sys::Error>() {
+        Ok(error) => String::from(error.message()),
+        Err(value) => format!("{value:?}"),
+    })
 }
 
 async fn subscribe(registration: Promise, key: Uint8Array) -> Result<crate::Token, Error> {
-    let registration = JsFuture::from(registration)
-        .await
-        .map_err(|e| js_error(&e))?;
-    let active = shim_active_registration(&registration).map_err(|e| js_error(&e))?;
+    let registration = JsFuture::from(registration).await.map_err(js_error)?;
+    let active = shim_active_registration(&registration).map_err(js_error)?;
     let registration: ServiceWorkerRegistration = JsFuture::from(active)
         .await
-        .map_err(|e| js_error(&e))?
+        .map_err(js_error)?
         .unchecked_into();
-    let subscribed = shim_subscribe(&registration, &key).map_err(|e| js_error(&e))?;
-    let record = JsFuture::from(subscribed).await.map_err(|e| js_error(&e))?;
+    let subscribed = shim_subscribe(&registration, &key).map_err(js_error)?;
+    let record = JsFuture::from(subscribed).await.map_err(js_error)?;
     token_from_record(&record)
 }
 
 fn field(record: &JsValue, name: &str) -> Result<JsValue, Error> {
-    Reflect::get(record, &JsValue::from_str(name)).map_err(|e| js_error(&e))
+    Reflect::get(record, &JsValue::from_str(name)).map_err(js_error)
+}
+
+/// The subscription key in `record`'s `name` field, copied straight into its fixed size.
+fn key<const N: usize>(record: &JsValue, name: &str) -> Result<[u8; N], Error> {
+    let array = Uint8Array::new(&field(record, name)?);
+    subscription_key(name, array.length(), |key| array.copy_to(key))
 }
 
 fn token_from_record(record: &JsValue) -> Result<crate::Token, Error> {
     let endpoint = field(record, "endpoint")?
         .as_string()
         .ok_or_else(|| Error::Platform("subscription without an endpoint".to_owned()))?;
-    let p256dh = Uint8Array::new(&field(record, "p256dh")?).to_vec();
-    let auth = Uint8Array::new(&field(record, "auth")?).to_vec();
+    let p256dh = key(record, "p256dh")?;
+    let auth = key(record, "auth")?;
     let expires = field(record, "expires")?.as_f64();
-    web_push_token(endpoint, &p256dh, &auth, expires)
+    web_push_token(endpoint, p256dh, auth, expires)
 }
 
 fn event_from_record(record: &JsValue) -> Result<Event, Error> {
@@ -153,21 +159,18 @@ impl Backend for Web {
         {
             return Err(Error::Unsupported);
         }
+        // The worker `dx` bundled from this crate, under the `dioxus` feature.
         #[cfg(feature = "dioxus")]
-        let bundled = Some(crate::dx::WORKER.to_string());
+        let bundled = || Some(crate::dx::WORKER.to_string());
         #[cfg(not(feature = "dioxus"))]
-        let bundled = None;
-        let mode = if web.rust_handler {
-            WorkerMode::Rust
-        } else {
-            WorkerMode::Static
+        let bundled = || None;
+        let script = match (web.rust_handler, web.service_worker_path.as_deref()) {
+            // A Rust handler runs in the app's own entry module when the app set a path, else in
+            // the glue, which only starts itself under `dx`.
+            (true, Some(entry)) => rust_worker_url(entry),
+            (true, None) => GLUE_URL.with(|glue| rust_worker_url(glue)),
+            (false, configured) => static_worker_url(configured, bundled),
         };
-        let script = worker_script(
-            mode,
-            web.service_worker_path.as_deref(),
-            &GLUE_URL.with(Clone::clone),
-            bundled,
-        );
         let options = web_sys::RegistrationOptions::new();
         options.set_type("module");
         let registration = navigator
@@ -183,7 +186,7 @@ impl Backend for Web {
         // The listener lives as long as the page.
         drain_request.forget();
         PAGE.set(Some(Page {
-            config: web,
+            vapid_public_key: web.vapid_public_key,
             registration,
             handler_set: false,
         }));
@@ -196,7 +199,7 @@ impl Backend for Web {
                 .map(|page| {
                     (
                         page.registration.clone(),
-                        Uint8Array::from(page.config.vapid_public_key.as_bytes().as_slice()),
+                        Uint8Array::from(page.vapid_public_key.as_bytes().as_slice()),
                     )
                 })
                 .ok_or(Error::NotConfigured)
@@ -224,8 +227,8 @@ impl Backend for Web {
         if !Reflect::has(&window, &JsValue::from_str("Notification")).unwrap_or(false) {
             return Err(Error::Unsupported);
         }
-        let asked = web_sys::Notification::request_permission().map_err(|e| js_error(&e))?;
-        let answer = JsFuture::from(asked).await.map_err(|e| js_error(&e))?;
+        let asked = web_sys::Notification::request_permission().map_err(js_error)?;
+        let answer = JsFuture::from(asked).await.map_err(js_error)?;
         permission_from(&answer.as_string().unwrap_or_default())
     }
 
