@@ -70,7 +70,7 @@ fn on_push(context: Context, message: Message) {
 
 ## iOS and macOS
 
-The crate adds its push methods to whatever app delegate the toolkit installs. The bundle needs the push entitlement and, on iOS, the `remote-notification` background mode, which a `dx` app sets in `Dioxus.toml`. A Tauri app gets the iOS entitlement from `tauri-plugin-pushups` and names a macOS entitlements file in `tauri.conf.json`, as [`examples/tauri`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/tauri) does.
+The crate adds its push methods to whatever app delegate the toolkit installs. The bundle needs the push entitlement and, on iOS, the `remote-notification` background mode, which a `dx` app sets in `Dioxus.toml`. A Tauri app gets the iOS entitlement and the background mode from `tauri-plugin-pushups` and names a macOS entitlements file in `tauri.conf.json`, as [`examples/tauri`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/tauri) does.
 
 ```toml
 [ios.entitlements]
