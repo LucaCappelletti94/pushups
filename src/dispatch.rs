@@ -175,11 +175,15 @@ impl Dispatcher {
                 break;
             };
             drop(state);
-            if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| handler(event))) {
+            // Dropping a handler that replaced itself, whose last reference this is, runs the app's
+            // destructors, so it happens before the lock is retaken and a panic in them is caught
+            // like one in the call.
+            if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(move || {
+                handler(event);
+                drop(handler);
+            })) {
                 first_panic.get_or_insert(payload);
             }
-            // A handler that replaced itself holds its last reference here, so it goes before the lock is retaken.
-            drop(handler);
             state = self.state.lock();
         }
         state.delivering = false;
@@ -456,5 +460,36 @@ mod tests {
             delivering.emit(message(2));
         });
         assert_eq!(*seen.lock(), [message(9), message(2)]);
+    }
+
+    /// Panics when dropped, as a handler's captured state may.
+    struct PanicOnDrop;
+
+    impl Drop for PanicOnDrop {
+        fn drop(&mut self) {
+            panic!("the captured state panicked while dropped");
+        }
+    }
+
+    #[test]
+    fn a_handler_whose_captures_panic_when_dropped_leaves_delivery_working() {
+        let dispatcher = Arc::new(Dispatcher::new());
+        let (seen, recorder_handler) = recorder();
+        let next = Mutex::new(Some(recorder_handler));
+        let replacer = Arc::clone(&dispatcher);
+        let probe = PanicOnDrop;
+        dispatcher.set_handler(Arc::new(move |_| {
+            let _ = &probe;
+            if let Some(next) = next.lock().take() {
+                replacer.set_handler(next);
+            }
+        }));
+        let panicked = catch_unwind(AssertUnwindSafe(|| dispatcher.emit(message(1))));
+        assert!(
+            panicked.is_err(),
+            "the destructor's panic reaches the caller"
+        );
+        dispatcher.emit(message(2));
+        assert_eq!(*seen.lock(), [message(2)]);
     }
 }
