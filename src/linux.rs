@@ -106,18 +106,15 @@ impl Backend for Linux {
             .get()
             .filter(|runtime| runtime.owns_name.load(Ordering::Acquire))
             .ok_or(Error::NotConfigured)?;
-        let distributor = match find_distributor(&runtime.connection) {
-            Ok(distributor) => distributor,
-            Err(reason) => {
-                DISPATCHER.emit(Event::registration_failed(reason));
-                return Ok(());
-            }
-        };
-        // KUnifiedPush holds the reply while it believes the machine is offline, so the call waits on its own thread.
+        // Every bus call runs on its own thread, since KUnifiedPush holds the reply while it
+        // believes the machine is offline, and a handler the connector's executor delivers to may
+        // call this, which would block that executor on its own reply.
         thread::Builder::new()
             .name("pushups register".to_owned())
             .spawn(move || {
-                if let Err(reason) = send_register(runtime, &distributor) {
+                let registered = find_distributor(&runtime.connection)
+                    .and_then(|distributor| send_register(runtime, &distributor));
+                if let Err(reason) = registered {
                     DISPATCHER.emit(Event::registration_failed(reason));
                 }
             })

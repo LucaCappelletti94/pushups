@@ -34,6 +34,7 @@ mod linux {
     const NO_DISTRIBUTOR: &str = "no-distributor";
     const DATA_IS_FILE: &str = "data-is-file";
     const NAME_TAKEN: &str = "name-taken";
+    const REREGISTER: &str = "reregister";
     const APP_ID: &str = "rs.pushups.LinuxTest";
     /// How long a scenario may wait on the child, generous for a loaded runner.
     const BOUND: Duration = Duration::from_secs(20);
@@ -50,6 +51,7 @@ mod linux {
             NO_DISTRIBUTOR,
             DATA_IS_FILE,
             NAME_TAKEN,
+            REREGISTER,
         ] {
             run(scenario);
             println!("linux scenario {scenario}: ok");
@@ -80,7 +82,7 @@ mod linux {
             match self.scenario {
                 // KUnifiedPush queues the call unanswered while it believes the machine is offline.
                 HOLD => std::future::pending::<()>().await,
-                UNREGISTER => {
+                UNREGISTER | REREGISTER => {
                     let token = args
                         .get("token")
                         .and_then(|value| <&str>::try_from(value).ok())
@@ -207,6 +209,13 @@ mod linux {
                 "scenario {scenario}: register took {took} ms"
             );
         }
+        if scenario == REREGISTER {
+            assert!(
+                wait_until(|| calls.load(Ordering::SeqCst) == 2),
+                "scenario {scenario}: within {BOUND:?} the distributor got {} Register calls",
+                calls.load(Ordering::SeqCst),
+            );
+        }
         if scenario != HOLD {
             let mut status = None;
             assert!(
@@ -227,6 +236,10 @@ mod linux {
     fn child(scenario: &str) {
         if scenario == NAME_TAKEN {
             name_taken();
+            return;
+        }
+        if scenario == REREGISTER {
+            reregister();
             return;
         }
         let installed = pushups::install(config());
@@ -279,6 +292,32 @@ mod linux {
         Config::new()
             .linux(LinuxConfig::new(APP_ID))
             .unified_push(UnifiedPushConfig::new([4; 65]))
+    }
+
+    /// The distributor unregisters the app, and the handler, which the connector's `Unregistered`
+    /// call delivers to, registers again from inside that call.
+    fn reregister() {
+        pushups::install(config()).expect("install connects to the private bus");
+        let (failures, received) = mpsc::channel();
+        let retried = std::sync::atomic::AtomicBool::new(false);
+        pushups::set_handler(move |event| {
+            if let Event::RegistrationFailed(error) = event {
+                if !retried.swap(true, Ordering::SeqCst) {
+                    pushups::register().expect("register starts from the handler");
+                }
+                let _ = failures.send(error.to_string());
+            }
+        });
+        pushups::register().expect("register starts");
+        for attempt in ["first", "second"] {
+            let error = received
+                .recv_timeout(BOUND)
+                .unwrap_or_else(|_| panic!("no {attempt} RegistrationFailed within {BOUND:?}"));
+            assert!(
+                error.contains("the distributor unregistered the app"),
+                "{attempt}: {error}"
+            );
+        }
     }
 
     /// Another connection owns the app's name and does not let it go, so `install` fails, fails
