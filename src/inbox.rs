@@ -1,6 +1,8 @@
 //! Where an event goes on a backend with a queue file, by the state of the app's UI, and the
 //! drain into the first handler of a UI session.
 
+use std::path::PathBuf;
+
 use crate::dispatch::DISPATCHER;
 use crate::queue::{Entry, QueueFile};
 use crate::session::{Route, Session};
@@ -15,8 +17,24 @@ pub(crate) struct Inbox {
 }
 
 impl Inbox {
-    pub(crate) fn new(session: Session, queue: QueueFile) -> Self {
-        Self { session, queue }
+    /// The inbox of a process with no UI yet, such as one the system started for a push, whose
+    /// events wait in the queue file at `queue` for a UI session's handler.
+    #[cfg(any(target_os = "android", target_os = "linux", test))]
+    pub(crate) fn headless(queue: PathBuf) -> Self {
+        Self {
+            session: Session::Headless,
+            queue: QueueFile::new(queue),
+        }
+    }
+
+    /// The inbox of a process whose UI is up, whose events wait in the queue file at `queue`
+    /// until its handler is set.
+    #[cfg(any(target_os = "ios", target_os = "macos", target_os = "linux"))]
+    pub(crate) fn for_ui(queue: PathBuf) -> Self {
+        Self {
+            session: Session::Unbound,
+            queue: QueueFile::new(queue),
+        }
     }
 
     /// A UI session began (`true`) or ended (`false`), which only Android reports while running.
@@ -93,10 +111,7 @@ mod tests {
     #[test]
     fn a_session_beginning_after_a_headless_handler_delivers_the_queue() {
         let dir = tempfile::tempdir().unwrap();
-        let inbox = Mutex::new(Inbox::new(
-            Session::Headless,
-            QueueFile::new(dir.path().join("queue")),
-        ));
+        let inbox = Mutex::new(Inbox::headless(dir.path().join("queue")));
         let seen = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&seen);
         DISPATCHER.set_handler(Arc::new(move |event| sink.lock().push(event)));

@@ -33,6 +33,7 @@ mod linux {
     const UNREGISTER: &str = "unregister";
     const NO_DISTRIBUTOR: &str = "no-distributor";
     const DATA_IS_FILE: &str = "data-is-file";
+    const NAME_TAKEN: &str = "name-taken";
     const APP_ID: &str = "rs.pushups.LinuxTest";
     /// How long a scenario may wait on the child, generous for a loaded runner.
     const BOUND: Duration = Duration::from_secs(20);
@@ -42,7 +43,14 @@ mod linux {
             child(&scenario);
             return;
         }
-        for scenario in [HOLD, REFUSE, UNREGISTER, NO_DISTRIBUTOR, DATA_IS_FILE] {
+        for scenario in [
+            HOLD,
+            REFUSE,
+            UNREGISTER,
+            NO_DISTRIBUTOR,
+            DATA_IS_FILE,
+            NAME_TAKEN,
+        ] {
             run(scenario);
             println!("linux scenario {scenario}: ok");
         }
@@ -217,11 +225,11 @@ mod linux {
 
     /// The app side, run in the child process on the private bus.
     fn child(scenario: &str) {
-        let installed = pushups::install(
-            Config::new()
-                .linux(LinuxConfig::new(APP_ID))
-                .unified_push(UnifiedPushConfig::new([4; 65])),
-        );
+        if scenario == NAME_TAKEN {
+            name_taken();
+            return;
+        }
+        let installed = pushups::install(config());
         if scenario == DATA_IS_FILE {
             assert!(
                 matches!(installed, Err(Error::Platform(_))),
@@ -265,5 +273,44 @@ mod linux {
                 Err(error) => panic!("{scenario}: no RegistrationFailed within {BOUND:?}: {error}"),
             }
         }
+    }
+
+    fn config() -> Config {
+        Config::new()
+            .linux(LinuxConfig::new(APP_ID))
+            .unified_push(UnifiedPushConfig::new([4; 65]))
+    }
+
+    /// Another connection owns the app's name and does not let it go, so `install` fails, fails
+    /// again on a retry, and succeeds once the name is free.
+    fn name_taken() {
+        let other = zbus::blocking::Connection::session().expect("a second connection to the bus");
+        let reply = other
+            .request_name_with_flags(APP_ID, zbus::fdo::RequestNameFlags::DoNotQueue.into())
+            .expect("the other connection asks for the name");
+        assert_eq!(reply, zbus::fdo::RequestNameReply::PrimaryOwner);
+        for attempt in ["first", "second"] {
+            let installed = pushups::install(config());
+            assert!(
+                matches!(installed, Err(Error::Platform(_))),
+                "the {attempt} install while another connection owns the name gave {installed:?}"
+            );
+        }
+        other
+            .release_name(APP_ID)
+            .expect("the other connection releases the name");
+        pushups::install(config()).expect("install owns the name once it is free");
+        let owner = zbus::blocking::fdo::DBusProxy::new(&other)
+            .expect("a bus proxy")
+            .get_name_owner(APP_ID.try_into().expect("the app id is a bus name"))
+            .expect("the name has an owner");
+        assert_ne!(
+            owner.as_str(),
+            other
+                .unique_name()
+                .expect("the other connection's name")
+                .as_str(),
+            "the other connection still owns the name"
+        );
     }
 }
