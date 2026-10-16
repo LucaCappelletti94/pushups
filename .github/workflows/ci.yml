@@ -82,12 +82,14 @@ jobs:
       - uses: actions/checkout@v7
       - run: |
           rustup toolchain install 1.85 --profile minimal
-          rustup target add --toolchain 1.85 aarch64-linux-android aarch64-apple-ios aarch64-apple-darwin
-      # Every feature but `dioxus`, which needs the Rust version Dioxus 0.7 apps already need.
-      - run: cargo +1.85 check --workspace --features stream
-      - run: cargo +1.85 check --workspace --features stream --target aarch64-linux-android
-      - run: cargo +1.85 check --workspace --features stream --target aarch64-apple-ios
-      - run: cargo +1.85 check --workspace --features stream --target aarch64-apple-darwin
+          rustup target add --toolchain 1.85 aarch64-linux-android aarch64-apple-ios aarch64-apple-darwin x86_64-pc-windows-msvc
+      # Every feature but `dioxus`, which needs the Rust version Dioxus 0.7 apps already need. A
+      # check needs no linker, so the Windows target runs here too.
+      - run: cargo +1.85 check --workspace --features stream,serde
+      - run: cargo +1.85 check --workspace --features stream,serde --target aarch64-linux-android
+      - run: cargo +1.85 check --workspace --features stream,serde --target aarch64-apple-ios
+      - run: cargo +1.85 check --workspace --features stream,serde --target aarch64-apple-darwin
+      - run: cargo +1.85 check --workspace --features stream,serde --target x86_64-pc-windows-msvc
 
   tauri-plugin:
     name: tauri-plugin-pushups
@@ -459,10 +461,18 @@ jobs:
       - name: The static-worker build in Chrome, with its manifest and real pushes
         run: node ci/web/example.mjs check examples/dioxus/target/dx/pushups-dioxus-example/release/web/public "$RUNNER_TEMP/vapid.json" '/assets/pushups-sw\.js\?pushups=static' --manifest
 
-  example-yew:
-    name: Example Yew app on Trunk in Chrome
+  example-trunk:
+    name: Example ${{ matrix.name }} app on Trunk in Chrome
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - example: yew
+            name: Yew
+          - example: winit
+            name: winit
     steps:
       - uses: actions/checkout@v7
       - run: |
@@ -471,8 +481,8 @@ jobs:
       - uses: ./.github/actions/web-checkout
         with:
           tool: trunk@0.21.14
-      - name: Build the Yew app in both worker modes
-        working-directory: examples/yew
+      - name: Build the ${{ matrix.name }} app in both worker modes
+        working-directory: examples/${{ matrix.example }}
         run: |
           key=$(node ../../ci/web/example.mjs keys "$RUNNER_TEMP/vapid.json")
           PUSHUPS_VAPID_PUBLIC_KEY="$key" trunk build --release --dist dist-rust
@@ -480,34 +490,9 @@ jobs:
           # `build.rs` wrote `pushups::SERVICE_WORKER`, which the Trunk hook copied.
           cmp dist-static/pushups-sw.js ../../js/pushups-sw.js
       - name: The Rust-handler build in Chrome, with real pushes
-        run: node ci/web/example.mjs check examples/yew/dist-rust "$RUNNER_TEMP/vapid.json" '/sw\.js\?pushups=rust' --rust
+        run: node ci/web/example.mjs check examples/${{ matrix.example }}/dist-rust "$RUNNER_TEMP/vapid.json" '/sw\.js\?pushups=rust' --rust
       - name: The static-worker build in Chrome, with real pushes
-        run: node ci/web/example.mjs check examples/yew/dist-static "$RUNNER_TEMP/vapid.json" '/pushups-sw\.js\?pushups=static'
-
-  example-winit-web:
-    name: Example winit app on Trunk in Chrome
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - run: |
-          rustup toolchain install stable --profile minimal
-          rustup target add --toolchain stable wasm32-unknown-unknown
-      - uses: ./.github/actions/web-checkout
-        with:
-          tool: trunk@0.21.14
-      - name: Build the winit app in both worker modes
-        working-directory: examples/winit
-        run: |
-          key=$(node ../../ci/web/example.mjs keys "$RUNNER_TEMP/vapid.json")
-          PUSHUPS_VAPID_PUBLIC_KEY="$key" trunk build --release --dist dist-rust
-          PUSHUPS_WEB_WORKER=static PUSHUPS_VAPID_PUBLIC_KEY="$key" trunk build --release --dist dist-static
-          # `build.rs` wrote `pushups::SERVICE_WORKER`, which the Trunk hook copied.
-          cmp dist-static/pushups-sw.js ../../js/pushups-sw.js
-      - name: The Rust-handler build in Chrome, with real pushes
-        run: node ci/web/example.mjs check examples/winit/dist-rust "$RUNNER_TEMP/vapid.json" '/sw\.js\?pushups=rust' --rust
-      - name: The static-worker build in Chrome, with real pushes
-        run: node ci/web/example.mjs check examples/winit/dist-static "$RUNNER_TEMP/vapid.json" '/pushups-sw\.js\?pushups=static'
+        run: node ci/web/example.mjs check examples/${{ matrix.example }}/dist-static "$RUNNER_TEMP/vapid.json" '/pushups-sw\.js\?pushups=static'
 
   example-leptos:
     name: Example Leptos SSR app in Chrome
