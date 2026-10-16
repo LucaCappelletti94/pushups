@@ -16,13 +16,11 @@ leptos = "0.8.22"
 leptos_axum = { version = "0.8.10", optional = true }
 leptos_router = "0.8.17"
 pushups = { path = "../..", features = ["stream", "serde"] }
-serde_json = "1"
+pushups-example-support = { path = "../support" }
 tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-js-sys = "0.3"
 wasm-bindgen = "0.2.129"
-web-sys = { version = "0.3", features = ["console"] }
 
 [features]
 hydrate = ["leptos/hydrate"]

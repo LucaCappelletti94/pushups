@@ -2,17 +2,13 @@
 
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, channel};
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use pushups::{Config, Context, Event, Message, VapidPublicKey};
+use pushups_example_support as support;
 
 // The Linux and Windows sub-configs, unused on the web, which takes its key for `WebPushConfig` instead.
 #[cfg(not(target_arch = "wasm32"))]
 use pushups::{LinuxConfig, UnifiedPushConfig, WnsConfig};
-// `std`'s clock panics on `wasm32-unknown-unknown`, where `web-time` reads `Date.now()` instead.
-#[cfg(target_arch = "wasm32")]
-use web_time::{SystemTime, UNIX_EPOCH};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -23,7 +19,7 @@ use crate::screen::Screen;
 /// Installs `pushups`, before the event loop exists.
 pub(crate) fn install() {
     match pushups::install(config()) {
-        Ok(()) => log(&format!("installed at_ms={}", now_ms())),
+        Ok(()) => log(&format!("installed at_ms={}", support::now_ms())),
         Err(error) => log(&format!("install failed: {error}")),
     }
 }
@@ -71,26 +67,50 @@ pub(crate) fn run(event_loop: EventLoop) -> Result<(), Box<dyn std::error::Error
     if let Err(error) = pushups::register() {
         log(&format!("register failed: {error}"));
     }
-    request_permission();
+    ask_permission();
     Ok(event_loop.run_app(App::new(events))?)
 }
 
 /// Asks for permission and logs the answer, off the thread that runs the event loop.
 #[cfg(not(target_arch = "wasm32"))]
-fn request_permission() {
+fn ask_permission() {
     std::thread::spawn(|| {
         let answer = futures_executor::block_on(pushups::request_permission());
         log(&format!("permission {answer:?}"));
     });
 }
 
-/// Asks for permission and logs the answer, in the page's event loop.
+/// Wires the page's button to ask for permission, since the prompt needs the click's gesture.
 #[cfg(target_arch = "wasm32")]
-fn request_permission() {
-    wasm_bindgen_futures::spawn_local(async {
-        let answer = pushups::request_permission().await;
-        log(&format!("permission {answer:?}"));
-    });
+fn ask_permission() {
+    use wasm_bindgen::JsCast;
+    let Some(button) = web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.get_element_by_id("allow"))
+    else {
+        return;
+    };
+    let wired = button.clone();
+    let closure = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(
+        move |_: web_sys::Event| {
+            let button = wired.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let answer = pushups::request_permission().await;
+                log(&format!("permission {answer:?}"));
+                let text = format!("Notifications: {answer:?}");
+                button.set_text_content(Some(text.as_str()));
+            });
+        },
+    );
+    let function = closure
+        .as_js_value()
+        .clone()
+        .dyn_into::<js_sys::Function>()
+        .expect("the closure is a function");
+    let _ = button.add_event_listener_with_callback("click", &function);
+    // The listener keeps the closure alive for the life of the page, so the Rust copy must not
+    // drop it.
+    closure.forget();
 }
 
 struct App {
@@ -130,7 +150,7 @@ impl ApplicationHandler for App {
             }
             Err(error) => log(&format!("window failed: {error}")),
         }
-        log(&format!("ui ready at_ms={}", now_ms()));
+        log(&format!("ui ready at_ms={}", support::now_ms()));
     }
 
     fn destroy_surfaces(&mut self, _event_loop: &dyn ActiveEventLoop) {
@@ -141,7 +161,7 @@ impl ApplicationHandler for App {
     fn proxy_wake_up(&mut self, _event_loop: &dyn ActiveEventLoop) {
         for event in self.events.try_iter() {
             log(&describe(&event));
-            self.screen.push(shown(&event));
+            self.screen.push(support::shown(&event));
         }
     }
 
@@ -164,38 +184,15 @@ impl ApplicationHandler for App {
     }
 }
 
-/// The event as the window shows it, a push as the `body` its payload carries.
-fn shown(event: &Event) -> String {
-    match event {
-        Event::Token(_) => "Registered for pushes".to_owned(),
-        Event::RegistrationFailed(error) => format!("Registration failed: {error}"),
-        Event::Message(message) => format!(
-            "Push: {}",
-            field(message, "body")
-                .unwrap_or_else(|| String::from_utf8_lossy(&message.payload).into_owned())
-        ),
-        Event::MessagesDropped => "Some pushes were dropped".to_owned(),
-    }
-}
-
 fn describe(event: &Event) -> String {
-    let at = now_ms();
+    let at = support::now_ms();
     match event {
-        Event::Token(token) => {
-            if let Some(subscription) = token.web_push_subscription() {
-                let json = serde_json::to_string(&subscription).expect("a subscription serialises");
-                format!("ui token at_ms={at} subscription={json}")
-            } else if let Some(hex) = token.apns_device_token() {
-                format!("ui token at_ms={at} apns={hex}")
-            } else {
-                format!("ui token at_ms={at} {token:?}")
-            }
-        }
+        Event::Token(token) => format!("ui token at_ms={at} {}", support::token(token)),
         Event::RegistrationFailed(error) => format!("ui registration failed at_ms={at} {error}"),
         Event::Message(message) => format!(
             "ui message at_ms={at} started_app={} {} payload={}",
             message.started_app,
-            timing(message, at),
+            support::timing(message, at),
             String::from_utf8_lossy(&message.payload)
         ),
         Event::MessagesDropped => format!("ui messages dropped at_ms={at}"),
@@ -206,112 +203,35 @@ fn describe(event: &Event) -> String {
 #[pushups::background_handler]
 fn on_push(_context: Context, message: Message) {
     #[cfg(any(target_os = "linux", target_os = "windows"))]
-    popup(&message);
-    let entered = now_ms();
+    if let Err(error) = support::popup(&message) {
+        log(&format!("popup failed: {error}"));
+    }
+    let entered = support::now_ms();
     log(&format!(
         "handler started_app={} entered_at_ms={entered} {} payload={}",
         message.started_app,
-        timing(&message, entered),
+        support::timing(&message, entered),
         String::from_utf8_lossy(&message.payload)
     ));
-}
-
-/// Shows the push as a desktop popup, which Windows and Linux leave to the app.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
-fn popup(message: &Message) {
-    let title = field(message, "title").unwrap_or_else(|| "pushups".to_owned());
-    let body = field(message, "body").unwrap_or_else(|| "A push arrived".to_owned());
-    let shown = notify_rust::Notification::new()
-        .summary(&title)
-        .body(&body)
-        .show();
-    if let Err(error) = shown {
-        log(&format!("popup failed: {error}"));
-    }
 }
 
 /// Runs in the service worker for every push, and decides what the user sees.
 #[cfg(target_arch = "wasm32")]
 pub(crate) async fn notification_for(message: Message) -> pushups::Notification {
-    let at = now_ms();
-    let line = timing(&message, at);
+    let at = support::now_ms();
+    let line = support::timing(&message, at);
     log(&format!("worker push at_ms={at} {line}"));
     pushups::Notification::new(
-        field(&message, "title").unwrap_or_else(|| "pushups from Rust".to_owned()),
+        support::field(&message, "title").unwrap_or_else(|| "pushups from Rust".to_owned()),
     )
-    .body(field(&message, "body").unwrap_or_else(|| format!("pushups winit example, {line}")))
+    .body(
+        support::field(&message, "body")
+            .unwrap_or_else(|| format!("pushups winit example, {line}")),
+    )
     .navigate("/")
 }
 
-/// The payload's string field `name`, for a JSON payload that carries it.
-fn field(message: &Message, name: &str) -> Option<String> {
-    let data: serde_json::Value = serde_json::from_slice(&message.payload).ok()?;
-    data.get(name)?.as_str().map(str::to_owned)
-}
-
-/// The push's `seq` and its latency from the sender's `sent_at_ms` to `at`, for a JSON payload
-/// such as an FCM data map.
-fn timing(message: &Message, at: u128) -> String {
-    let data: serde_json::Value = serde_json::from_slice(&message.payload).unwrap_or_default();
-    let field = |name: &str| data.get(name).and_then(serde_json::Value::as_str);
-    let sent = field("sent_at_ms").and_then(|sent| sent.parse::<u128>().ok());
-    format!(
-        "seq={} sent_at_ms={} since_sent_ms={}",
-        field("seq").unwrap_or("-"),
-        sent.map_or_else(|| "-".to_owned(), |sent| sent.to_string()),
-        sent.map_or_else(
-            || "-".to_owned(),
-            |sent| at.saturating_sub(sent).to_string()
-        ),
-    )
-}
-
-fn now_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| since.as_millis())
-}
-
-/// Prints the line, and appends it to `pushups-example.log` in the temporary directory, which outlives a process the system launched with nothing reading its output.
-#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+/// Logs the line under the prefix `ci/android/example.sh`, `ci/linux/example.sh` and `ci/web/example.mjs` read.
 pub(crate) fn log(line: &str) {
-    use std::io::Write;
-
-    let line = format!("pushups-winit-example {line}");
-    println!("{line}");
-    let path = std::env::temp_dir().join("pushups-example.log");
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    {
-        // One write per line, so lines from the handler thread and the UI never interleave.
-        let _ = file.write_all(format!("{line}\n").as_bytes());
-    }
-}
-
-/// Logs the line to the console, which `ci/web/example.mjs` reads with the page's lines.
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn log(line: &str) {
-    web_sys::console::log_1(&format!("pushups-winit-example {line}").into());
-}
-
-/// Writes the line to logcat under the tag `pushups-example`, which `ci/android/example.sh` reads.
-#[cfg(target_os = "android")]
-fn log(line: &str) {
-    use std::ffi::{CString, c_char, c_int};
-
-    #[link(name = "log")]
-    unsafe extern "C" {
-        fn __android_log_write(priority: c_int, tag: *const c_char, text: *const c_char) -> c_int;
-    }
-    const INFO: c_int = 4;
-    let Ok(text) = CString::new(line.replace('\0', " ")) else {
-        return;
-    };
-    // SAFETY: both strings are NUL-terminated and stay alive for the call, and liblog only
-    // reads them.
-    unsafe {
-        __android_log_write(INFO, c"pushups-example".as_ptr(), text.as_ptr());
-    }
+    support::log("pushups-winit-example", line);
 }

@@ -1,15 +1,17 @@
-//! Receives pushes through `pushups` under a plain tao app, with tao from crates.io or patched to tao#1364, and logs every step with its wall-clock time to standard output and to `pushups-example.log` in the temporary directory.
-
-use std::io::Write;
+//! Receives pushes through `pushups` under a plain tao app, scoped to iOS and macOS since
+//! `Config::new()` cannot install on Linux or Windows, with tao from crates.io or patched to
+//! tao#1364, and logs every step with its wall-clock time to standard output and to
+//! `pushups-example.log` in the temporary directory.
 
 use pushups::{Config, Context, Event, Message};
+use pushups_example_support as support;
 use tao::event::{Event as TaoEvent, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tao::window::WindowBuilder;
 
 fn main() {
     match pushups::install(Config::new()) {
-        Ok(()) => log(&format!("installed at_ms={}", now_ms())),
+        Ok(()) => log(&format!("installed at_ms={}", support::now_ms())),
         Err(error) => log(&format!("install failed: {error}")),
     }
     let event_loop = EventLoopBuilder::<Event>::with_user_event().build();
@@ -38,7 +40,7 @@ fn main() {
                     .build(target)
                     .map_err(|error| log(&format!("window failed: {error}")))
                     .ok();
-                log(&format!("ui ready at_ms={}", now_ms()));
+                log(&format!("ui ready at_ms={}", support::now_ms()));
             }
             TaoEvent::UserEvent(event) => log(&describe(&event)),
             TaoEvent::WindowEvent {
@@ -62,12 +64,9 @@ fn main() {
 }
 
 fn describe(event: &Event) -> String {
-    let at = now_ms();
+    let at = support::now_ms();
     match event {
-        Event::Token(token) => match token.apns_device_token() {
-            Some(hex) => format!("ui token at_ms={at} apns={hex}"),
-            None => format!("ui token at_ms={at} {token:?}"),
-        },
+        Event::Token(token) => format!("ui token at_ms={at} {}", support::token(token)),
         Event::RegistrationFailed(error) => format!("ui registration failed at_ms={at} {error}"),
         Event::Message(message) => format!(
             "ui message at_ms={at} started_app={} payload={}",
@@ -84,28 +83,11 @@ fn on_push(_context: Context, message: Message) {
     log(&format!(
         "handler started_app={} entered_at_ms={} payload={}",
         message.started_app,
-        now_ms(),
+        support::now_ms(),
         String::from_utf8_lossy(&message.payload)
     ));
 }
 
-fn now_ms() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_millis())
-}
-
-/// Prints the line, and appends it to `pushups-example.log` in the temporary directory, which outlives a process the system launched with nothing reading its output.
 fn log(line: &str) {
-    let line = format!("pushups-tao-example {line}");
-    println!("{line}");
-    let path = std::env::temp_dir().join("pushups-example.log");
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    {
-        // One write per line, so lines from the handler thread and the UI never interleave.
-        let _ = file.write_all(format!("{line}\n").as_bytes());
-    }
+    support::log("pushups-tao-example", line);
 }

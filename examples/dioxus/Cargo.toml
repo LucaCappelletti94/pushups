@@ -11,15 +11,10 @@ base64 = "0.22"
 dioxus = "0.7.10"
 futures-util = { version = "0.3", default-features = false }
 pushups = { path = "../..", features = ["stream", "dioxus", "serde"] }
-serde_json = "1"
-
-# The popup for a push, which Windows and Linux leave to the app.
-[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
-notify-rust = "4"
+pushups-example-support = { path = "../support" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-js-sys = "0.3"
-web-sys = { version = "0.3", features = ["console"] }
+web-sys = { version = "0.3", features = ["Clipboard", "Location", "Navigator", "Window"] }
 
 [features]
 default = ["mobile"]

@@ -8,14 +8,12 @@ publish = false
 
 [dependencies]
 futures-util = { version = "0.3", default-features = false }
-js-sys = "0.3"
 pushups = { path = "../..", features = ["stream", "serde"] }
-serde_json = "1"
+pushups-example-support = { path = "../support" }
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["console"] }
 yew = { version = "0.23", features = ["csr"] }
 
-# The build script writes the static worker from `pushups::SERVICE_WORKER` for Trunk to copy.
+# The build script writes the static worker for Trunk to copy.
 [build-dependencies]
 pushups = { path = "../.." }
 

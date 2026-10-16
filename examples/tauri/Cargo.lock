@@ -3079,6 +3079,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pushups-example-support"
+version = "0.0.0"
+dependencies = [
+ "js-sys",
+ "notify-rust",
+ "pushups",
+ "serde_json",
+ "web-sys",
+]
+
+[[package]]
 name = "pushups-macros"
 version = "0.1.0"
 dependencies = [
@@ -3092,8 +3103,8 @@ dependencies = [
 name = "pushups-tauri-example"
 version = "0.0.0"
 dependencies = [
- "notify-rust",
  "pushups",
+ "pushups-example-support",
  "serde_json",
  "tauri",
  "tauri-build",
@@ -4030,6 +4041,7 @@ dependencies = [
 name = "tauri-plugin-pushups"
 version = "0.1.0"
 dependencies = [
+ "plist",
  "pushups",
  "tauri",
  "tauri-plugin",

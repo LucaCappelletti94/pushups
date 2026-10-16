@@ -16,25 +16,23 @@ crate-type = ["cdylib"]
 font8x8 = "0.3"
 futures-executor = "0.3"
 pushups = { path = "../..", features = ["serde"] }
-serde_json = "1"
+pushups-example-support = { path = "../support" }
 # Puts the drawn pixels in the window, which winit itself leaves empty.
 softbuffer = "0.4"
 winit = "=0.31.0-beta.3"
 
 [target.'cfg(target_os = "android")'.dependencies]
 winit = { version = "=0.31.0-beta.3", features = ["android-native-activity"] }
-# The popup for a push, which Windows and Linux leave to the app.
-[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
-notify-rust = "4"
 # The web build, which `Trunk` starts from `index.html` and which `build.rs` writes its worker beside.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["console"] }
-web-time = "1"
+web-sys = { version = "0.3", features = ["Document", "Element", "Event", "Window"] }
 
 [workspace]
 
-# The build script writes the static worker from `pushups::SERVICE_WORKER` for Trunk to copy.
+# The build script writes the static worker for Trunk to copy.
 [build-dependencies]
 pushups = { path = "../.." }
 
