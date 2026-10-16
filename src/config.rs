@@ -111,6 +111,7 @@ impl UnifiedPushConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinuxConfig {
     pub(crate) app_id: String,
+    pub(crate) notifications: Option<AppNotifications>,
 }
 
 impl LinuxConfig {
@@ -122,6 +123,26 @@ impl LinuxConfig {
     pub fn new(app_id: impl Into<String>) -> Self {
         Self {
             app_id: app_id.into(),
+            notifications: None,
+        }
+    }
+
+    /// The display name and icon that name the app on its notifications, written into the
+    /// desktop entry `install` keeps for the app and passed to the notification server. The icon
+    /// is an absolute path to an image or an icon theme's name. Without them the notifications
+    /// carry the app id and no app icon.
+    #[must_use]
+    pub fn app_notifications(
+        self,
+        display_name: impl Into<String>,
+        icon: impl Into<String>,
+    ) -> Self {
+        Self {
+            notifications: Some(AppNotifications {
+                display_name: display_name.into(),
+                icon: icon.into(),
+            }),
+            ..self
         }
     }
 }
@@ -133,8 +154,8 @@ pub struct WnsConfig {
     pub(crate) notifications: Option<AppNotifications>,
 }
 
-/// The display name and icon `install` registers with the App SDK's notification manager,
-/// what [`WnsConfig::app_notifications`] stores.
+/// The display name and icon an app shows its notifications under, what
+/// [`WnsConfig::app_notifications`] and [`LinuxConfig::app_notifications`] store.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AppNotifications {
     pub(crate) display_name: String,

@@ -102,7 +102,7 @@ let config = Config::new().web(WebPushConfig::new(key));
 
 ## Linux
 
-The crate speaks UnifiedPush over D-Bus to the user's distributor, such as KDE's, and a push to a closed app starts it through D-Bus activation for the background handler. The desktop shows nothing for a push by itself, so the app calls `Notification::show`, and a tap on a notification with `data` reaches the app as a message. Through the desktop portal, 1.19.4 or later, a tap on a closed app opens it. Without that portal a tap reaches the app only while the process that showed the notification runs.
+The crate speaks UnifiedPush over D-Bus to the user's distributor, such as KDE's, and a push to a closed app starts it through D-Bus activation for the background handler. The desktop shows nothing for a push by itself, so the app calls `Notification::show`, and a tap on a notification with `data` reaches the app as a message. Through the desktop portal, 1.19.4 or later, a tap on a closed app opens it. Without that portal a tap reaches the app only while the process that showed the notification runs. `LinuxConfig::app_notifications` names the app and its icon on the notifications, otherwise they carry the app id.
 
 ```rust
 use pushups::{Config, LinuxConfig, UnifiedPushConfig, VapidPublicKey};
@@ -111,7 +111,10 @@ let key = VapidPublicKey::from_base64url(
     "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
 )?;
 let config = Config::new()
-    .linux(LinuxConfig::new("org.example.App"))
+    .linux(
+        LinuxConfig::new("org.example.App")
+            .app_notifications("Example", "/usr/share/icons/example.png"),
+    )
     .unified_push(UnifiedPushConfig::new(key));
 # let _ = config;
 # Ok::<(), pushups::Error>(())

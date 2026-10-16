@@ -28,10 +28,13 @@ pub(crate) fn install() {
 /// The app's configuration from build-time keys, `PUSHUPS_VAPID_PUBLIC_KEY` (base64url) for UnifiedPush on Linux and Android and `PUSHUPS_WNS_REMOTE_ID` for Windows.
 fn config() -> Config {
     // The bundle identifier, which also names the app on the Linux session bus.
-    let mut config = Config::new().linux(LinuxConfig::new("rs.pushups.example"));
+    let mut config = Config::new().linux(
+        LinuxConfig::new("rs.pushups.example")
+            .app_notifications("pushups example", support::app_icon()),
+    );
     if let Some(remote_id) = option_env!("PUSHUPS_WNS_REMOTE_ID") {
         config = config.windows(
-            WnsConfig::new(remote_id).app_notifications("pushups example", support::windows_icon()),
+            WnsConfig::new(remote_id).app_notifications("pushups example", support::app_icon()),
         );
     }
     if let Some(key) = option_env!("PUSHUPS_VAPID_PUBLIC_KEY") {

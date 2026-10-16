@@ -152,10 +152,10 @@ pub fn popup(message: &Message) -> Result<(), pushups::Error> {
         .show()
 }
 
-/// The icon of the examples' Windows notifications, the brand's 256 px PNG in this checkout, as
-/// the absolute path `WnsConfig::app_notifications` takes.
+/// The icon of the examples' desktop notifications, the brand's 256 px PNG in this checkout, as
+/// the absolute path `WnsConfig::app_notifications` and `LinuxConfig::app_notifications` take.
 #[must_use]
-pub fn windows_icon() -> String {
+pub fn app_icon() -> String {
     let icon = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../assets/brand/png/icon-macos-256.png");
     std::path::absolute(&icon)

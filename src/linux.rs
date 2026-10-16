@@ -29,12 +29,13 @@ use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::zvariant::{OwnedValue, Value};
 
 use crate::backend::Backend;
+use crate::config::AppNotifications;
 use crate::delivered::Delivered;
 use crate::dispatch::DISPATCHER;
 use crate::inbox::Inbox;
 use crate::queue::Entry;
 use crate::webpush_crypto::Keys;
-use crate::{Config, Error, Event, Message, Permission};
+use crate::{Config, Error, Event, LinuxConfig, Message, Permission};
 
 const CONNECTOR_PATH: &str = "/org/unifiedpush/Connector";
 const DISTRIBUTOR_PATH: &str = "/org/unifiedpush/Distributor";
@@ -52,6 +53,8 @@ const IDLE_POLL: Duration = Duration::from_millis(200);
 struct Runtime {
     connection: Connection,
     app_id: String,
+    /// The display name and icon the app's notifications carry.
+    notifications: Option<AppNotifications>,
     vapid: Option<String>,
     /// The session bus started this process for a push or a tap, so it has no UI.
     headless: bool,
@@ -100,7 +103,7 @@ impl Backend for Linux {
             // An earlier `install` set up the runtime but could not take the name, so this one tries again.
             Some(runtime) => runtime,
             None => {
-                let runtime = Runtime::new(&linux.app_id, config.unified_push, headless)?;
+                let runtime = Runtime::new(linux, config.unified_push, headless)?;
                 RUNTIME.get_or_init(|| runtime)
             }
         };
@@ -163,10 +166,15 @@ impl Runtime {
     /// Connects, serves the connector, and loads or creates the app's keys and token. The bus
     /// comes first, so a process without one leaves no file behind.
     fn new(
-        app_id: &str,
+        linux: LinuxConfig,
         unified_push: Option<crate::UnifiedPushConfig>,
         headless: bool,
     ) -> Result<Self, Error> {
+        let LinuxConfig {
+            app_id,
+            notifications,
+        } = linux;
+        let app_id = app_id.as_str();
         let connection = connection::Builder::session()
             .and_then(|builder| builder.serve_at(CONNECTOR_PATH, Connector))
             .and_then(|builder| {
@@ -187,7 +195,15 @@ impl Runtime {
         // A desktop entry that cannot be written leaves the portal refusing the app id, so
         // `show` takes the fallback, as it does in the process that wrote the entry.
         let entry_in_place = data_home(env::var_os("XDG_DATA_HOME"), env::var_os("HOME"))
-            .is_some_and(|home| notification::write_desktop_file(app_id, &home).unwrap_or(false));
+            .is_some_and(|home| {
+                notification::write_desktop_file(
+                    app_id,
+                    notifications.as_ref(),
+                    &home,
+                    env::var_os("XDG_DATA_DIRS"),
+                )
+                .unwrap_or(false)
+            });
         let queue = dir.join("queue");
         let inbox = if headless {
             Inbox::headless(queue)
@@ -197,6 +213,7 @@ impl Runtime {
         Ok(Self {
             connection,
             app_id: app_id.to_owned(),
+            notifications,
             vapid: unified_push.map(|unified_push| unified_push.vapid_public_key.as_base64url()),
             headless,
             state: Mutex::new(State {
