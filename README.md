@@ -85,7 +85,7 @@ remote-notifications = true
 
 ## Web
 
-The app gives its VAPID public key and serves `pushups::SERVICE_WORKER` at `/pushups-sw.js`, which the `dioxus` feature has `dx` do, or sets `rust_handler` to run its own wasm as the worker, as [`examples/yew`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/yew) and [`examples/leptos`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/leptos) show. On iOS only home-screen web apps get pushes, and they reach the page when it is next shown ([WebKit bug 268797](https://bugs.webkit.org/show_bug.cgi?id=268797)).
+The app gives its VAPID public key and serves `pushups::SERVICE_WORKER` at `/pushups-sw.js`, which the `dioxus` feature has `dx` do and a Trunk build script writes with `pushups::write_service_worker`, or sets `rust_handler` to run its own wasm as the worker, as [`examples/yew`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/yew) and [`examples/leptos`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/leptos) show. On iOS only home-screen web apps get pushes, and they reach the page when it is next shown ([WebKit bug 268797](https://bugs.webkit.org/show_bug.cgi?id=268797)).
 
 ```rust
 use pushups::{Config, VapidPublicKey, WebPushConfig};

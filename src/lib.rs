@@ -78,6 +78,7 @@ mod web_parts;
 mod webpush_crypto;
 #[cfg(any(target_os = "windows", test))]
 mod windows;
+mod worker_file;
 
 use std::sync::Arc;
 
@@ -113,6 +114,7 @@ pub use notification::Notification;
 pub use permission::Permission;
 pub use pushups_macros::{background_handler, firebase_config};
 pub use token::{Token, WebPushKeys, WebPushSubscription};
+pub use worker_file::write_service_worker;
 
 /// Connects the app to the platform's push service, before the toolkit's event loop starts.
 ///
