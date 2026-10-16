@@ -279,8 +279,8 @@ fn on_notification_invoked(
     deliver_tap(args, false).map_err(|error| windows_core::Error::new(E_FAIL, error.to_string()))
 }
 
-/// The `file:///` URI the App SDK takes for an icon at a local path, or the icon as given when it
-/// is a URI already.
+/// The `file:///` URI a toast's logo takes for an icon at a local path, or the icon as given when
+/// it is a URI already.
 fn icon_uri_text(icon: &str) -> String {
     if icon.contains("://") {
         icon.to_owned()
@@ -292,10 +292,18 @@ fn icon_uri_text(icon: &str) -> String {
     }
 }
 
-/// The `Uri` of the app's icon.
+/// The `Uri` of a toast's logo.
 #[cfg(target_os = "windows")]
 fn icon_uri(icon: &str) -> Result<windows::Foundation::Uri, Error> {
     windows::Foundation::Uri::CreateUri(&icon_uri_text(icon).into()).map_err(Error::platform)
+}
+
+/// The `Uri` the notification manager registers the app's icon under. The App SDK's
+/// `ValidateAssets` checks the raw URI as a file path, so it takes the path itself, and a
+/// `file:///` URI fails with `ERROR_INVALID_NAME`.
+#[cfg(target_os = "windows")]
+fn registered_icon(icon: &str) -> Result<windows::Foundation::Uri, Error> {
+    windows::Foundation::Uri::CreateUri(&icon.into()).map_err(Error::platform)
 }
 
 /// Shows the notification in the notification centre, its `Show` call on a worker thread.
@@ -428,7 +436,7 @@ impl Backend for Windows {
             notification_manager
                 .Register2(
                     &notifications.display_name.as_str().into(),
-                    &icon_uri(&notifications.icon)?,
+                    &registered_icon(&notifications.icon)?,
                 )
                 .map_err(Error::platform)?;
         }
