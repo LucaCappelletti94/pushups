@@ -93,6 +93,13 @@ impl Backend for Linux {
             }
         };
         take_name(runtime, headless)?;
+        // A headless process this one took the name from may still be persisting its last calls.
+        runtime.state.lock().inbox.claim_queue().map_err(|error| {
+            Error::Platform(format!(
+                "another process of {} still holds its queue: {error}",
+                runtime.app_id
+            ))
+        })?;
         runtime.owns_name.store(true, Ordering::Release);
         drop(setup);
         if headless {

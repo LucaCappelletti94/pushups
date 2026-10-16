@@ -11,14 +11,24 @@
 //! | 4 | Web Push token | endpoint length, UTF-8 endpoint, 65-byte `p256dh`, 16-byte `auth` |
 //! | 5 | registration failed | length, UTF-8 reason |
 //!
-//! A process killed mid-append leaves a short last record, which reading ignores and the next
-//! append cuts off, so the records after it stay readable.
+//! One process owns the file at a time, holding an exclusive lock on [`QueueFile::lock_path`]
+//! from its first operation until it exits. A process killed mid-append leaves a short last
+//! record, which reading ignores and the next owner cuts off when it takes the file over, so the
+//! records after it stay readable.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use crate::{Event, Message, Token};
+
+/// How long a process waits for the queue's previous owner, such as a headless process that is
+/// finishing its calls before it exits.
+const CLAIM_BOUND: Duration = Duration::from_secs(30);
+/// How often a waiting process tries the lock again.
+const CLAIM_POLL: Duration = Duration::from_millis(50);
 
 /// Names the format and its version.
 pub(crate) const HEADER: &[u8; 8] = b"PUSHUPS\x01";
@@ -114,62 +124,113 @@ fn push_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> io::Result<()> {
 
 /// Reads the entries of a queue file, up to the first record that is short or unknown.
 pub(crate) fn decode(bytes: &[u8]) -> Vec<Entry> {
-    decode_prefix(bytes).map_or_else(Vec::new, |(entries, _)| entries)
-}
-
-/// The entries before the first record that is short or unknown, and the length of the bytes they
-/// fill with the header, or `None` when the bytes do not start with the header.
-fn decode_prefix(bytes: &[u8]) -> Option<(Vec<Entry>, usize)> {
-    let mut rest = bytes.strip_prefix(HEADER.as_slice())?;
+    let Some(mut rest) = bytes.strip_prefix(HEADER.as_slice()) else {
+        return Vec::new();
+    };
     let mut entries = Vec::new();
-    while let Some((entry, after)) = decode_one(rest) {
-        entries.push(entry);
+    while let Some((record, after)) = Record::parse(rest) {
+        entries.push(record.to_entry());
         rest = after;
     }
-    Some((entries, bytes.len() - rest.len()))
+    entries
 }
 
-fn decode_one(bytes: &[u8]) -> Option<(Entry, &[u8])> {
-    let (&tag, rest) = bytes.split_first()?;
-    match tag {
-        MESSAGE => {
-            let (&started_app, rest) = rest.split_first()?;
-            let started_app = match started_app {
-                0 => false,
-                1 => true,
-                _ => return None,
-            };
-            let (payload, rest) = take_bytes(rest)?;
-            let message = Message {
+/// The length of the header and the complete records after it, or `None` when the bytes do not
+/// start with the header. Nothing is copied.
+fn readable_len(bytes: &[u8]) -> Option<usize> {
+    let mut rest = bytes.strip_prefix(HEADER.as_slice())?;
+    while let Some((_, after)) = Record::parse(rest) {
+        rest = after;
+    }
+    Some(bytes.len() - rest.len())
+}
+
+/// One record as it lies in the file, borrowed from its bytes.
+enum Record<'bytes> {
+    Message {
+        started_app: bool,
+        payload: &'bytes [u8],
+    },
+    FcmToken(&'bytes str),
+    MessagesDropped,
+    WebPushToken {
+        endpoint: &'bytes str,
+        p256dh: &'bytes [u8; 65],
+        auth: &'bytes [u8; 16],
+    },
+    RegistrationFailed(&'bytes str),
+}
+
+impl<'bytes> Record<'bytes> {
+    /// The record at the start of `bytes` and the bytes after it, or `None` when it is short or
+    /// unknown.
+    fn parse(bytes: &'bytes [u8]) -> Option<(Self, &'bytes [u8])> {
+        let (&tag, rest) = bytes.split_first()?;
+        match tag {
+            MESSAGE => {
+                let (&started_app, rest) = rest.split_first()?;
+                let started_app = match started_app {
+                    0 => false,
+                    1 => true,
+                    _ => return None,
+                };
+                let (payload, rest) = take_bytes(rest)?;
+                Some((
+                    Self::Message {
+                        started_app,
+                        payload,
+                    },
+                    rest,
+                ))
+            }
+            FCM_TOKEN => {
+                let (token, rest) = take_text(rest)?;
+                Some((Self::FcmToken(token), rest))
+            }
+            MESSAGES_DROPPED => Some((Self::MessagesDropped, rest)),
+            WEB_PUSH_TOKEN => {
+                let (endpoint, rest) = take_text(rest)?;
+                let (p256dh, rest) = rest.split_first_chunk::<65>()?;
+                let (auth, rest) = rest.split_first_chunk::<16>()?;
+                Some((
+                    Self::WebPushToken {
+                        endpoint,
+                        p256dh,
+                        auth,
+                    },
+                    rest,
+                ))
+            }
+            REGISTRATION_FAILED => {
+                let (reason, rest) = take_text(rest)?;
+                Some((Self::RegistrationFailed(reason), rest))
+            }
+            _ => None,
+        }
+    }
+
+    fn to_entry(&self) -> Entry {
+        match *self {
+            Self::Message {
+                started_app,
+                payload,
+            } => Entry::Message(Message {
                 payload: payload.to_vec(),
                 started_app,
-            };
-            Some((Entry::Message(message), rest))
-        }
-        FCM_TOKEN => {
-            let (token, rest) = take_bytes(rest)?;
-            let token = String::from_utf8(token.to_vec()).ok()?;
-            Some((Entry::FcmToken(token), rest))
-        }
-        MESSAGES_DROPPED => Some((Entry::MessagesDropped, rest)),
-        WEB_PUSH_TOKEN => {
-            let (endpoint, rest) = take_bytes(rest)?;
-            let endpoint = String::from_utf8(endpoint.to_vec()).ok()?;
-            let (p256dh, rest) = rest.split_first_chunk::<65>()?;
-            let (auth, rest) = rest.split_first_chunk::<16>()?;
-            let entry = Entry::WebPushToken {
+            }),
+            Self::FcmToken(token) => Entry::FcmToken(token.to_owned()),
+            Self::MessagesDropped => Entry::MessagesDropped,
+            Self::WebPushToken {
                 endpoint,
+                p256dh,
+                auth,
+            } => Entry::WebPushToken {
+                endpoint: endpoint.to_owned(),
                 p256dh: *p256dh,
                 auth: *auth,
-            };
-            Some((entry, rest))
+            },
+            Self::RegistrationFailed(reason) => Entry::RegistrationFailed(reason.to_owned()),
         }
-        REGISTRATION_FAILED => {
-            let (reason, rest) = take_bytes(rest)?;
-            let reason = String::from_utf8(reason.to_vec()).ok()?;
-            Some((Entry::RegistrationFailed(reason), rest))
-        }
-        _ => None,
     }
 }
 
@@ -182,48 +243,112 @@ fn take_bytes(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
     Some(rest.split_at(length))
 }
 
+fn take_text(bytes: &[u8]) -> Option<(&str, &[u8])> {
+    let (text, rest) = take_bytes(bytes)?;
+    Some((std::str::from_utf8(text).ok()?, rest))
+}
+
 /// The queue file at a fixed path.
 #[derive(Debug)]
 pub(crate) struct QueueFile {
     path: PathBuf,
+    /// The lock file, once this process owns the queue. The lock lasts as long as the file is
+    /// open, which the kernel ends when the process exits however it exits.
+    owner: OnceLock<File>,
 }
 
 impl QueueFile {
     pub(crate) fn new(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            owner: OnceLock::new(),
+        }
     }
 
-    /// Appends `entry` and waits until it is on storage. Bytes no reader accepts, a header or a
-    /// last record a killed process cut short, are cut off first, so the new record follows the
-    /// readable ones. The caller's lock keeps a concurrent append or drain out meanwhile.
+    /// The lock file beside the queue.
+    fn lock_path(&self) -> PathBuf {
+        self.path.with_extension("lock")
+    }
+
+    /// Makes this process the queue's owner, waiting up to 30 s for a previous owner to exit. The
+    /// owner first cuts off the bytes no reader accepts, a header or a last record a killed
+    /// process cut short, so its appends follow the readable records. A second call does nothing.
+    pub(crate) fn claim(&self) -> io::Result<()> {
+        self.claim_within(CLAIM_BOUND)
+    }
+
+    fn claim_within(&self, bound: Duration) -> io::Result<()> {
+        if self.owner.get().is_some() {
+            return Ok(());
+        }
+        let lock = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(self.lock_path())?;
+        let deadline = Instant::now() + bound;
+        while !try_lock(&lock)? {
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    format!(
+                        "another process still holds the queue at {}",
+                        self.path.display()
+                    ),
+                ));
+            }
+            std::thread::sleep(CLAIM_POLL);
+        }
+        self.cut_unreadable()?;
+        // The caller's lock keeps a second claim out, and a lost race would only drop a second
+        // handle on the same lock.
+        let _ = self.owner.set(lock);
+        Ok(())
+    }
+
+    fn cut_unreadable(&self) -> io::Result<()> {
+        let mut file = match OpenOptions::new().read(true).write(true).open(&self.path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        // A first append cut inside the header leaves a prefix no reader accepts.
+        let readable = readable_len(&bytes).unwrap_or(0);
+        if readable < bytes.len() {
+            file.set_len(u64::try_from(readable).map_err(io::Error::other)?)?;
+            file.sync_data()?;
+        }
+        Ok(())
+    }
+
+    /// Appends `entry` and waits until it is on storage. A write that fails part way is cut back
+    /// off, so the next record still follows a readable one. The caller's lock keeps this
+    /// process's other appends and drains out meanwhile.
     pub(crate) fn append(&self, entry: &Entry) -> io::Result<()> {
+        self.claim()?;
         let mut file = OpenOptions::new()
             .create(true)
-            .read(true)
             .write(true)
             .truncate(false)
             .open(&self.path)?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
+        let before = file.seek(SeekFrom::End(0))?;
         let mut record = Vec::new();
-        let readable = if let Some((_, readable)) = decode_prefix(&bytes) {
-            readable
-        } else {
+        if before == 0 {
             record.extend_from_slice(HEADER);
-            0
-        };
-        let keep = u64::try_from(readable).map_err(io::Error::other)?;
-        if readable < bytes.len() {
-            file.set_len(keep)?;
         }
-        file.seek(SeekFrom::Start(keep))?;
         entry.encode(&mut record)?;
-        file.write_all(&record)?;
-        file.sync_data()
+        let written = file.write_all(&record).and_then(|()| file.sync_data());
+        if written.is_err() {
+            let _ = file.set_len(before);
+        }
+        written
     }
 
     /// Returns every entry in append order and empties the file.
     pub(crate) fn take_all(&self) -> io::Result<Vec<Entry>> {
+        self.claim()?;
         let mut file = match OpenOptions::new().read(true).write(true).open(&self.path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -239,6 +364,32 @@ impl QueueFile {
 fn empty(file: &File) -> io::Result<()> {
     file.set_len(0)?;
     file.sync_data()
+}
+
+/// Takes the exclusive lock on `lock` if no other open file holds it, without waiting.
+#[cfg(unix)]
+fn try_lock(lock: &File) -> io::Result<bool> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: the descriptor belongs to `lock`, open for the whole call, and `flock` only reads it.
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(true);
+    }
+    let error = io::Error::last_os_error();
+    if error.kind() == io::ErrorKind::WouldBlock {
+        Ok(false)
+    } else {
+        Err(error)
+    }
+}
+
+/// Only the tests build the queue off Unix, in one process, so there is no other owner to keep out.
+#[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the signature of the Unix `try_lock`, which can fail"
+)]
+fn try_lock(_lock: &File) -> io::Result<bool> {
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -362,6 +513,8 @@ mod tests {
         assert_eq!(queue.take_all().unwrap(), []);
         queue.append(&Entry::FcmToken("a".to_owned())).unwrap();
         queue.append(&message(b"b", true)).unwrap();
+        // The next process to own the file finds the entries.
+        drop(queue);
         let reopened = QueueFile::new(directory.path().join("queue"));
         assert_eq!(
             reopened.take_all().unwrap(),
@@ -369,7 +522,7 @@ mod tests {
         );
         assert_eq!(reopened.take_all().unwrap(), []);
         reopened.append(&Entry::MessagesDropped).unwrap();
-        assert_eq!(queue.take_all().unwrap(), [Entry::MessagesDropped]);
+        assert_eq!(reopened.take_all().unwrap(), [Entry::MessagesDropped]);
     }
 
     #[test]
@@ -408,5 +561,26 @@ mod tests {
                 "cut at {cut}"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_second_owner_waits_for_the_first_and_then_takes_its_records() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue");
+        let first = QueueFile::new(path.clone());
+        first.append(&Entry::FcmToken("first".to_owned())).unwrap();
+        let second = QueueFile::new(path);
+        assert!(
+            second.claim_within(Duration::from_millis(200)).is_err(),
+            "a second owner must not write while the first owns the queue"
+        );
+        drop(first);
+        second.claim_within(Duration::from_millis(200)).unwrap();
+        second.append(&Entry::MessagesDropped).unwrap();
+        assert_eq!(
+            second.take_all().unwrap(),
+            [Entry::FcmToken("first".to_owned()), Entry::MessagesDropped]
+        );
     }
 }

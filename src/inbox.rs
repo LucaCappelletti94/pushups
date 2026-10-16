@@ -37,6 +37,13 @@ impl Inbox {
         }
     }
 
+    /// Makes this process the owner of the queue file, waiting for a previous owner such as the
+    /// headless process this one replaced, so nothing that process persists comes after a drain.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn claim_queue(&self) -> std::io::Result<()> {
+        self.queue.claim()
+    }
+
     /// A UI session began (`true`) or ended (`false`), which only Android reports while running.
     /// A session that begins after a handler was set binds to it and drains the queue into it,
     /// and a handler kept from the session before binds only while the thread that set it runs.
