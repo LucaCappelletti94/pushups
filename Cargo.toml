@@ -72,7 +72,8 @@ linkme = "0.3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # The newest 0.6x line that builds on Rust 1.85, since the 0.100 line of `windows-core` needs 1.95.
-windows = { version = "0.62", default-features = false, features = ["Foundation", "ApplicationModel_Background", "ApplicationModel_Core"] }
+# The `IMap` that `AppNotificationActivatedEventArgs` returns for `Arguments` and `UserInput`.
+windows = { version = "0.62", default-features = false, features = ["Foundation", "Foundation_Collections", "ApplicationModel_Background", "ApplicationModel_Core"] }
 windows-collections = "0.3"
 windows-core = "0.62"
 windows-future = "0.3"
@@ -98,6 +99,10 @@ zbus = "5"
 # Runs itself as the app on a private session bus, so it needs its own main.
 [[test]]
 name = "linux"
+harness = false
+
+[[test]]
+name = "linux_notifications"
 harness = false
 
 [package.metadata.docs.rs]

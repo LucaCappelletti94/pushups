@@ -1,4 +1,4 @@
-//! The payloads Apple already delivered, so a tap or a repeated arrival of the same push is dropped.
+//! The payloads already delivered on Apple, Linux and Windows, so a tap or a repeated arrival of the same push is dropped.
 //!
 //! The file starts with [`HEADER`] and holds up to [`CAPACITY`] little-endian `u64` FNV-1a hashes of payloads, oldest first.
 

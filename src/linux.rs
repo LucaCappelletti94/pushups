@@ -1,8 +1,13 @@
 //! The UnifiedPush backend for Linux, a connector on the D-Bus session bus (spec `DBUS_0.3.0`).
 //!
-//! `install` serves `org.unifiedpush.Connector2` under the app's id and writes the activation file
-//! that lets the session bus start the app for a push. A process started that way stays inside
-//! `install`, headless, as the plan's Linux delivery table lays out.
+//! `install` serves `org.unifiedpush.Connector2` and `org.freedesktop.Application` under the app's
+//! id and writes the activation file that lets the session bus start the app for a push or a tap
+//! on one of its notifications. A process started that way stays inside `install`, headless, as
+//! the plan's Linux delivery table lays out.
+
+mod notification;
+
+pub(crate) use notification::show;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -24,6 +29,7 @@ use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::zvariant::{OwnedValue, Value};
 
 use crate::backend::Backend;
+use crate::delivered::Delivered;
 use crate::dispatch::DISPATCHER;
 use crate::inbox::Inbox;
 use crate::queue::Entry;
@@ -47,8 +53,11 @@ struct Runtime {
     connection: Connection,
     app_id: String,
     vapid: Option<String>,
+    /// The session bus started this process for a push or a tap, so it has no UI.
+    headless: bool,
     state: Mutex<State>,
     activity: Mutex<Activity>,
+    notifier: Mutex<notification::Notifier>,
     /// Set once this process owns the app's bus name, which completes `install`. Until then the
     /// runtime only serves the calls the bus holds for an activation.
     owns_name: AtomicBool,
@@ -60,6 +69,9 @@ struct State {
     inbox: Inbox,
     keys: Keys,
     token: String,
+    /// The payloads already delivered, so a tap on a push the app received, or a second tap,
+    /// delivers nothing.
+    delivered: Delivered,
     /// The next message started the app, true in a headless process until its first message.
     started_app: bool,
 }
@@ -157,6 +169,9 @@ impl Runtime {
     ) -> Result<Self, Error> {
         let connection = connection::Builder::session()
             .and_then(|builder| builder.serve_at(CONNECTOR_PATH, Connector))
+            .and_then(|builder| {
+                builder.serve_at(notification::object_path(app_id), notification::Application)
+            })
             .and_then(connection::Builder::build)
             .map_err(Error::platform)?;
         let dir = data_dir(env::var_os("XDG_DATA_HOME"), env::var_os("HOME"), app_id)
@@ -169,6 +184,10 @@ impl Runtime {
         let keys = load_keys(&dir.join("keys")).map_err(Error::platform)?;
         let token = load_token(&dir.join("token")).map_err(Error::platform)?;
         write_activation_file(app_id).map_err(Error::platform)?;
+        // A desktop entry that cannot be written leaves the portal refusing the app id, so
+        // `show` takes the fallback, as it does in the process that wrote the entry.
+        let entry_in_place = data_home(env::var_os("XDG_DATA_HOME"), env::var_os("HOME"))
+            .is_some_and(|home| notification::write_desktop_file(app_id, &home).unwrap_or(false));
         let queue = dir.join("queue");
         let inbox = if headless {
             Inbox::headless(queue)
@@ -179,10 +198,12 @@ impl Runtime {
             connection,
             app_id: app_id.to_owned(),
             vapid: unified_push.map(|unified_push| unified_push.vapid_public_key.as_base64url()),
+            headless,
             state: Mutex::new(State {
                 inbox,
                 keys,
                 token,
+                delivered: Delivered::new(dir.join("delivered")),
                 started_app: headless,
             }),
             activity: Mutex::new(Activity {
@@ -190,6 +211,7 @@ impl Runtime {
                 last: Instant::now(),
                 replaced: false,
             }),
+            notifier: Mutex::new(notification::Notifier::new(entry_in_place)),
             owns_name: AtomicBool::new(false),
         })
     }
@@ -333,6 +355,10 @@ impl Connector {
                 .keys
                 .decrypt(&body)
                 .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
+            // A delivered set that cannot be read or written lets the push through, since a repeat beats a loss.
+            if !state.delivered.first_delivery(&payload).unwrap_or(true) {
+                return Ok(reply);
+            }
             let message = Message {
                 payload,
                 started_app: state.started_app,

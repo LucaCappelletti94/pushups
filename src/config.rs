@@ -130,6 +130,15 @@ impl LinuxConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WnsConfig {
     pub(crate) remote_id: String,
+    pub(crate) notifications: Option<AppNotifications>,
+}
+
+/// The display name and icon `install` registers with the App SDK's notification manager,
+/// what [`WnsConfig::app_notifications`] stores.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AppNotifications {
+    pub(crate) display_name: String,
+    pub(crate) icon: String,
 }
 
 impl WnsConfig {
@@ -139,6 +148,25 @@ impl WnsConfig {
     pub fn new(remote_id: impl Into<String>) -> Self {
         Self {
             remote_id: remote_id.into(),
+            notifications: None,
+        }
+    }
+
+    /// The display name and icon `install` registers with the App SDK's notification manager,
+    /// which [`Notification::show`](crate::Notification::show) needs before it can show a
+    /// notification, and reports [`Error::NotConfigured`](crate::Error::NotConfigured) without.
+    #[must_use]
+    pub fn app_notifications(
+        self,
+        display_name: impl Into<String>,
+        icon: impl Into<String>,
+    ) -> Self {
+        Self {
+            notifications: Some(AppNotifications {
+                display_name: display_name.into(),
+                icon: icon.into(),
+            }),
+            ..self
         }
     }
 }

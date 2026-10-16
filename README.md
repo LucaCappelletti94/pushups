@@ -102,7 +102,7 @@ let config = Config::new().web(WebPushConfig::new(key));
 
 ## Linux
 
-The crate speaks UnifiedPush over D-Bus to the user's distributor, such as KDE's, and a push to a closed app starts it through D-Bus activation for the background handler.
+The crate speaks UnifiedPush over D-Bus to the user's distributor, such as KDE's, and a push to a closed app starts it through D-Bus activation for the background handler. The desktop shows nothing for a push by itself, so the app calls `Notification::show`, and a tap on a notification with `data` reaches the app as a message. Through the desktop portal, 1.19.4 or later, a tap on a closed app opens it. Without that portal a tap reaches the app only while the process that showed the notification runs.
 
 ```rust
 use pushups::{Config, LinuxConfig, UnifiedPushConfig, VapidPublicKey};
@@ -119,7 +119,7 @@ let config = Config::new()
 
 ## Windows
 
-The app's installer puts the Windows App SDK 2.5 runtime on the machine, and the app ships `Microsoft.WindowsAppRuntime.Bootstrap.dll` beside its executable. It gives the Object ID of its Entra ID app registration's service principal, and a push to a closed app starts it for the background handler.
+The app's installer puts the Windows App SDK 2.5 runtime on the machine, and the app ships `Microsoft.WindowsAppRuntime.Bootstrap.dll` beside its executable. It gives the Object ID of its Entra ID app registration's service principal, and a push to a closed app starts it for the background handler. With `WnsConfig::app_notifications`, naming the app and an icon file, `Notification::show` puts a toast in the notification centre, and a tap on one with `data` reaches the app as a message, starting it when it has exited. Windows refuses a toast past about 5 KB, which leaves about 3.5 KB for `data` under a short title.
 
 ```rust
 use pushups::{Config, WnsConfig};

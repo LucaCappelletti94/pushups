@@ -16,8 +16,14 @@ path = "src/main.rs"
 name = "send"
 path = "src/send.rs"
 
+# Stands in for a desktop's notification server, which the test bed lacks.
+[[bin]]
+name = "notifier"
+path = "src/notifier.rs"
+
 [dependencies]
 pushups = { path = "../../..", features = ["serde"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt", "time"] }
 web-push = "0.11"
+zbus = "5"

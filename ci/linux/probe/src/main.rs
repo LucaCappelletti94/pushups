@@ -1,10 +1,11 @@
 //! The Linux app the end-to-end test drives inside the UnifiedPush test bed.
 //!
 //! It installs `pushups`, registers, and appends every event to `events.log` and every
-//! background-handler call to `handled.log` in `$PROBE_OUT`, one line each. A token also lands in
+//! background-handler call to `handled.log` in `$PROBE_OUT`, one line each. The background handler
+//! also shows a notification whose tap hands back `tap:` and the payload. A token also lands in
 //! `subscription.json`, the shape the `send` binary and browsers use. It runs until
-//! `$PROBE_OUT/stop` appears or five minutes pass. When the session bus starts it for a push,
-//! `pushups::install` keeps it headless and never returns.
+//! `$PROBE_OUT/stop` appears or five minutes pass. When the session bus starts it for a push or a
+//! tap, `pushups::install` keeps it headless and never returns.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -13,7 +14,9 @@ use std::process::ExitCode;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use pushups::{Config, Event, LinuxConfig, Message, UnifiedPushConfig, VapidPublicKey};
+use pushups::{
+    Config, Event, LinuxConfig, Message, Notification, UnifiedPushConfig, VapidPublicKey,
+};
 
 const APP_ID: &str = "rs.pushups.LinuxProbe";
 const RUN_BOUND: Duration = Duration::from_secs(300);
@@ -40,6 +43,12 @@ fn describe_message(message: &Message) -> String {
 #[pushups::background_handler]
 fn on_push(_context: pushups::Context, message: Message) {
     append("handled.log", &describe_message(&message));
+    let payload = String::from_utf8_lossy(&message.payload).into_owned();
+    let shown = Notification::new("pushups probe")
+        .body(payload.clone())
+        .data(format!("tap:{payload}"))
+        .show();
+    append("shown.log", &format!("shown {shown:?} {payload}"));
 }
 
 fn on_event(event: Event) {

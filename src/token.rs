@@ -142,6 +142,32 @@ pub(crate) fn base64url(bytes: &[u8]) -> String {
     encoded
 }
 
+/// Decodes base64url without padding, or none when the text is not unpadded base64url.
+///
+/// The unused bits of a trailing sextet may hold anything, so this discards them where the
+/// reference decoders reject them.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) fn base64url_decode(text: &str) -> Option<Vec<u8>> {
+    if text.len() % 4 == 1 {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(text.len() / 4 * 3);
+    let mut pending = 0u16;
+    let mut pending_bits = 0;
+    for character in text.chars() {
+        let sextet = base64url_sextet(character)?;
+        pending = (pending << 6) | u16::from(sextet);
+        pending_bits += 6;
+        if pending_bits >= 8 {
+            pending_bits -= 8;
+            // The shift leaves the byte in the low eight bits.
+            bytes.push((pending >> pending_bits).to_le_bytes()[0]);
+            pending &= (1 << pending_bits) - 1;
+        }
+    }
+    Some(bytes)
+}
+
 /// Decodes the 87 characters of unpadded base64url that encode a 65-byte VAPID public key.
 pub(crate) fn base64url_decode_vapid_key(text: &str) -> Result<[u8; 65], VapidKeyError> {
     let mut bytes = [0u8; 65];
@@ -356,6 +382,36 @@ mod tests {
                 VapidPublicKey::from_base64url(&"A".repeat(length)),
                 Err(Error::InvalidVapidKey(VapidKeyError::Length(length)))
             );
+        }
+    }
+
+    #[test]
+    fn base64url_decode_agrees_with_the_base64_crate() {
+        let mut state = 1u32;
+        for length in [0usize, 1, 2, 3, 4, 5, 63, 1000, 4096] {
+            let bytes = (0..length)
+                .map(|_| {
+                    state = state.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                    state.to_be_bytes()[0]
+                })
+                .collect::<Vec<_>>();
+            let text = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes);
+            assert_eq!(base64url(&bytes), text);
+            assert_eq!(base64url_decode(&text), Some(bytes));
+        }
+    }
+
+    #[test]
+    fn base64url_decode_rejects_characters_outside_the_alphabet() {
+        for character in ['+', '/', '=', ' ', '\t', 'é'] {
+            assert_eq!(base64url_decode(&format!("AB{character}")), None);
+        }
+    }
+
+    #[test]
+    fn base64url_decode_rejects_a_length_of_one_modulo_four() {
+        for length in [1usize, 5, 9, 1001] {
+            assert_eq!(base64url_decode(&"A".repeat(length)), None);
         }
     }
 }

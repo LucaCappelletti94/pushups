@@ -15,7 +15,13 @@ mod apple;
 mod backend;
 mod config;
 mod context;
-#[cfg(any(target_os = "ios", target_os = "macos", test))]
+#[cfg(any(
+    target_os = "ios",
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "windows",
+    test
+))]
 mod delivered;
 mod dispatch;
 #[cfg(all(
