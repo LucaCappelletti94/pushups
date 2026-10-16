@@ -73,7 +73,8 @@ impl Dispatcher {
     /// Replaces the handler and delivers any queued events to it.
     pub(crate) fn set_handler(&self, handler: Arc<Handler>) {
         let mut state = self.state.lock();
-        state.handler = Some(handler);
+        // Dropped once the lock is released, since the handler's captures may call back in.
+        let _replaced = state.handler.replace(handler);
         #[cfg(any(target_os = "android", test))]
         {
             state.setter_alive = Some(current_thread_alive());
@@ -177,6 +178,8 @@ impl Dispatcher {
             if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| handler(event))) {
                 first_panic.get_or_insert(payload);
             }
+            // A handler that replaced itself holds its last reference here, so it goes before the lock is retaken.
+            drop(handler);
             state = self.state.lock();
         }
         state.delivering = false;
@@ -383,5 +386,75 @@ mod tests {
             .join()
             .unwrap();
         assert!(!dispatcher.handler_thread_alive());
+    }
+
+    /// Emits `message(byte)` into `dispatcher` when dropped, as a handler's captured state may.
+    struct EmitOnDrop {
+        dispatcher: Arc<Dispatcher>,
+        byte: u8,
+    }
+
+    impl Drop for EmitOnDrop {
+        fn drop(&mut self) {
+            self.dispatcher.emit(message(self.byte));
+        }
+    }
+
+    /// Runs `work` on its own thread and fails if it has not returned within five seconds, which
+    /// a dispatcher deadlocked on its own lock never does.
+    fn returns_in_time(work: impl FnOnce() + Send + 'static) {
+        let (done, returned) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            work();
+            let _ = done.send(());
+        });
+        assert!(
+            returned
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .is_ok(),
+            "the dispatcher deadlocked"
+        );
+    }
+
+    #[test]
+    fn a_replaced_handler_is_dropped_after_the_lock_is_released() {
+        let dispatcher = Arc::new(Dispatcher::new());
+        let (seen, recorder_handler) = recorder();
+        let replacing = Arc::clone(&dispatcher);
+        returns_in_time(move || {
+            let probe = EmitOnDrop {
+                dispatcher: Arc::clone(&replacing),
+                byte: 9,
+            };
+            replacing.set_handler(Arc::new(move |_| {
+                let _ = &probe;
+            }));
+            replacing.set_handler(recorder_handler);
+        });
+        assert_eq!(*seen.lock(), [message(9)]);
+    }
+
+    #[test]
+    fn a_handler_that_replaces_itself_is_dropped_after_the_lock_is_released() {
+        let dispatcher = Arc::new(Dispatcher::new());
+        let (seen, recorder_handler) = recorder();
+        let delivering = Arc::clone(&dispatcher);
+        returns_in_time(move || {
+            let probe = EmitOnDrop {
+                dispatcher: Arc::clone(&delivering),
+                byte: 9,
+            };
+            let next = Mutex::new(Some(recorder_handler));
+            let replacer = Arc::clone(&delivering);
+            delivering.set_handler(Arc::new(move |_| {
+                let _ = &probe;
+                if let Some(next) = next.lock().take() {
+                    replacer.set_handler(next);
+                }
+            }));
+            delivering.emit(message(1));
+            delivering.emit(message(2));
+        });
+        assert_eq!(*seen.lock(), [message(9), message(2)]);
     }
 }
