@@ -119,7 +119,7 @@ let config = Config::new()
 
 ## Windows
 
-The app's installer puts the Windows App SDK 2.5 runtime on the machine, and the app ships `Microsoft.WindowsAppRuntime.Bootstrap.dll` beside its executable. It gives the Object ID of its Entra ID app registration's service principal, and a push to a closed app starts it for the background handler. With `WnsConfig::app_notifications`, naming the app and an icon file, `Notification::show` puts a toast in the notification centre, and a tap on one with `data` reaches the app as a message, starting it when it has exited.
+The app's installer puts the Windows App SDK 2.5 runtime on the machine, and the app ships `Microsoft.WindowsAppRuntime.Bootstrap.dll` beside its executable. It gives the Object ID of its Entra ID app registration's service principal, and a push to a closed app starts it for the background handler. With `WnsConfig::app_notifications`, naming the app and an icon file, `Notification::show` puts a toast in the notification centre, and a tap on one with `data` reaches the app as a message, starting it when it has exited. Windows refuses a toast past about 5 KB, which leaves about 3.5 KB for `data` under a short title.
 
 ```rust
 use pushups::{Config, WnsConfig};

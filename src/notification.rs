@@ -52,6 +52,9 @@ impl Notification {
 
     /// What a tap on the notification hands back, as the payload of an [`Event::Message`](crate::Event::Message)
     /// on Linux and Windows. A tap on the web opens or focuses a page and delivers no event.
+    ///
+    /// Windows refuses a toast past about 5 KB, which with a short title leaves room for about
+    /// 3.5 KB of `data`, and [`show`](Notification::show) then fails.
     #[must_use]
     pub fn data(mut self, data: impl Into<String>) -> Self {
         self.data = Some(data.into());
