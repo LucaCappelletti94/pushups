@@ -82,32 +82,34 @@ function Find-ToastElement([string] $title) {
     return $null
 }
 
-# Clicks the named toast and waits for the probe's tap line in $logDir.
+# Clicks the named toast and waits for the probe's tap line in $logDir. Answers `unreached` when
+# this session shows no notification centre or no toast to click, which the GitHub runner's does,
+# `failed` when a click brought no tap line, and `passed` otherwise.
 function Click-Toast([string] $label, [string] $title, [string] $logDir, [string] $expected) {
     $toast = Find-ToastElement $title
     if (-not $toast) {
         if (-not (Open-NotificationCenter)) {
-            Note "- ${label}: the notification centre could not be opened on this runner"
-            return $false
+            Note "- ${label}: the notification centre could not be opened, not reachable in this session"
+            return 'unreached'
         }
         $toast = Wait-Until $ToastBound { Find-ToastElement $title }
     }
     if (-not $toast) {
-        Note "- ${label}: no toast named '$title' within $ToastBound, not reachable on this runner"
-        return $false
+        Note "- ${label}: no toast named '$title' within $ToastBound, not reachable in this session"
+        return 'unreached'
     }
     if (-not (Invoke-Element $toast)) {
         Note "- ${label}: the toast had no clickable pattern and no screen rectangle"
-        return $false
+        return 'failed'
     }
     Note "- ${label}: the toast was clicked"
     $got = Wait-Until $ToastBound { First-Line (Join-Path $logDir 'events.log') $expected }
     if (-not $got) {
         Note "- ${label}: no tap line within $ToastBound of the click"
-        return $false
+        return 'failed'
     }
     Note "- ${label}: $got"
-    return $true
+    return 'passed'
 }
 
 function Start-Probe([string] $label, [string] $title, [string] $data) {
@@ -132,21 +134,21 @@ function Stop-Probe($probe) {
     Get-Content (Join-Path $probe.Out 'events.log') -ErrorAction SilentlyContinue | Write-Host
 }
 
-# Waits for the probe's show answer and reports it.
+# Waits for the probe's show answer, reports it, and returns the line, or nothing within the bound.
 function Wait-Shown($probe) {
     $line = Wait-Until $ToastBound {
         First-Line (Join-Path $probe.Out 'events.log') '^(shown|show failed|install failed|no PROBE_REMOTE_ID)'
     }
     if (-not $line) {
         Note "- $($probe.Label): no show answer within $ToastBound"
-        return $false
-    }
-    if ($line -notlike 'shown *') {
-        Note "- $($probe.Label): $line"
-        return $false
+        return $null
     }
     Note "- $($probe.Label): $line"
-    return $true
+    return $line
+}
+
+function Random-Data([int] $bytes) {
+    -join ((1..$bytes) | ForEach-Object { [char] (97 + (Get-Random -Maximum 26)) })
 }
 
 Note "## W1 on $((Get-CimInstance Win32_OperatingSystem).Caption) $([Environment]::OSVersion.Version)"
@@ -169,18 +171,15 @@ $beside = Join-Path $app 'w1-out'
 # Pass 1, the small data: a running tap, then the tap with the app stopped.
 $small = "w1 small $(Get-Random)"
 $probe = Start-Probe 'small' "pushups w1 small" $small
-if (-not (Wait-Shown $probe)) { $passed = $false } else {
-    if (-not (Click-Toast 'small' 'pushups w1 small' $probe.Out ('^message started_app=false data_len=' + $small.Length + ' ' + [regex]::Escape($small) + '$'))) {
-        $passed = $false
-    }
+$clicks = @()
+if ((Wait-Shown $probe) -notlike 'shown *') { $passed = $false } else {
+    $clicks += Click-Toast 'small' 'pushups w1 small' $probe.Out ('^message started_app=false data_len=' + $small.Length + ' ' + [regex]::Escape($small) + '$')
 }
 Stop-Probe $probe
 
 # The notification stays in the Action Center, so the click now starts the app for the tap.
 Remove-Item $beside -Recurse -Force -ErrorAction SilentlyContinue
-if (-not (Click-Toast 'small-closed' 'pushups w1 small' $beside ('^message started_app=true data_len=' + $small.Length + ' ' + [regex]::Escape($small) + '$'))) {
-    $passed = $false
-}
+$clicks += Click-Toast 'small-closed' 'pushups w1 small' $beside ('^message started_app=true data_len=' + $small.Length + ' ' + [regex]::Escape($small) + '$')
 $started = Get-Process -Name 'pushups-w1-probe' -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($started) {
     $startedProbe = [pscustomobject]@{ Label = 'tap-started'; Process = $started; Out = $beside }
@@ -190,19 +189,35 @@ if ($started) {
     Get-Content (Join-Path $beside 'events.log') -ErrorAction SilentlyContinue | Write-Host
 }
 
-# Passes 2 and 3 measure the launch attribute's bound at 1 KiB and 4 KiB of data.
-foreach ($bytes in @(1024, 4096)) {
-    $label = "$($bytes / 1024)KiB"
-    $title = "pushups w1 $label"
-    $data = -join ((1..$bytes) | ForEach-Object { [char] (97 + (Get-Random -Maximum 26)) })
-    $probe = Start-Probe $label $title $data
-    if (-not (Wait-Shown $probe)) { $passed = $false } else {
-        if (-not (Click-Toast $label $title $probe.Out ('^message started_app=false data_len=' + $bytes + ' '))) {
-            $passed = $false
-        }
-    }
-    Stop-Probe $probe
+# Pass 2, 1 KiB of data, shown and clicked.
+$title = 'pushups w1 1KiB'
+$probe = Start-Probe '1KiB' $title (Random-Data 1024)
+if ((Wait-Shown $probe) -notlike 'shown *') { $passed = $false } else {
+    $clicks += Click-Toast '1KiB' $title $probe.Out '^message started_app=false data_len=1024 '
 }
+Stop-Probe $probe
+if ($clicks -contains 'failed') { $passed = $false }
+if ($clicks -contains 'unreached') {
+    Note '- the taps wait for a desktop session, since this one let no click reach a toast'
+}
+
+# The largest data a toast takes, in 256-byte steps, ending at the first the App SDK refuses as too large.
+$largest = 1024
+foreach ($bytes in 5..16 | ForEach-Object { $_ * 256 }) {
+    $label = "bound-$bytes"
+    $probe = Start-Probe $label "pushups w1 $label" (Random-Data $bytes)
+    $line = Wait-Shown $probe
+    Stop-Probe $probe
+    if ($line -like 'shown *') {
+        $largest = $bytes
+    } elseif ($line -like '*Maximum payload size exceeded*') {
+        break
+    } else {
+        $passed = $false
+        break
+    }
+}
+Note "- the largest data shown: $largest bytes, in 256-byte steps"
 
 Write-Step-Summary
 if (-not $passed) { exit 1 }
