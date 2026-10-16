@@ -11,10 +11,11 @@
 //! | 4 | Web Push token | endpoint length, UTF-8 endpoint, 65-byte `p256dh`, 16-byte `auth` |
 //! | 5 | registration failed | length, UTF-8 reason |
 //!
-//! A process killed mid-append leaves a short last record, which reading ignores.
+//! A process killed mid-append leaves a short last record, which reading ignores and the next
+//! append cuts off, so the records after it stay readable.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
 use crate::{Event, Message, Token};
@@ -113,15 +114,19 @@ fn push_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> io::Result<()> {
 
 /// Reads the entries of a queue file, up to the first record that is short or unknown.
 pub(crate) fn decode(bytes: &[u8]) -> Vec<Entry> {
-    let Some(mut rest) = bytes.strip_prefix(HEADER.as_slice()) else {
-        return Vec::new();
-    };
+    decode_prefix(bytes).map_or_else(Vec::new, |(entries, _)| entries)
+}
+
+/// The entries before the first record that is short or unknown, and the length of the bytes they
+/// fill with the header, or `None` when the bytes do not start with the header.
+fn decode_prefix(bytes: &[u8]) -> Option<(Vec<Entry>, usize)> {
+    let mut rest = bytes.strip_prefix(HEADER.as_slice())?;
     let mut entries = Vec::new();
     while let Some((entry, after)) = decode_one(rest) {
         entries.push(entry);
         rest = after;
     }
-    entries
+    Some((entries, bytes.len() - rest.len()))
 }
 
 fn decode_one(bytes: &[u8]) -> Option<(Entry, &[u8])> {
@@ -188,22 +193,30 @@ impl QueueFile {
         Self { path }
     }
 
-    /// Appends `entry` and waits until it is on storage.
+    /// Appends `entry` and waits until it is on storage. Bytes no reader accepts, a header or a
+    /// last record a killed process cut short, are cut off first, so the new record follows the
+    /// readable ones. The caller's lock keeps a concurrent append or drain out meanwhile.
     pub(crate) fn append(&self, entry: &Entry) -> io::Result<()> {
         let mut file = OpenOptions::new()
             .create(true)
             .read(true)
-            .append(true)
+            .write(true)
+            .truncate(false)
             .open(&self.path)?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
         let mut record = Vec::new();
-        if !starts_with_header(&mut file)? {
-            // A first append cut inside the header leaves a prefix no reader accepts, and only a handle opened for writing may truncate it on Windows.
-            file = OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(&self.path)?;
+        let readable = if let Some((_, readable)) = decode_prefix(&bytes) {
+            readable
+        } else {
             record.extend_from_slice(HEADER);
+            0
+        };
+        let keep = u64::try_from(readable).map_err(io::Error::other)?;
+        if readable < bytes.len() {
+            file.set_len(keep)?;
         }
+        file.seek(SeekFrom::Start(keep))?;
         entry.encode(&mut record)?;
         file.write_all(&record)?;
         file.sync_data()
@@ -226,15 +239,6 @@ impl QueueFile {
 fn empty(file: &File) -> io::Result<()> {
     file.set_len(0)?;
     file.sync_data()
-}
-
-fn starts_with_header(file: &mut File) -> io::Result<bool> {
-    let mut start = [0; HEADER.len()];
-    match file.read_exact(&mut start) {
-        Ok(()) => Ok(&start == HEADER),
-        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(false),
-        Err(error) => Err(error),
-    }
 }
 
 #[cfg(test)]
@@ -379,6 +383,28 @@ mod tests {
             assert_eq!(
                 queue.take_all().unwrap(),
                 [Entry::MessagesDropped],
+                "cut at {cut}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_append_after_a_record_cut_short_is_kept_with_the_entries_before_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue");
+        let mut unfinished = Vec::new();
+        Entry::FcmToken("never fully written".to_owned())
+            .encode(&mut unfinished)
+            .unwrap();
+        for cut in 1..unfinished.len() {
+            let mut bytes = encoded(&[Entry::MessagesDropped]);
+            bytes.extend_from_slice(&unfinished[..cut]);
+            std::fs::write(&path, &bytes).unwrap();
+            let queue = QueueFile::new(path.clone());
+            queue.append(&Entry::FcmToken("later".to_owned())).unwrap();
+            assert_eq!(
+                queue.take_all().unwrap(),
+                [Entry::MessagesDropped, Entry::FcmToken("later".to_owned())],
                 "cut at {cut}"
             );
         }
