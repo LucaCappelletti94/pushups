@@ -9,9 +9,7 @@ use web_sys::ServiceWorkerRegistration;
 
 use crate::backend::Backend;
 use crate::dispatch::DISPATCHER;
-use crate::web_parts::{
-    permission_from, rust_worker_url, static_worker_url, subscription_key, web_push_token,
-};
+use crate::web_parts::{permission_from, static_worker_script, subscription_key, web_push_token};
 use crate::{Config, Error, Event, Message, Notification, Permission, VapidPublicKey};
 
 #[wasm_bindgen(module = "/js/pushups-sw.js")]
@@ -164,13 +162,19 @@ impl Backend for Web {
         let bundled = || Some(crate::dx::WORKER.to_string());
         #[cfg(not(feature = "dioxus"))]
         let bundled = || None;
+        let base = window
+            .document()
+            .and_then(|document| document.base_uri().ok().flatten())
+            .ok_or(Error::Unsupported)?;
         let script = match (web.rust_handler, web.service_worker_path.as_deref()) {
             // A Rust handler runs in the app's own entry module when the app set a path, else in
             // the glue, which only starts itself under `dx`.
-            (true, Some(entry)) => rust_worker_url(entry),
-            (true, None) => GLUE_URL.with(|glue| rust_worker_url(glue)),
-            (false, configured) => static_worker_url(configured, bundled),
-        };
+            (true, Some(entry)) => worker_url(entry, &base, "rust"),
+            (true, None) => GLUE_URL.with(|glue| worker_url(glue, &base, "rust")),
+            (false, configured) => {
+                worker_url(&static_worker_script(configured, bundled), &base, "static")
+            }
+        }?;
         let options = web_sys::RegistrationOptions::new();
         options.set_type("module");
         let registration = navigator
@@ -252,4 +256,13 @@ impl Backend for Web {
         handler.forget();
         Ok(())
     }
+}
+
+/// The worker's URL, `script` resolved against the page's base URL as registration resolves it,
+/// with one `pushups` parameter naming the worker's mode in place of any the script carried. The
+/// browser's own URL parser keeps the other parameters and the fragment where they belong.
+fn worker_url(script: &str, base: &str, mode: &str) -> Result<String, Error> {
+    let url = web_sys::Url::new_with_base(script, base).map_err(js_error)?;
+    url.search_params().set("pushups", mode);
+    Ok(url.href())
 }

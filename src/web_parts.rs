@@ -1,34 +1,23 @@
 //! The parts of the web backend that need no browser.
 
+use std::borrow::Cow;
 use std::time::{Duration, UNIX_EPOCH};
 
 use crate::{Error, Permission, Token};
 
-/// The script URL the page registers, telling the shim its mode in the query.
-fn with_mode(script: &str, mode: &str) -> String {
-    let separator = if script.contains('?') { '&' } else { '?' };
-    format!("{script}{separator}pushups={mode}")
-}
-
-/// The URL a page registers when a Rust handler runs in the worker, `script` being the app's own
-/// entry module or the wasm-bindgen glue.
-pub(crate) fn rust_worker_url(script: &str) -> String {
-    with_mode(script, "rust")
-}
-
-/// The URL a page registers for the static worker: the app's own path, else the one `dx` bundled
-/// from this crate, else [`WebPushConfig::DEFAULT_SERVICE_WORKER_PATH`](crate::WebPushConfig::DEFAULT_SERVICE_WORKER_PATH).
+/// The static worker's script: the app's own path, else the one `dx` bundled from this crate,
+/// else [`WebPushConfig::DEFAULT_SERVICE_WORKER_PATH`](crate::WebPushConfig::DEFAULT_SERVICE_WORKER_PATH).
 /// `bundled` runs only when the app set no path.
-pub(crate) fn static_worker_url(
+pub(crate) fn static_worker_script(
     configured: Option<&str>,
     bundled: impl FnOnce() -> Option<String>,
-) -> String {
+) -> Cow<'_, str> {
     match configured {
-        Some(path) => with_mode(path, "static"),
-        None => match bundled() {
-            Some(path) => with_mode(&path, "static"),
-            None => with_mode(crate::WebPushConfig::DEFAULT_SERVICE_WORKER_PATH, "static"),
-        },
+        Some(path) => Cow::Borrowed(path),
+        None => bundled().map_or(
+            Cow::Borrowed(crate::WebPushConfig::DEFAULT_SERVICE_WORKER_PATH),
+            Cow::Owned,
+        ),
     }
 }
 
@@ -89,36 +78,17 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
     #[test]
-    fn the_worker_url_names_its_mode_and_keeps_an_existing_query() {
-        assert_eq!(
-            rust_worker_url("https://a.example/assets/app-dxh1.js"),
-            "https://a.example/assets/app-dxh1.js?pushups=rust"
-        );
-        assert_eq!(rust_worker_url("/sw.js?v=3"), "/sw.js?v=3&pushups=rust");
-        assert_eq!(
-            static_worker_url(Some("/sw.js?v=3"), || None),
-            "/sw.js?v=3&pushups=static"
-        );
-    }
-
-    #[test]
     fn the_static_worker_is_the_apps_path_then_the_bundled_one_then_the_default() {
         let bundled = || Some("/assets/pushups-sw.js".to_owned());
         assert_eq!(
-            static_worker_url(Some("/sw.js"), || unreachable!("a configured path wins")),
-            "/sw.js?pushups=static"
+            static_worker_script(Some("/sw.js"), || unreachable!("a configured path wins")),
+            "/sw.js"
         );
+        assert_eq!(static_worker_script(None, bundled), "/assets/pushups-sw.js");
+        assert_eq!(static_worker_script(None, || None), "/pushups-sw.js");
         assert_eq!(
-            static_worker_url(None, bundled),
-            "/assets/pushups-sw.js?pushups=static"
-        );
-        assert_eq!(
-            static_worker_url(None, || None),
-            "/pushups-sw.js?pushups=static"
-        );
-        assert_eq!(
-            static_worker_url(Some("/pushups-sw.js"), bundled),
-            "/pushups-sw.js?pushups=static"
+            static_worker_script(Some("/pushups-sw.js"), bundled),
+            "/pushups-sw.js"
         );
     }
 
