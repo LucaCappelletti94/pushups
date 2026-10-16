@@ -1,10 +1,14 @@
-//! The Windows backend, WNS through the Windows App SDK's `PushNotificationManager`.
+//! The Windows backend, WNS through the Windows App SDK's `PushNotificationManager`, and
+//! desktop notifications through its `AppNotificationManager`.
 //!
 //! An unpackaged app has no auto-initializer, so `install` runs the bootstrapper, checks
-//! `IsSupported()`, puts the `PushReceived` handler in before `Register()`, and delivers the
-//! push that started the app. `register` creates the fresh channel on a worker thread, since
-//! WNS can take up to fifteen minutes to answer. Until W0 settles background activation on
-//! hardware, an unpackaged app receives pushes only while it is running.
+//! `IsSupported()`, puts the `PushReceived` handler in before `Register()`, and, when
+//! `WnsConfig` set the display name and icon, puts the `NotificationInvoked` handler in before
+//! the notification manager's `Register`. `install` then delivers the push or tap that started
+//! the app, and `show` calls the manager's `Show` on a worker thread with a five-second bound.
+//! `register` creates the fresh channel on a worker thread, since WNS can take up to fifteen
+//! minutes to answer. Until W0 settles background activation on hardware, an unpackaged app
+//! receives pushes only while it is running.
 
 #[cfg(target_os = "windows")]
 mod bindings;
@@ -42,7 +46,15 @@ mod ffi {
 use std::time::{Duration, SystemTime};
 
 #[cfg(target_os = "windows")]
+use std::env;
+#[cfg(target_os = "windows")]
+use std::fs::DirBuilder;
+#[cfg(target_os = "windows")]
+use std::path::PathBuf;
+#[cfg(target_os = "windows")]
 use std::sync::OnceLock;
+#[cfg(target_os = "windows")]
+use std::sync::mpsc;
 #[cfg(target_os = "windows")]
 use std::thread;
 
@@ -56,9 +68,13 @@ use windows_core::Interface as _;
 #[cfg(target_os = "windows")]
 use crate::backend::Backend;
 #[cfg(target_os = "windows")]
+use crate::config::AppNotifications;
+#[cfg(target_os = "windows")]
+use crate::delivered::Delivered;
+#[cfg(target_os = "windows")]
 use crate::dispatch::DISPATCHER;
 #[cfg(target_os = "windows")]
-use crate::{Config, Error, Event, Message, Permission, Token};
+use crate::{Config, Error, Event, Message, Notification, Permission, Token};
 
 /// The 100-nanosecond ticks from 1601 to the Unix epoch, the base of `Windows.Foundation.DateTime`.
 const EPOCH_1601_TO_1970: i64 = 11_644_473_600 * 10_000_000;
@@ -77,6 +93,10 @@ const ON_PACKAGE_IDENTITY_NOOP: u32 = 0x0010;
 const E_FAIL: windows_core::HRESULT =
     windows_core::HRESULT(i32::from_le_bytes([0x05, 0x40, 0x00, 0x80]));
 
+/// The bound `show` waits for the App SDK's `Show` to answer before reporting `Error::Platform`.
+#[cfg(target_os = "windows")]
+const SHOW_BOUND: Duration = Duration::from_secs(5);
+
 /// The channel expiry from its `Windows.Foundation.DateTime` ticks, 100-nanosecond intervals
 /// from 1601, or `None` when the value is too far from the epoch for a `SystemTime`.
 fn channel_expiry(universal_time: i64) -> Option<SystemTime> {
@@ -92,10 +112,32 @@ fn channel_expiry(universal_time: i64) -> Option<SystemTime> {
     }
 }
 
+/// The key of the one launch argument that carries a notification's `data`.
+const DATA_KEY: &str = "pushups-data";
+
+/// The value the builder's `AddArgument` takes for a notification's `data`, base64url so the
+/// builder's own encoding is a no-op.
+fn launch_argument(data: &str) -> String {
+    crate::token::base64url(data.as_bytes())
+}
+
+/// The `data` bytes a launch attribute carries, or none when it lacks the key or its value is
+/// not base64url.
+fn launch_argument_data(argument: &str) -> Option<Vec<u8>> {
+    for (key, value) in argument.split(';').filter_map(|pair| pair.split_once('=')) {
+        if key == DATA_KEY {
+            return crate::token::base64url_decode(value);
+        }
+    }
+    None
+}
+
 /// What `install` sets up, once per process.
 #[cfg(target_os = "windows")]
 struct Runtime {
     remote_id: windows_core::GUID,
+    notifications: Option<AppNotifications>,
+    delivered: Delivered,
 }
 
 #[cfg(target_os = "windows")]
@@ -137,8 +179,14 @@ fn deliver(
 ) -> Result<(), Error> {
     let deferral = push.GetDeferral().ok();
     let payload = push.Payload().map_err(Error::platform).map(|payload| {
+        let payload: Vec<u8> = payload.to_vec();
+        let first = delivered().first_delivery(&payload);
+        // A delivered set that cannot be read or written lets the push through, since a repeat beats a loss.
+        if !first.unwrap_or(true) {
+            return;
+        }
         let message = Message {
-            payload: payload.to_vec(),
+            payload,
             started_app,
         };
         DISPATCHER.emit(Event::Message(message.clone()));
@@ -167,6 +215,154 @@ fn on_push_received(
         return Ok(());
     };
     deliver(args, false).map_err(|error| windows_core::Error::new(E_FAIL, error.to_string()))
+}
+
+/// The delivered set, published by `install` before any delivery.
+#[cfg(target_os = "windows")]
+fn delivered() -> &'static Delivered {
+    &RUNTIME
+        .get()
+        .expect("install publishes the runtime before any delivery")
+        .delivered
+}
+
+/// The delivered set's file, in the per-user data of the app's remote id.
+#[cfg(target_os = "windows")]
+fn delivered_path(remote_id: &str) -> Result<PathBuf, Error> {
+    let local = env::var_os("LOCALAPPDATA")
+        .ok_or_else(|| Error::Platform("`LOCALAPPDATA` is not set".to_owned()))?;
+    Ok(PathBuf::from(local)
+        .join(remote_id)
+        .join("pushups")
+        .join("delivered"))
+}
+
+/// Delivers one tap on a notification, from `NotificationInvoked` or from a tap activation.
+///
+/// A tap on a notification without `data` emits no event, the Apple local-notification
+/// precedent.
+#[cfg(target_os = "windows")]
+fn deliver_tap(
+    args: &bindings::AppNotificationActivatedEventArgs,
+    started_app: bool,
+) -> Result<(), Error> {
+    let argument = args.Argument().map_err(Error::platform)?;
+    let Some(payload) = launch_argument_data(&argument.to_string()) else {
+        return Ok(());
+    };
+    // A delivered set that cannot be read or written lets the tap through, since a repeat beats a loss.
+    if !delivered().first_delivery(&payload).unwrap_or(true) {
+        return Ok(());
+    }
+    DISPATCHER.emit(Event::Message(Message {
+        payload,
+        started_app,
+    }));
+    Ok(())
+}
+
+/// The `NotificationInvoked` handler, from the thread the tap arrives on.
+#[cfg(target_os = "windows")]
+// The callback shape is fixed by `TypedEventHandler::new`, which hands the `Ref`s over by value.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the handler signature is the one the runtime invokes"
+)]
+fn on_notification_invoked(
+    _sender: windows_core::Ref<bindings::AppNotificationManager>,
+    args: windows_core::Ref<bindings::AppNotificationActivatedEventArgs>,
+) -> windows_core::Result<()> {
+    // The process was already running, so the app did not start for this tap.
+    let Some(args) = args.as_ref() else {
+        return Ok(());
+    };
+    deliver_tap(args, false).map_err(|error| windows_core::Error::new(E_FAIL, error.to_string()))
+}
+
+/// The `file:///` URI the App SDK takes for an icon at a local path, or the icon as given when it
+/// is a URI already.
+fn icon_uri_text(icon: &str) -> String {
+    if icon.contains("://") {
+        icon.to_owned()
+    } else {
+        format!(
+            "file:///{}",
+            icon.replace('\\', "/").trim_start_matches('/')
+        )
+    }
+}
+
+/// The `Uri` of the app's icon.
+#[cfg(target_os = "windows")]
+fn icon_uri(icon: &str) -> Result<windows::Foundation::Uri, Error> {
+    windows::Foundation::Uri::CreateUri(&icon_uri_text(icon).into()).map_err(Error::platform)
+}
+
+/// Shows the notification in the notification centre, its `Show` call on a worker thread.
+#[cfg(target_os = "windows")]
+pub(crate) fn show(notification: &Notification) -> Result<(), Error> {
+    let Some(runtime) = RUNTIME.get() else {
+        return Err(Error::NotConfigured);
+    };
+    // Without the display name and icon, `install` never registered the manager.
+    if runtime.notifications.is_none() {
+        return Err(Error::NotConfigured);
+    }
+    // The worker thread outlives this borrow, so it keeps its own values.
+    let title = notification.title.clone();
+    let body = notification.body.clone();
+    let icon = notification.icon.clone();
+    let tag = notification.tag.clone();
+    let data = notification.data.clone();
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let result = show_blocking(
+            &title,
+            body.as_deref(),
+            icon.as_deref(),
+            tag.as_deref(),
+            data.as_deref(),
+        );
+        let _ = tx.send(result);
+    });
+    let result = rx.recv_timeout(SHOW_BOUND).map_err(|_| {
+        Error::Platform("the App SDK's `Show` did not answer within 5 s".to_owned())
+    })?;
+    // Past the bound the worker may still run, and it ends without a joiner.
+    drop(handle);
+    result
+}
+
+/// Builds the notification and calls `Show`, everything the worker thread does.
+#[cfg(target_os = "windows")]
+fn show_blocking(
+    title: &str,
+    body: Option<&str>,
+    icon: Option<&str>,
+    tag: Option<&str>,
+    data: Option<&str>,
+) -> Result<(), Error> {
+    let manager = bindings::AppNotificationManager::Default().map_err(Error::platform)?;
+    let mut builder = bindings::AppNotificationBuilder::new().map_err(Error::platform)?;
+    builder = builder.AddText(&title.into()).map_err(Error::platform)?;
+    if let Some(body) = body {
+        builder = builder.AddText(&body.into()).map_err(Error::platform)?;
+    }
+    if let Some(icon) = icon {
+        builder = builder
+            .SetAppLogoOverride(&icon_uri(icon)?)
+            .map_err(Error::platform)?;
+    }
+    if let Some(tag) = tag {
+        builder = builder.SetTag(&tag.into()).map_err(Error::platform)?;
+    }
+    if let Some(data) = data {
+        builder = builder
+            .AddArgument(&DATA_KEY.into(), &launch_argument(data).into())
+            .map_err(Error::platform)?;
+    }
+    let notification = builder.BuildNotification().map_err(Error::platform)?;
+    manager.Show(&notification).map_err(Error::platform)
 }
 
 #[cfg(target_os = "windows")]
@@ -218,21 +414,62 @@ impl Backend for Windows {
         // The handler must be in before `Register()`, or the runtime throws a COM exception.
         let _ = manager.PushReceived(&handler).map_err(Error::platform)?;
         manager.Register().map_err(Error::platform)?;
+        if let Some(notifications) = &wns.notifications {
+            let notification_manager =
+                bindings::AppNotificationManager::Default().map_err(Error::platform)?;
+            let tap_handler = TypedEventHandler::<
+                bindings::AppNotificationManager,
+                bindings::AppNotificationActivatedEventArgs,
+            >::new(on_notification_invoked);
+            // The handler must be in before the manager's `Register`, or the runtime starts a fresh process for every interaction.
+            let _ = notification_manager
+                .NotificationInvoked(&tap_handler)
+                .map_err(Error::platform)?;
+            notification_manager
+                .Register2(
+                    &notifications.display_name.as_str().into(),
+                    &icon_uri(&notifications.icon)?,
+                )
+                .map_err(Error::platform)?;
+        }
+        let delivered_path = delivered_path(&wns.remote_id)?;
+        if let Some(parent) = delivered_path.parent() {
+            DirBuilder::new()
+                .recursive(true)
+                .create(parent)
+                .map_err(Error::platform)?;
+        }
         // Published before the push that started the app is handled, so a handler that calls
         // `register` finds it, and the lock released, so one that calls `install` returns at once.
-        let _ = RUNTIME.set(Runtime { remote_id });
+        let _ = RUNTIME.set(Runtime {
+            remote_id,
+            notifications: wns.notifications.clone(),
+            delivered: Delivered::new(delivered_path),
+        });
         drop(guard);
         let args = bindings::AppInstance::GetCurrent()
             .map_err(Error::platform)?
             .GetActivatedEventArgs()
             .map_err(Error::platform)?;
-        if args.Kind().map_err(Error::platform)? == bindings::ExtendedActivationKind::Push {
-            let push = args
-                .Data()
-                .map_err(Error::platform)?
-                .cast::<bindings::PushNotificationReceivedEventArgs>()
-                .map_err(Error::platform)?;
-            deliver(&push, true)?;
+        match args.Kind().map_err(Error::platform)? {
+            bindings::ExtendedActivationKind::Push => {
+                let push = args
+                    .Data()
+                    .map_err(Error::platform)?
+                    .cast::<bindings::PushNotificationReceivedEventArgs>()
+                    .map_err(Error::platform)?;
+                deliver(&push, true)?;
+            }
+            // The tap that started the process carries its notification's `data`.
+            bindings::ExtendedActivationKind::AppNotification => {
+                let tap = args
+                    .Data()
+                    .map_err(Error::platform)?
+                    .cast::<bindings::AppNotificationActivatedEventArgs>()
+                    .map_err(Error::platform)?;
+                deliver_tap(&tap, true)?;
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -300,6 +537,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_icon_path_becomes_a_file_uri_with_three_slashes() {
+        assert_eq!(
+            icon_uri_text(r"C:\apps\pushups\icon.png"),
+            "file:///C:/apps/pushups/icon.png"
+        );
+        assert_eq!(
+            icon_uri_text("ms-appx:///Assets/icon.png"),
+            "ms-appx:///Assets/icon.png"
+        );
+    }
+
+    #[test]
     fn the_epoch_of_1601_ticks_is_the_unix_epoch() {
         assert_eq!(
             channel_expiry(EPOCH_1601_TO_1970),
@@ -325,6 +574,53 @@ mod tests {
             expiry,
             Some(SystemTime::UNIX_EPOCH - Duration::from_secs(86_400))
         );
+    }
+
+    #[test]
+    fn launch_argument_round_trips_through_its_key() {
+        let mut state = 1u32;
+        for length in [0usize, 1, 5, 63, 1000, 4096] {
+            let bytes: Vec<u8> = (0..length)
+                .map(|_| {
+                    state = state.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                    state.to_be_bytes()[0]
+                })
+                .collect();
+            let data = String::from_utf8_lossy(&bytes).to_string();
+            let argument = format!("{DATA_KEY}={}", launch_argument(&data));
+            assert_eq!(
+                launch_argument_data(&argument),
+                Some(data.as_bytes().to_vec())
+            );
+        }
+    }
+
+    #[test]
+    fn launch_argument_uses_no_character_the_shell_has_to_escape() {
+        let data = "a;= &b\tc";
+        assert!(
+            launch_argument(data)
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        );
+    }
+
+    #[test]
+    fn a_launch_attribute_without_our_key_carries_no_data() {
+        assert_eq!(launch_argument_data("other=1"), None);
+        assert_eq!(launch_argument_data(""), None);
+    }
+
+    #[test]
+    fn launch_argument_data_reads_our_key_from_among_others() {
+        let value = launch_argument("payload");
+        let argument = format!("other=1;{DATA_KEY}={value};third=2");
+        assert_eq!(launch_argument_data(&argument), Some(b"payload".to_vec()));
+    }
+
+    #[test]
+    fn launch_argument_data_rejects_a_value_outside_the_alphabet() {
+        assert_eq!(launch_argument_data(&format!("{DATA_KEY}=ab+cd")), None);
     }
 
     #[test]

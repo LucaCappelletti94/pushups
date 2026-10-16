@@ -29,10 +29,13 @@ unzip -q "$work/foundation.nupkg" -d "$work/foundation"
 
 push="$work/foundation/metadata/Microsoft.Windows.PushNotifications.winmd"
 lifecycle="$work/foundation/metadata/Microsoft.Windows.AppLifecycle.winmd"
-[ -f "$push" ] || { echo "missing $push" >&2; exit 1; }
-[ -f "$lifecycle" ] || { echo "missing $lifecycle" >&2; exit 1; }
+notifications="$work/foundation/metadata/Microsoft.Windows.AppNotifications.winmd"
+notification_builder="$work/foundation/metadata/Microsoft.Windows.AppNotifications.Builder.winmd"
+for winmd in "$push" "$lifecycle" "$notifications" "$notification_builder"; do
+    [ -f "$winmd" ] || { echo "missing $winmd" >&2; exit 1; }
+done
 
-cargo run --quiet --manifest-path ci/windows/gen/Cargo.toml -- "$push" "$lifecycle"
+cargo run --quiet --manifest-path ci/windows/gen/Cargo.toml -- "$push" "$lifecycle" "$notifications" "$notification_builder"
 # Formatted as `cargo fmt` would, so the committed file is exactly what this script writes.
 rustfmt --edition 2024 src/windows/bindings.rs
 echo "wrote src/windows/bindings.rs (Microsoft.WindowsAppSDK $METAPACKAGE_VERSION, Foundation $foundation)"

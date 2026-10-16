@@ -29,7 +29,7 @@ busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DB
 # shellcheck disable=SC2034
 # shellcheck disable=SC2034
 fail_name=scenario
-fail_logs=("$PROBE_OUT/events.log" "$PROBE_OUT/handled.log")
+fail_logs=("$PROBE_OUT/events.log" "$PROBE_OUT/handled.log" "$PROBE_OUT/shown.log" "$PROBE_OUT/notifier.log")
 
 probe_running() {
     pgrep -f "$probe" >/dev/null
@@ -41,6 +41,26 @@ stop_ui() {
     rm -f "$PROBE_OUT/stop"
 }
 
+# The id the notification server gave the notification whose body is the payload $1.
+notification_id() {
+    line=$(await_line notifier.log "body=$1" 30)
+    [[ $line == *'actions=["default", "View"]'* ]] || fail "the notification had no tap action: $line"
+    echo "$line" | sed -E 's/^notify id=([0-9]+) .*/\1/'
+}
+
+# Clicks the notification $1, as the server's own `ActionInvoked` reports a click.
+tap() {
+    busctl --user call org.freedesktop.Notifications /org/freedesktop/Notifications \
+        rs.pushups.TestNotifier TriggerAction us "$1" default >/dev/null \
+        || fail "the notification server refused to click $1"
+}
+
+# The test bed has no desktop portal, so `show` takes the `org.freedesktop.Notifications` fallback.
+"$bin/notifier" &
+notifier=$!
+trap 'kill "$notifier" 2>/dev/null || true' EXIT
+await_line notifier.log serving 10 >/dev/null
+
 echo "== a UI process registers and receives at once"
 "$probe" &
 ui=$!
@@ -50,6 +70,12 @@ push '{"id":"bound-1"}'
 line=$(await_line events.log '"id":"bound-1"' 60)
 [[ $line == "message started_app=false "* ]] || fail "bound push reported as: $line"
 await_line handled.log '"id":"bound-1"' 10 >/dev/null
+await_line shown.log 'shown Ok(()) {"id":"bound-1"}' 10 >/dev/null
+
+echo "== a tap on the notification reaches the running UI"
+tap "$(notification_id '{"id":"bound-1"}')"
+line=$(await_line events.log 'tap:{"id":"bound-1"}' 30)
+[[ $line == "message started_app=false "* ]] || fail "the tap reported as: $line"
 stop_ui "$ui"
 
 echo "== a push to a closed app starts it headless, which persists it and exits"
@@ -67,5 +93,18 @@ ui=$!
 line=$(await_line events.log '"id":"headless-1"' 30)
 [[ $line == "message started_app=true "* ]] || fail "drained push reported as: $line"
 stop_ui "$ui"
+
+echo "== a tap on a notification of a headless process starts the UI with the tap"
+push '{"id":"headless-2"}'
+await_line shown.log 'shown Ok(()) {"id":"headless-2"}' 90 >/dev/null
+tap "$(notification_id '{"id":"headless-2"}')"
+line=$(await_line events.log 'tap:{"id":"headless-2"}' 60)
+[[ $line == "message started_app=true "* ]] || fail "the tap the started UI drained reported as: $line"
+line=$(await_line events.log 'message started_app=true {"id":"headless-2"}' 10)
+touch "$PROBE_OUT/stop"
+deadline=$((SECONDS + 30))
+while probe_running && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.5; done
+probe_running && fail "the UI the tap started did not stop"
+rm -f "$PROBE_OUT/stop"
 
 echo "== every step passed"
