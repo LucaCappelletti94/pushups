@@ -136,18 +136,30 @@ pub fn log(prefix: &str, line: &str) {
     }
 }
 
-/// Shows the push as a desktop popup, which Windows and Linux leave to the app.
+/// Shows the push as a desktop notification, which Windows and Linux leave to the app. A tap on
+/// it hands the payload back as a message, and starts the app when it has exited.
 ///
 /// # Errors
 ///
-/// The error of showing the popup, which the example logs under its own prefix.
+/// The error of [`pushups::Notification::show`], which the example logs under its own prefix.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-pub fn popup(message: &Message) -> std::result::Result<(), notify_rust::error::Error> {
+pub fn popup(message: &Message) -> Result<(), pushups::Error> {
     let title = field(message, "title").unwrap_or_else(|| "pushups".to_owned());
     let body = field(message, "body").unwrap_or_else(|| "A push arrived".to_owned());
-    notify_rust::Notification::new()
-        .summary(&title)
-        .body(&body)
+    pushups::Notification::new(title)
+        .body(body)
+        .data(String::from_utf8_lossy(&message.payload))
         .show()
-        .map(|_| ())
+}
+
+/// The icon of the examples' Windows notifications, the brand's 256 px PNG in this checkout, as
+/// the absolute path `WnsConfig::app_notifications` takes.
+#[must_use]
+pub fn windows_icon() -> String {
+    let icon = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/brand/png/icon-macos-256.png");
+    std::path::absolute(&icon)
+        .unwrap_or(icon)
+        .to_string_lossy()
+        .into_owned()
 }
