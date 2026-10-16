@@ -9,7 +9,9 @@ use web_sys::ServiceWorkerRegistration;
 
 use crate::backend::Backend;
 use crate::dispatch::DISPATCHER;
-use crate::web_parts::{permission_from, static_worker_script, subscription_key, web_push_token};
+use crate::web_parts::{
+    Subscribing, permission_from, static_worker_script, subscription_key, web_push_token,
+};
 use crate::{Config, Error, Event, Message, Notification, Permission, VapidPublicKey};
 
 #[wasm_bindgen(module = "/js/pushups-sw.js")]
@@ -45,6 +47,7 @@ struct Page {
     vapid_public_key: VapidPublicKey,
     registration: Promise,
     handler_set: bool,
+    subscribing: Subscribing,
 }
 
 thread_local! {
@@ -68,6 +71,35 @@ async fn subscribe(registration: Promise, key: Uint8Array) -> Result<crate::Toke
     let subscribed = shim_subscribe(&registration, &key).map_err(js_error)?;
     let record = JsFuture::from(subscribed).await.map_err(js_error)?;
     token_from_record(&record)
+}
+
+/// Subscribes with the configured key and emits the `Token` or `RegistrationFailed`. A refused
+/// subscribe that a permission grant overtook while it ran subscribes once more.
+fn subscribe_and_emit() -> Result<(), Error> {
+    let (registration, key) = PAGE.with_borrow_mut(|page| {
+        let page = page.as_mut().ok_or(Error::NotConfigured)?;
+        page.subscribing.started();
+        Ok::<_, Error>((
+            page.registration.clone(),
+            Uint8Array::from(page.vapid_public_key.as_bytes().as_slice()),
+        ))
+    })?;
+    spawn_local(async move {
+        let outcome = subscribe(registration, key).await;
+        let again = PAGE.with_borrow_mut(|page| {
+            page.as_mut()
+                .is_some_and(|page| page.subscribing.settled(outcome.is_ok()))
+        });
+        DISPATCHER.emit(match outcome {
+            Ok(token) => Event::Token(token),
+            Err(error) => Event::RegistrationFailed(error),
+        });
+        // The page exists when `settled` asks for a retry, so starting one cannot fail.
+        if again {
+            let _ = subscribe_and_emit();
+        }
+    });
+    Ok(())
 }
 
 fn field(record: &JsValue, name: &str) -> Result<JsValue, Error> {
@@ -193,29 +225,13 @@ impl Backend for Web {
             vapid_public_key: web.vapid_public_key,
             registration,
             handler_set: false,
+            subscribing: Subscribing::default(),
         }));
         Ok(())
     }
 
     fn register() -> Result<(), Error> {
-        let (registration, key) = PAGE.with_borrow(|page| {
-            page.as_ref()
-                .map(|page| {
-                    (
-                        page.registration.clone(),
-                        Uint8Array::from(page.vapid_public_key.as_bytes().as_slice()),
-                    )
-                })
-                .ok_or(Error::NotConfigured)
-        })?;
-        spawn_local(async move {
-            let event = match subscribe(registration, key).await {
-                Ok(token) => Event::Token(token),
-                Err(error) => Event::RegistrationFailed(error),
-            };
-            DISPATCHER.emit(event);
-        });
-        Ok(())
+        subscribe_and_emit()
     }
 
     fn handler_set() {
@@ -233,7 +249,16 @@ impl Backend for Web {
         }
         let asked = web_sys::Notification::request_permission().map_err(js_error)?;
         let answer = JsFuture::from(asked).await.map_err(js_error)?;
-        permission_from(&answer.as_string().unwrap_or_default())
+        let permission = permission_from(&answer.as_string().unwrap_or_default())?;
+        let again = permission == Permission::Granted
+            && PAGE.with_borrow_mut(|page| {
+                page.as_mut().is_some_and(|page| page.subscribing.granted())
+            });
+        // The page exists when `granted` asks for a subscribe, so starting one cannot fail.
+        if again {
+            let _ = subscribe_and_emit();
+        }
+        Ok(permission)
     }
 
     fn serve_service_worker<H, F>(handler: H) -> Result<(), Error>

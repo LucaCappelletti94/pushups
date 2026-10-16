@@ -146,6 +146,10 @@ pub fn register() -> Result<(), Error> {
 
 /// Asks the user to let pushes show notifications, and returns the answer.
 ///
+/// On the web a grant subscribes again when the browser refused an earlier [`register`] for want
+/// of the permission, as Safari refuses one outside a user gesture, so the token still arrives
+/// as [`Event::Token`].
+///
 /// # Errors
 ///
 /// The errors of [`install`], and [`Error::Platform`] when the prompt cannot be shown or ends

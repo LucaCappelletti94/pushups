@@ -259,6 +259,22 @@ async function denied(origin) {
   });
 }
 
+/** A `register` refused before the user granted permission, as Safari refuses one outside a gesture, subscribes once the grant comes through `request_permission`, with no second `register`. */
+async function grantedLater(origin) {
+  await withBrowser(origin, "denied", async (browser) => {
+    const probe = await Probe.open(browser, origin);
+    await probe.install(false);
+    await probe.page.evaluate(() => window.probe.register());
+    await probe.event("the refused registration", (event) => event.kind === "registrationFailed");
+    await browser.setPermission(origin, { permission: { name: "notifications" }, state: "granted" });
+    const permission = await probe.page.evaluate(() => window.probe.requestPermission());
+    expect(permission === "granted", `the granted permission, got ${permission}`);
+    const token = await probe.event("the token after the grant", (event) => event.kind === "token", SUBSCRIBE_MS);
+    log(`subscribed after the grant at ${new URL(token.endpoint).host}`);
+    await probe.close("granted-later");
+  });
+}
+
 /** A push the page missed while suspended, stored as the worker stores it, reaches the handler once the page is shown again. */
 async function resumed(origin) {
   await withBrowser(origin, "granted", async (browser) => {
@@ -470,7 +486,7 @@ mkdirSync(join(out, "rust"), { recursive: true });
 mkdirSync(join(out, "js"), { recursive: true });
 const { server, origin } = await serve();
 try {
-  const scenarios = [misuse, denied, resumed, staticWorker, rotated, concurrent, rustWorker, workerUrl, updated];
+  const scenarios = [misuse, denied, grantedLater, resumed, staticWorker, rotated, concurrent, rustWorker, workerUrl, updated];
   for (const scenario of scenarios.filter(({ name }) => only.length === 0 || only.includes(name))) {
     log(`scenario ${scenario.name}`);
     await scenario(origin);
