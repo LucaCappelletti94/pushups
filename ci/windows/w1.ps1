@@ -12,99 +12,122 @@ New-Item -ItemType Directory -Force $app | Out-Null
 $exe = Join-Path $app 'pushups-w1-probe.exe'
 $verdict = [Collections.Generic.List[string]]::new()
 $passed = $true
-# The bound for opening the notification centre, finding the toast and its tap line.
+# The bound for a toast's tap line after its click.
 $ToastBound = [TimeSpan]::FromSeconds(60)
+# The bound for a banner to settle after the show answer. Windows shows queued banners one at a
+# time, so the clicks come before the bound pass queues a dozen more.
+$BannerBound = [TimeSpan]::FromSeconds(8)
+$screens = Join-Path $work 'screens'
+New-Item -ItemType Directory -Force $screens | Out-Null
 
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 Add-Type @'
 using System;
 using System.Runtime.InteropServices;
 public static class Win32Input {
+    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, int dwExtraInfo);
-    [DllImport("user32.dll")] public static extern bool keybd_event(uint bVk, uint wScan, uint dwFlags, int dwExtraInfo);
-    public static void Click(double x, double y) {
-        SetCursorPos((int)x, (int)y);
+    public static void Click(int x, int y) {
+        SetCursorPos(x, y);
         mouse_event(0x0002, 0, 0, 0, 0);
         mouse_event(0x0004, 0, 0, 0, 0);
     }
-    public static void WinN() {
-        keybd_event(0x5B, 0, 0, 0);
-        keybd_event(0x4E, 0, 0, 0);
-        keybd_event(0x4E, 0, 2, 0);
-        keybd_event(0x5B, 0, 2, 0);
+
+    // The rectangle in the lower right quarter where `after` differs from `before` in a block at
+    // least 150 by 50 pixels, as a toast banner does, or null. Columns and rows with only a few
+    // changed pixels, a cursor or a clock, do not count.
+    public static int[] Banner(int[] before, int[] after, int width, int height) {
+        int left = width / 2, top = height / 3;
+        var columns = new int[width];
+        var rows = new int[height];
+        for (int y = top; y < height; y++) {
+            for (int x = left; x < width; x++) {
+                int a = before[y * width + x], b = after[y * width + x];
+                int change = Math.Abs((a & 0xff) - (b & 0xff)) + Math.Abs(((a >> 8) & 0xff) - ((b >> 8) & 0xff))
+                    + Math.Abs(((a >> 16) & 0xff) - ((b >> 16) & 0xff));
+                if (change > 60) { columns[x]++; rows[y]++; }
+            }
+        }
+        int[] across = LongestRun(columns, left, width, 40), down = LongestRun(rows, top, height, 100);
+        if (across[1] - across[0] < 150 || down[1] - down[0] < 50) return null;
+        return new[] { across[0], down[0], across[1] - across[0], down[1] - down[0] };
+    }
+
+    static int[] LongestRun(int[] counts, int from, int to, int least) {
+        int start = from, bestStart = from, bestEnd = from;
+        for (int i = from; i <= to; i++) {
+            if (i < to && counts[i] >= least) continue;
+            if (i - start > bestEnd - bestStart) { bestStart = start; bestEnd = i; }
+            start = i + 1;
+        }
+        return new[] { bestStart, bestEnd };
     }
 }
 '@
+# Physical pixels for the captures and the clicks on a scaled display.
+$null = [Win32Input]::SetProcessDPIAware()
 
-# Tries the taskbar's notification centre toggle, then the Win+N shortcut the taskbar toggle
-# is not found on. The toast search after the call confirms the answer.
-function Open-NotificationCenter {
-    $root = [System.Windows.Automation.AutomationElement]::RootElement
-    $taskbar = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition(
-        [System.Windows.Automation.AutomationElement]::ClassNameProperty, 'Shell_TrayWnd')))
-    if ($taskbar) {
-        foreach ($id in @('SystemTrayNotification', 'NotificationCenter')) {
-            $toggle = $taskbar.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition(
-                [System.Windows.Automation.AutomationElement]::AutomationIdProperty, $id)))
-            if ($toggle) { return (Invoke-Element $toggle) }
-        }
-    }
-    [Win32Input]::WinN()
-    Start-Sleep -Milliseconds 500
-    return $true
+function Capture-Screen {
+    $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    $bitmap = [System.Drawing.Bitmap]::new($bounds.Width, $bounds.Height, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+    $graphics.Dispose()
+    $bitmap
 }
 
-# Invokes the element's pattern, or clicks its screen rectangle, and reports whether either ran.
-function Invoke-Element([System.Windows.Automation.AutomationElement] $element) {
-    $pattern = $null
-    if ($element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
-        $pattern.Invoke()
-        return $true
-    }
-    $rect = $element.Current.BoundingRectangle
-    if ($rect.Width -le 0 -or $rect.Height -le 0) { return $false }
-    [Win32Input]::Click($rect.X + $rect.Width / 2, $rect.Y + $rect.Height / 2)
-    return $true
+function Get-Pixels([System.Drawing.Bitmap] $bitmap) {
+    $rect = [System.Drawing.Rectangle]::new(0, 0, $bitmap.Width, $bitmap.Height)
+    $data = $bitmap.LockBits($rect, [System.Drawing.Imaging.ImageLockMode]::ReadOnly, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $pixels = [int[]]::new($bitmap.Width * $bitmap.Height)
+    [Runtime.InteropServices.Marshal]::Copy($data.Scan0, $pixels, 0, $pixels.Length)
+    $bitmap.UnlockBits($data)
+    , $pixels
 }
 
-function Find-ToastElement([string] $title) {
-    $root = [System.Windows.Automation.AutomationElement]::RootElement
-    $toast = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition(
-        [System.Windows.Automation.AutomationElement]::NameProperty, $title)))
-    if ($toast) { return $toast }
-    $elements = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-    foreach ($element in $elements) {
-        $name = $element.Current.Name
-        if ($name -and $name.Contains($title)) { return $element }
-    }
-    return $null
+# The screen before a toast, after `$settle` lets any banner still up time out.
+function Capture-Before([bool] $settle) {
+    if ($settle) { Start-Sleep -Seconds 8 }
+    $bitmap = Capture-Screen
+    $pixels = Get-Pixels $bitmap
+    $bitmap.Dispose()
+    , $pixels
 }
 
-# Clicks the named toast and waits for the probe's tap line in $logDir. Answers `unreached` when
-# this session shows no notification centre or no toast to click, which the GitHub runner's does,
-# `failed` when a click brought no tap line, and `passed` otherwise.
-function Click-Toast([string] $label, [string] $title, [string] $logDir, [string] $expected) {
-    $toast = Find-ToastElement $title
-    if (-not $toast) {
-        if (-not (Open-NotificationCenter)) {
-            Note "- ${label}: the notification centre could not be opened, not reachable in this session"
-            return 'unreached'
-        }
-        $toast = Wait-Until $ToastBound { Find-ToastElement $title }
+# Clicks the banner a toast put on the screen since `$before` and waits for the probe's tap line
+# in $logDir. UI Automation does not reach toast banners, so the banner is found by what changed
+# on the screen, once two captures 250 ms apart place it alike, after it has slid in. Answers
+# `unreached` when no banner settles, which the GitHub runner's session may not show, `failed`
+# when a click brought no tap line, and `passed` otherwise.
+function Click-Banner([string] $label, [int[]] $before, [string] $logDir, [string] $expected) {
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $banner = $null
+    $last = $null
+    while ($true) {
+        $after = Capture-Screen
+        $found = [Win32Input]::Banner($before, (Get-Pixels $after), $after.Width, $after.Height)
+        if ($found -and $last -and -not (Compare-Object $found $last)) { $banner = $found }
+        if ($banner -or $clock.Elapsed -ge $BannerBound) { break }
+        $last = $found
+        $after.Dispose()
+        Start-Sleep -Milliseconds 250
     }
-    if (-not $toast) {
-        Note "- ${label}: no toast named '$title' within $ToastBound, not reachable in this session"
+    if (-not $banner) {
+        $after.Save((Join-Path $screens "$label.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+        $after.Dispose()
+        Note "- ${label}: no banner settled on the screen within $BannerBound, not reachable in this session"
         return 'unreached'
     }
-    if (-not (Invoke-Element $toast)) {
-        Note "- ${label}: the toast had no clickable pattern and no screen rectangle"
-        return 'failed'
-    }
-    Note "- ${label}: the toast was clicked"
+    $after.Dispose()
+    $x, $y, $width, $height = $banner
+    [Win32Input]::Click($x + [int] ($width / 2), $y + [int] ($height * 0.6))
+    Note "- ${label}: the banner at $x,$y ${width}x$height was clicked"
     $got = Wait-Until $ToastBound { First-Line (Join-Path $logDir 'events.log') $expected }
     if (-not $got) {
+        $shot = Capture-Screen
+        $shot.Save((Join-Path $screens "$label.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+        $shot.Dispose()
         Note "- ${label}: no tap line within $ToastBound of the click"
         return 'failed'
     }
@@ -168,18 +191,26 @@ Copy-Item 'assets/brand/png/icon-macos-512.png' (Join-Path $app 'icon.png')
 Set-Content (Join-Path $app 'remote_id.txt') $env:WNS_OBJECT_ID
 $beside = Join-Path $app 'w1-out'
 
-# Pass 1, the small data: a running tap, then the tap with the app stopped.
+# Pass 1, the small data: a running tap, then a tap on a toast whose app has stopped.
 $small = "w1 small $(Get-Random)"
-$probe = Start-Probe 'small' "pushups w1 small" $small
 $clicks = @()
+$before = Capture-Before $false
+$probe = Start-Probe 'small' "pushups w1 small" $small
 if ((Wait-Shown $probe) -notlike 'shown *') { $passed = $false } else {
-    $clicks += Click-Toast 'small' 'pushups w1 small' $probe.Out ('^message started_app=false data_len=' + $small.Length + ' ' + [regex]::Escape($small) + '$')
+    $clicks += Click-Banner 'small' $before $probe.Out ('^message started_app=false data_len=' + $small.Length + ' ' + [regex]::Escape($small) + '$')
 }
 Stop-Probe $probe
 
-# The notification stays in the Action Center, so the click now starts the app for the tap.
+# The probe stops while its banner is still up, so the click makes Windows start the app for the tap.
+$closed = "w1 closed $(Get-Random)"
+$before = Capture-Before ($clicks -notcontains 'passed')
+$probe = Start-Probe 'small-closed' "pushups w1 closed" $closed
+$shown = Wait-Shown $probe
+Stop-Probe $probe
 Remove-Item $beside -Recurse -Force -ErrorAction SilentlyContinue
-$clicks += Click-Toast 'small-closed' 'pushups w1 small' $beside ('^message started_app=true data_len=' + $small.Length + ' ' + [regex]::Escape($small) + '$')
+if ($shown -notlike 'shown *') { $passed = $false } else {
+    $clicks += Click-Banner 'small-closed' $before $beside ('^message started_app=true data_len=' + $closed.Length + ' ' + [regex]::Escape($closed) + '$')
+}
 $started = Get-Process -Name 'pushups-w1-probe' -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($started) {
     $startedProbe = [pscustomobject]@{ Label = 'tap-started'; Process = $started; Out = $beside }
@@ -189,16 +220,16 @@ if ($started) {
     Get-Content (Join-Path $beside 'events.log') -ErrorAction SilentlyContinue | Write-Host
 }
 
-# Pass 2, 1 KiB of data, shown and clicked.
-$title = 'pushups w1 1KiB'
-$probe = Start-Probe '1KiB' $title (Random-Data 1024)
+# Pass 2, 1 KiB of data, shown and clicked, once the banner of the toast the tap-started probe showed has gone.
+$before = Capture-Before $true
+$probe = Start-Probe '1KiB' 'pushups w1 1KiB' (Random-Data 1024)
 if ((Wait-Shown $probe) -notlike 'shown *') { $passed = $false } else {
-    $clicks += Click-Toast '1KiB' $title $probe.Out '^message started_app=false data_len=1024 '
+    $clicks += Click-Banner '1KiB' $before $probe.Out '^message started_app=false data_len=1024 '
 }
 Stop-Probe $probe
 if ($clicks -contains 'failed') { $passed = $false }
 if ($clicks -contains 'unreached') {
-    Note '- the taps wait for a desktop session, since this one let no click reach a toast'
+    Note '- the taps wait for a desktop session, since no banner appeared on this one''s screen'
 }
 
 # The largest data a toast takes, in 256-byte steps, ending at the first the App SDK refuses as too large.
