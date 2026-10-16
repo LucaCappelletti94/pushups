@@ -46,25 +46,22 @@ pub fn firebase_config(input: TokenStream) -> TokenStream {
         Err(message) => return error("firebase_config", span, &message),
     };
     let include_path = path.to_string_lossy().into_owned();
-    let entries: Vec<TokenStream2> = clients
-        .iter()
-        .map(|client| {
-            let package_name = &client.package_name;
-            let application_id = &client.application_id;
-            let api_key = &client.api_key;
-            let gcm_sender_id = &client.gcm_sender_id;
-            let project_id = &client.project_id;
-            quote! {
-                ::pushups::__private::android::FirebaseClient {
-                    package_name: #package_name,
-                    application_id: #application_id,
-                    api_key: #api_key,
-                    gcm_sender_id: #gcm_sender_id,
-                    project_id: #project_id,
-                }
+    let entries = clients.iter().map(|client| {
+        let package_name = &client.package_name;
+        let application_id = &client.application_id;
+        let api_key = &client.api_key;
+        let gcm_sender_id = &client.gcm_sender_id;
+        let project_id = &client.project_id;
+        quote! {
+            ::pushups::__private::android::FirebaseClient {
+                package_name: #package_name,
+                application_id: #application_id,
+                api_key: #api_key,
+                gcm_sender_id: #gcm_sender_id,
+                project_id: #project_id,
             }
-        })
-        .collect();
+        }
+    });
     quote! {
         const _: &[u8] = include_bytes!(#include_path);
 
