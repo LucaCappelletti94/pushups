@@ -443,11 +443,34 @@ async function rustWorker(origin) {
   });
 }
 
+/** A configured worker path that carries its own `pushups` parameter, an encoded copy of it, another parameter and a fragment still registers in the mode the app asked for. */
+async function workerUrl(origin) {
+  await withBrowser(origin, "granted", async (browser) => {
+    const probe = await Probe.open(browser, origin);
+    await probe.install(false, "/pushups-sw.js?pushups=rust&pu%73hups=rust&v=3#v1");
+    await probe.subscribe();
+    const token = await probe.event("the token", (event) => event.kind === "token", SUBSCRIBE_MS);
+    const script = await probe.page.evaluate(async () => (await navigator.serviceWorker.ready).active.scriptURL);
+    const query = new URL(script).searchParams;
+    expect(
+      JSON.stringify(query.getAll("pushups")) === JSON.stringify(["static"]),
+      `one static mode in the registered ${script}`,
+    );
+    expect(query.get("v") === "3", `the app's own parameter kept in ${script}`);
+    await push(token, "url-open");
+    await probe.message("url-open");
+    const host = new URL(origin).host;
+    await probe.notification("the static worker's notification", (shown) => shown.title === host);
+    await probe.clearNotifications();
+    await probe.close("url-open");
+  });
+}
+
 mkdirSync(join(out, "rust"), { recursive: true });
 mkdirSync(join(out, "js"), { recursive: true });
 const { server, origin } = await serve();
 try {
-  const scenarios = [misuse, denied, resumed, staticWorker, rotated, concurrent, rustWorker, updated];
+  const scenarios = [misuse, denied, resumed, staticWorker, rotated, concurrent, rustWorker, workerUrl, updated];
   for (const scenario of scenarios.filter(({ name }) => only.length === 0 || only.includes(name))) {
     log(`scenario ${scenario.name}`);
     await scenario(origin);

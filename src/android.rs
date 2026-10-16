@@ -20,8 +20,7 @@ use parking_lot::Mutex;
 use crate::backend::Backend;
 use crate::dispatch::DISPATCHER;
 use crate::inbox::{self, Inbox};
-use crate::queue::{Entry, QueueFile};
-use crate::session::Session;
+use crate::queue::Entry;
 use crate::{Config, Error, Event, Message, Permission, Token};
 
 /// What `Native.init` hands over, once per process.
@@ -177,10 +176,7 @@ pub extern "system" fn Java_rs_pushups_Native_init<'caller>(
         let _ = RUNTIME.set(Runtime {
             vm,
             pushups,
-            inbox: Mutex::new(Inbox::new(
-                Session::default(),
-                QueueFile::new(files_dir.join(QUEUE_FILE)),
-            )),
+            inbox: Mutex::new(Inbox::headless(files_dir.join(QUEUE_FILE))),
         });
         Ok(())
     });

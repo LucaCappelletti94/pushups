@@ -23,8 +23,7 @@ use crate::backend::Backend;
 use crate::delivered::Delivered;
 use crate::dispatch::DISPATCHER;
 use crate::inbox::Inbox;
-use crate::queue::{Entry, QueueFile};
-use crate::session::Session;
+use crate::queue::Entry;
 use crate::started::{Arrival, Started};
 use crate::{Config, Error, Event, Message, Permission, Token};
 
@@ -59,7 +58,7 @@ impl Backend for Apple {
         }
         let directory = data_directory()?;
         let state = State {
-            inbox: Inbox::new(Session::Unbound, QueueFile::new(directory.join("queue"))),
+            inbox: Inbox::for_ui(directory.join("queue")),
             started: Started::default(),
             delivered: Delivered::new(directory.join("delivered")),
         };

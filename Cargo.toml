@@ -41,11 +41,14 @@ jni = "0.22"
 # The `dioxus` the app depends on resolves this to its own version.
 manganis = { version = "0.7", optional = true }
 
+[target.'cfg(unix)'.dependencies]
+# `flock`, which keeps the queue file to one owner process, and `dlsym` on Apple.
+libc = "0.2"
+
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 block2 = "0.6"
 dispatch2 = { version = "0.3", default-features = false, features = ["std", "block2"] }
 futures-channel = { version = "0.3", default-features = false, features = ["std"] }
-libc = "0.2"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSArray", "NSBundle", "NSData", "NSDictionary", "NSError", "NSFileManager", "NSJSONSerialization", "NSKeyValueObserving", "NSNotification", "NSObject", "NSOperation", "NSPathUtilities", "NSString", "NSURL", "NSValue"] }
 objc2-user-notifications = { version = "0.3", default-features = false, features = ["std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationSettings", "UNUserNotificationCenter"] }
@@ -79,7 +82,7 @@ windows-link = "0.2"
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Navigator", "Notification", "RegistrationOptions", "ServiceWorkerContainer", "ServiceWorkerRegistration", "Window", "console"] }
+web-sys = { version = "0.3", features = ["Document", "Navigator", "Node", "Notification", "RegistrationOptions", "ServiceWorkerContainer", "ServiceWorkerRegistration", "Url", "UrlSearchParams", "Window", "console"] }
 
 [dev-dependencies]
 # The reference decoder the base64url tests compare against.

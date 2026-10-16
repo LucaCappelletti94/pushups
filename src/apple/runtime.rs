@@ -243,7 +243,6 @@ fn own_notification_delegate_class() -> &'static AnyClass {
     own_class(
         OWN_NOTIFICATION_DELEGATE,
         c"UNUserNotificationCenterDelegate",
-        |_| {},
     )
 }
 
@@ -252,15 +251,11 @@ fn own_app_delegate_class() -> &'static AnyClass {
     let protocol = c"UIApplicationDelegate";
     #[cfg(target_os = "macos")]
     let protocol = c"NSApplicationDelegate";
-    own_class(c"PushupsAppDelegate", protocol, |_| {})
+    own_class(c"PushupsAppDelegate", protocol)
 }
 
-/// A class of the crate's own, an `NSObject` with the push methods, the extra methods `more` adds, and `protocol`.
-fn own_class(
-    name: &CStr,
-    protocol: &CStr,
-    more: impl FnOnce(&mut ClassBuilder),
-) -> &'static AnyClass {
+/// A class of the crate's own, an `NSObject` with the push methods and `protocol`.
+fn own_class(name: &CStr, protocol: &CStr) -> &'static AnyClass {
     if let Some(class) = AnyClass::get(name) {
         return class;
     }
@@ -270,7 +265,6 @@ fn own_class(
         builder.add_protocol(protocol);
     }
     add_push_methods(&mut builder);
-    more(&mut builder);
     builder.register()
 }
 
@@ -395,19 +389,20 @@ struct FetchGate {
     completion: Option<RcBlock<dyn Fn(usize)>>,
 }
 
-/// Holds a value that crosses threads only as Apple's completion handlers do.
+/// The completion handler of one iOS push behind its lock, shared by the original method's
+/// forwarded block and the crate's background work, either of which may finish on any thread.
 #[cfg(target_os = "ios")]
-struct AnyThread<T>(T);
+struct FetchCompletion(Mutex<FetchGate>);
 
 // SAFETY: the only content is a `FetchGate` holding a completion handler, which UIKit allows calling from any thread, and every access goes through the `Mutex`.
 #[cfg(target_os = "ios")]
-unsafe impl<T> Send for AnyThread<T> {}
+unsafe impl Send for FetchCompletion {}
 // SAFETY: as for `Send`, every access goes through the `Mutex`.
 #[cfg(target_os = "ios")]
-unsafe impl<T> Sync for AnyThread<T> {}
+unsafe impl Sync for FetchCompletion {}
 
 #[cfg(target_os = "ios")]
-impl AnyThread<Mutex<FetchGate>> {
+impl FetchCompletion {
     fn done(&self, result: usize) {
         let completion = {
             let mut gate = self.0.lock();
@@ -437,7 +432,7 @@ unsafe extern "C-unwind" fn did_receive_remote_notification(
     completion: &DynBlock<dyn Fn(usize)>,
 ) {
     let original = original_with(this, cmd);
-    let gate = Arc::new(AnyThread(Mutex::new(FetchGate {
+    let gate = Arc::new(FetchCompletion(Mutex::new(FetchGate {
         remaining: if original.is_some() { 2 } else { 1 },
         result: FETCH_NO_DATA,
         completion: Some(completion.copy()),

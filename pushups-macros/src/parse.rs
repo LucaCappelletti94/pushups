@@ -5,17 +5,16 @@ use std::path::Path;
 
 use serde_json::Value;
 
-/// One Android client of a `google-services.json`.
-///
-/// The project-level fields borrow from the parsed value.
+/// One Android client of a `google-services.json`, borrowing its text from the parsed value
+/// where the file holds it as a string.
 #[derive(Debug)]
 pub(crate) struct Client<'value> {
     /// `client_info.android_client_info.package_name`
-    pub(crate) package_name: String,
+    pub(crate) package_name: Cow<'value, str>,
     /// `client_info.mobilesdk_app_id`
-    pub(crate) application_id: String,
+    pub(crate) application_id: Cow<'value, str>,
     /// `api_key[0].current_key`
-    pub(crate) api_key: String,
+    pub(crate) api_key: Cow<'value, str>,
     /// `project_info.project_number`, the GCM sender id
     pub(crate) gcm_sender_id: Cow<'value, str>,
     /// `project_info.project_id`
@@ -66,15 +65,13 @@ pub(crate) fn clients_from_json(value: &Value) -> Result<Vec<Client<'_>>, String
                 android,
                 "package_name",
                 "client_info.android_client_info.package_name",
-            )?
-            .into_owned();
+            )?;
             let application_id = text(
                 &subject,
                 info,
                 "mobilesdk_app_id",
                 "client_info.mobilesdk_app_id",
-            )?
-            .into_owned();
+            )?;
             let keys = client
                 .get("api_key")
                 .and_then(Value::as_array)
@@ -82,8 +79,7 @@ pub(crate) fn clients_from_json(value: &Value) -> Result<Vec<Client<'_>>, String
             let first = keys
                 .first()
                 .ok_or_else(|| format!("{subject} has an empty \"api_key\" array"))?;
-            let api_key =
-                text(&subject, first, "current_key", "api_key[0].current_key")?.into_owned();
+            let api_key = text(&subject, first, "current_key", "api_key[0].current_key")?;
             Ok(Client {
                 package_name,
                 application_id,
@@ -115,7 +111,6 @@ fn text<'value>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     const ONE_CLIENT: &str = r#"{
         "project_info": {
@@ -214,22 +209,18 @@ mod tests {
         assert!(error.contains("no clients"));
     }
 
-    fn scratch_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("pushups-macros-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("scratch dir is creatable");
-        dir
-    }
-
     #[test]
     fn missing_file_names_the_path() {
-        let path = scratch_dir().join("missing.json");
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let path = dir.path().join("missing.json");
         let error = read_value(&path).expect_err("the file does not exist");
         assert!(error.contains(path.to_str().expect("path is UTF-8")));
     }
 
     #[test]
     fn malformed_json_names_the_file() {
-        let path = scratch_dir().join("broken.json");
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let path = dir.path().join("broken.json");
         std::fs::write(&path, "{ not json").expect("the file is written");
         let error = read_value(&path).expect_err("the file is not valid JSON");
         assert!(error.contains("not valid JSON"));
