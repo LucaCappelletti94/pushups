@@ -4621,6 +4621,15 @@ dependencies = [
  "base64 0.22.1",
  "dioxus",
  "futures-util",
+ "pushups",
+ "pushups-example-support",
+ "web-sys",
+]
+
+[[package]]
+name = "pushups-example-support"
+version = "0.0.0"
+dependencies = [
  "js-sys",
  "notify-rust",
  "pushups",

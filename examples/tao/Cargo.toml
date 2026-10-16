@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 futures-executor = "0.3"
 pushups = { path = "../.." }
+pushups-example-support = { path = "../support" }
 tao = "0.37"
 
 [features]

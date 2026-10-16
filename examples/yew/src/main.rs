@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 use futures_util::StreamExt;
 use pushups::{Config, Event, Message, Notification, Permission, VapidPublicKey, WebPushConfig};
+use pushups_example_support as support;
 use yew::prelude::*;
 
 fn main() {
@@ -19,7 +20,7 @@ fn main() {
         return;
     }
     match pushups::install(config()) {
-        Ok(()) => log(&format!("installed at_ms={}", now_ms())),
+        Ok(()) => log(&format!("installed at_ms={}", support::now_ms())),
         Err(error) => log(&format!("install failed: {error}")),
     }
     yew::Renderer::<App>::new().render();
@@ -39,15 +40,17 @@ fn config() -> Config {
 
 /// Runs in the service worker for every push, and decides what the user sees.
 async fn notification_for(message: Message) -> Notification {
-    let at = now_ms();
-    let line = timing(&message, at);
+    let at = support::now_ms();
+    let line = support::timing(&message, at);
     log(&format!("worker push at_ms={at} {line}"));
-    Notification::new(field(&message, "title").unwrap_or_else(|| "pushups from Rust".to_owned()))
-        .body(
-            field(&message, "body")
-                .unwrap_or_else(|| format!("built in the service worker, {line}")),
-        )
-        .navigate("/")
+    Notification::new(
+        support::field(&message, "title").unwrap_or_else(|| "pushups from Rust".to_owned()),
+    )
+    .body(
+        support::field(&message, "body")
+            .unwrap_or_else(|| format!("built in the service worker, {line}")),
+    )
+    .navigate("/")
 }
 
 /// The page's log, newest last.
@@ -72,14 +75,14 @@ fn App() -> Html {
         let add = lines.dispatcher();
         use_effect_with((), move |()| {
             wasm_bindgen_futures::spawn_local(async move {
-                log(&format!("ui mounted at_ms={}", now_ms()));
+                log(&format!("ui mounted at_ms={}", support::now_ms()));
                 let mut events = pushups::events();
                 if let Err(error) = pushups::register() {
                     add.dispatch(format!("register failed: {error}"));
                 }
                 while let Some(event) = events.next().await {
                     log(&describe(&event));
-                    add.dispatch(shown(&event));
+                    add.dispatch(support::shown(&event));
                 }
             });
         });
@@ -90,13 +93,7 @@ fn App() -> Html {
             let permission = permission.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let answer = match pushups::request_permission().await {
-                    Ok(Permission::Granted) => {
-                        // Safari subscribes only once the user allowed notifications, so the token comes now.
-                        if let Err(error) = pushups::register() {
-                            log(&format!("register failed: {error}"));
-                        }
-                        "granted".to_owned()
-                    }
+                    Ok(Permission::Granted) => "granted".to_owned(),
                     Ok(Permission::Denied) => "denied".to_owned(),
                     Ok(other) => format!("{other:?}"),
                     Err(error) => format!("failed: {error}"),
@@ -117,69 +114,19 @@ fn App() -> Html {
 }
 
 fn describe(event: &Event) -> String {
-    let at = now_ms();
+    let at = support::now_ms();
     match event {
-        Event::Token(token) => match token.web_push_subscription() {
-            Some(subscription) => format!(
-                "ui token at_ms={at} subscription={}",
-                serde_json::to_string(&subscription).expect("a subscription serialises")
-            ),
-            None => format!("ui token at_ms={at} {token:?}"),
-        },
+        Event::Token(token) => format!("ui token at_ms={at} {}", support::token(token)),
         Event::RegistrationFailed(error) => format!("ui registration failed at_ms={at} {error}"),
         Event::Message(message) => format!(
             "ui message at_ms={at} started_app={} {}",
             message.started_app,
-            timing(message, at)
+            support::timing(message, at)
         ),
         Event::MessagesDropped => format!("ui messages dropped at_ms={at}"),
     }
 }
 
-/// The event as the page shows it, a push as the `body` its payload carries.
-fn shown(event: &Event) -> String {
-    match event {
-        Event::Token(_) => "Registered for pushes".to_owned(),
-        Event::RegistrationFailed(error) => format!("Registration failed: {error}"),
-        Event::Message(message) => format!(
-            "Push: {}",
-            field(message, "body")
-                .unwrap_or_else(|| String::from_utf8_lossy(&message.payload).into_owned())
-        ),
-        Event::MessagesDropped => "Some pushes were dropped".to_owned(),
-    }
-}
-
-/// The payload's string field `name`, for a JSON payload that carries it.
-fn field(message: &Message, name: &str) -> Option<String> {
-    let data: serde_json::Value = serde_json::from_slice(&message.payload).ok()?;
-    data.get(name)?.as_str().map(str::to_owned)
-}
-
-/// The push's `seq` and its latency from the sender's `sent_at_ms` to `at`.
-fn timing(message: &Message, at: u128) -> String {
-    let data: serde_json::Value = serde_json::from_slice(&message.payload).unwrap_or_default();
-    let field = |name: &str| data.get(name).and_then(serde_json::Value::as_str);
-    let sent = field("sent_at_ms").and_then(|sent| sent.parse::<u128>().ok());
-    format!(
-        "seq={} sent_at_ms={} since_sent_ms={}",
-        field("seq").unwrap_or("-"),
-        sent.map_or_else(|| "-".to_owned(), |sent| sent.to_string()),
-        sent.map_or_else(
-            || "-".to_owned(),
-            |sent| at.saturating_sub(sent).to_string()
-        ),
-    )
-}
-
-/// `SystemTime` has no clock on `wasm32-unknown-unknown`.
-fn now_ms() -> u128 {
-    let ms = js_sys::Date::now();
-    // Milliseconds since 1970 are positive and far below 2^53, so the conversion is exact.
-    debug_assert!(ms.is_finite() && ms >= 0.0, "Date.now() is a time");
-    ms as u128
-}
-
 fn log(line: &str) {
-    web_sys::console::log_1(&format!("pushups-example {line}").into());
+    support::log("pushups-example", line);
 }

@@ -14,7 +14,7 @@
     </head>
     <body>
         <h2>pushups winit example</h2>
-        <!-- Asks for the notification permission on click, which the prompt needs from a gesture. -->
-        <button onclick="Notification.requestPermission().then((answer) => { this.textContent = 'Notifications: ' + answer; })">Allow notifications</button>
+        <!-- The Rust side wires the click to ask for permission, which the prompt needs from a gesture. -->
+        <button id="allow">Allow notifications</button>
     </body>
 </html>

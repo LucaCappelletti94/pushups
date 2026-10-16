@@ -45,10 +45,10 @@ register() {
   while :; do
     adb logcat -c
     open_app >&2
-    line=$(await 'ui token at_ms=[0-9]+ Fcm\(|ui registration failed')
+    line=$(await 'ui token at_ms=[0-9]+ fcm=|ui registration failed')
     case "$line" in
       *"ui token"*)
-        echo "$line" | sed -E 's/.*Fcm\("([^"]+)"\).*/\1/'
+        echo "$line" | sed -E 's/^.*fcm=([^ ]+).*/\1/'
         return 0
         ;;
     esac

@@ -3,7 +3,7 @@ name = "tauri-plugin-pushups"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.90"
-description = "Ships the Android module and the iOS push entitlement of the pushups crate into a Tauri app"
+description = "Ships the Android module and the iOS push entitlement and background mode of the pushups crate into a Tauri app"
 repository = "https://github.com/LucaCappelletti94/pushups"
 license = "MIT"
 readme = "README.md"
@@ -19,6 +19,10 @@ tauri = { version = "2.12", default-features = false }
 
 [build-dependencies]
 tauri-plugin = { version = "2.7", features = ["build"] }
+
+# The type of the `Info.plist` value the macOS-host build script edits.
+[target.'cfg(target_os = "macos")'.build-dependencies]
+plist = "1"
 
 # Built on its own, apart from the crate's workspace, by the CI job `tauri-plugin`.
 [workspace]

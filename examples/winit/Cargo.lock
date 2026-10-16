@@ -1597,6 +1597,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pushups-example-support"
+version = "0.0.0"
+dependencies = [
+ "js-sys",
+ "notify-rust",
+ "pushups",
+ "serde_json",
+ "web-sys",
+]
+
+[[package]]
 name = "pushups-macros"
 version = "0.1.0"
 dependencies = [
@@ -1612,13 +1623,13 @@ version = "0.0.0"
 dependencies = [
  "font8x8",
  "futures-executor",
- "notify-rust",
+ "js-sys",
  "pushups",
- "serde_json",
+ "pushups-example-support",
  "softbuffer",
+ "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "web-time",
  "winit",
 ]
 

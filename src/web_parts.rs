@@ -72,6 +72,47 @@ pub(crate) fn permission_from(answer: &str) -> Result<Permission, Error> {
     }
 }
 
+/// How the page's subscribes stand, which decides whether a permission grant subscribes again.
+#[derive(Debug, Default)]
+pub(crate) struct Subscribing {
+    in_flight: usize,
+    last: Option<bool>,
+    retry: bool,
+}
+
+impl Subscribing {
+    /// A subscribe starts, for a `register` or a retry.
+    pub(crate) fn started(&mut self) {
+        self.in_flight += 1;
+    }
+
+    /// A subscribe settled, `subscribed` telling whether it gave a subscription. True when the
+    /// page should subscribe again, for a grant that came while this one was running.
+    pub(crate) fn settled(&mut self, subscribed: bool) -> bool {
+        self.in_flight = self.in_flight.saturating_sub(1);
+        self.last = Some(subscribed);
+        if subscribed {
+            self.retry = false;
+            return false;
+        }
+        let again = self.retry && self.in_flight == 0;
+        if again {
+            self.retry = false;
+        }
+        again
+    }
+
+    /// The user granted permission. True when the page should subscribe now, after a failed
+    /// subscribe the browser refused for want of that permission.
+    pub(crate) fn granted(&mut self) -> bool {
+        if self.in_flight > 0 {
+            self.retry = true;
+            return false;
+        }
+        self.last == Some(false)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,5 +187,46 @@ mod tests {
         assert_eq!(permission_from("denied"), Ok(Permission::Denied));
         assert_eq!(permission_from("default"), Ok(Permission::Dismissed));
         assert!(permission_from("prompt").is_err());
+    }
+
+    #[test]
+    fn a_grant_subscribes_again_only_after_a_failed_subscribe() {
+        let mut never = Subscribing::default();
+        assert!(!never.granted(), "no register asked for a token");
+
+        let mut failed = Subscribing::default();
+        failed.started();
+        assert!(!failed.settled(false));
+        assert!(failed.granted());
+
+        let mut subscribed = Subscribing::default();
+        subscribed.started();
+        assert!(!subscribed.settled(true));
+        assert!(!subscribed.granted());
+    }
+
+    #[test]
+    fn a_grant_during_a_subscribe_retries_only_if_it_fails() {
+        let mut failing = Subscribing::default();
+        failing.started();
+        assert!(!failing.granted(), "the running subscribe settles first");
+        assert!(failing.settled(false), "the refused subscribe is retried");
+        failing.started();
+        assert!(!failing.settled(false), "a retry is made once");
+
+        let mut succeeding = Subscribing::default();
+        succeeding.started();
+        assert!(!succeeding.granted());
+        assert!(!succeeding.settled(true), "a subscription needs no retry");
+    }
+
+    #[test]
+    fn a_retry_waits_for_the_last_subscribe_in_flight() {
+        let mut queued = Subscribing::default();
+        queued.started();
+        queued.started();
+        assert!(!queued.granted());
+        assert!(!queued.settled(false), "another subscribe is still running");
+        assert!(queued.settled(false), "the last one to fail retries");
     }
 }

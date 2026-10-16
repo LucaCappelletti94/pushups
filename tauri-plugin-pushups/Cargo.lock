@@ -3538,6 +3538,7 @@ dependencies = [
 name = "tauri-plugin-pushups"
 version = "0.1.0"
 dependencies = [
+ "plist",
  "pushups",
  "tauri",
  "tauri-plugin",

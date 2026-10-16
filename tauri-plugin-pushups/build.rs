@@ -1,6 +1,6 @@
 //! Copies `pushups`' Android module into `OUT_DIR` and hands the copy to Tauri, so Tauri's own
 //! files land there and never in cargo's registry. Names the app's library for the module, and
-//! adds the iOS push entitlement.
+//! adds the iOS push entitlement and the `remote-notification` background mode.
 
 use std::fs;
 use std::path::Path;
@@ -26,7 +26,7 @@ fn main() {
             .expect("the app's manifest is updated");
         }
     }
-    // iOS apps build only on macOS, the one host where Tauri can edit their entitlements.
+    // iOS apps build only on macOS, the one host where Tauri can edit their entitlements and Info.plist.
     #[cfg(target_os = "macos")]
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("ios") {
         // A debug build signs with a development profile, a release build with a distribution one.
@@ -39,6 +39,25 @@ fn main() {
             entitlements.insert("aps-environment".into(), environment.into());
         })
         .expect("the app's entitlements are updated");
+        // A push delivered with the app out of the foreground needs the mode, and the project may
+        // already list its own, so the list keeps what it has and gains the mode once.
+        tauri_plugin::mobile::update_info_plist(|info| {
+            let remote = plist::Value::String("remote-notification".to_owned());
+            match info.get_mut("UIBackgroundModes") {
+                Some(plist::Value::Array(modes)) => {
+                    if !modes.contains(&remote) {
+                        modes.push(remote);
+                    }
+                }
+                _ => {
+                    info.insert(
+                        "UIBackgroundModes".into(),
+                        plist::Value::Array(vec![remote]),
+                    );
+                }
+            }
+        })
+        .expect("the app's Info.plist is updated");
     }
     println!("cargo::rerun-if-env-changed=DEP_PUSHUPS_ANDROID");
     println!("cargo::rerun-if-env-changed=WRY_ANDROID_LIBRARY");

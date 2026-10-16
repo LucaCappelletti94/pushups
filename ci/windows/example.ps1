@@ -49,14 +49,14 @@ Remove-Item $log -ErrorAction SilentlyContinue
 $process = Start-Process -FilePath $exe -WorkingDirectory $dir -NoNewWindow -PassThru
 
 $uri = $null
-$tokenLine = Wait-Until $ChannelBound { First-Line $log 'ui token at_ms=\d+ Wns \{ channel_uri: "([^"]+)"' }
+$tokenLine = Wait-Until $ChannelBound { First-Line $log 'ui token at_ms=\d+ wns=\S+' }
 if (-not $tokenLine) {
     Note "- no token within $ChannelBound"
     $passed = $false
-} elseif ($tokenLine -match 'channel_uri: "([^"]+)"') {
+} elseif ($tokenLine -match 'wns=(\S+)') {
     $uri = $matches[1]
     Write-Host "::add-mask::$uri"
-    Note "- channel created on $(([Uri] $uri).Host), $($tokenLine -replace '^.*ui token at_ms=\d+ ', '')"
+    Note "- channel created on $(([Uri] $uri).Host)"
 } else {
     Note "- the token line has no channel uri: $tokenLine"
     $passed = $false
