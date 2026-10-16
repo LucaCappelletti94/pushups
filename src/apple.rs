@@ -88,31 +88,35 @@ impl Backend for Apple {
         }
         let (sender, reply) = oneshot::channel();
         let sender = Mutex::new(Some(sender));
-        let answered = block2::RcBlock::new(move |granted: Bool, error: *mut NSError| {
-            // SAFETY: the system passes a valid `NSError` or null, for this call only.
-            let error = unsafe { error.as_ref() };
-            let answer = match error {
-                // `UNErrorCodeNotificationsNotAllowed`, the user or the system refusing notifications to this app.
-                Some(error)
-                    if error.domain().to_string() == "UNErrorDomain" && error.code() == 1 =>
-                {
-                    Ok(Permission::Denied)
+        // The center copies the block, so this reference ends before the await and the future
+        // holds only `reply`, which keeps it `Send`.
+        {
+            let answered = block2::RcBlock::new(move |granted: Bool, error: *mut NSError| {
+                // SAFETY: the system passes a valid `NSError` or null, for this call only.
+                let error = unsafe { error.as_ref() };
+                let answer = match error {
+                    // `UNErrorCodeNotificationsNotAllowed`, the user or the system refusing notifications to this app.
+                    Some(error)
+                        if error.domain().to_string() == "UNErrorDomain" && error.code() == 1 =>
+                    {
+                        Ok(Permission::Denied)
+                    }
+                    Some(error) => Err(Error::Platform(error.localizedDescription().to_string())),
+                    None if granted.as_bool() => Ok(Permission::Granted),
+                    None => Ok(Permission::Denied),
+                };
+                if let Some(sender) = sender.lock().take() {
+                    let _ = sender.send(answer);
                 }
-                Some(error) => Err(Error::Platform(error.localizedDescription().to_string())),
-                None if granted.as_bool() => Ok(Permission::Granted),
-                None => Ok(Permission::Denied),
-            };
-            if let Some(sender) = sender.lock().take() {
-                let _ = sender.send(answer);
-            }
-        });
-        UNUserNotificationCenter::currentNotificationCenter()
-            .requestAuthorizationWithOptions_completionHandler(
-                UNAuthorizationOptions::Alert
-                    | UNAuthorizationOptions::Badge
-                    | UNAuthorizationOptions::Sound,
-                &answered,
-            );
+            });
+            UNUserNotificationCenter::currentNotificationCenter()
+                .requestAuthorizationWithOptions_completionHandler(
+                    UNAuthorizationOptions::Alert
+                        | UNAuthorizationOptions::Badge
+                        | UNAuthorizationOptions::Sound,
+                    &answered,
+                );
+        }
         reply
             .await
             .unwrap_or_else(|oneshot::Canceled| Err(Error::permission_unanswered()))

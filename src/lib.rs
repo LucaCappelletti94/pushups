@@ -152,6 +152,8 @@ pub fn register() -> Result<(), Error> {
 /// of the permission, as Safari refuses one outside a user gesture, so the token still arrives
 /// as [`Event::Token`].
 ///
+/// Off the web the future is `Send`, so a multi-threaded executor such as Tauri's can await it.
+///
 /// # Errors
 ///
 /// The errors of [`install`], and [`Error::Platform`] when the prompt cannot be shown or ends
@@ -159,6 +161,13 @@ pub fn register() -> Result<(), Error> {
 pub async fn request_permission() -> Result<Permission, Error> {
     Platform::request_permission().await
 }
+
+// Holds `request_permission` to its documented `Send` future on every native target.
+#[cfg(not(target_arch = "wasm32"))]
+const _: fn() = || {
+    fn send<T: Send>(_: &T) {}
+    send(&request_permission());
+};
 
 /// Sets the function that receives every [`Event`], replacing the previous one.
 ///
