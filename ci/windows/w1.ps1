@@ -86,9 +86,29 @@ function Get-Pixels([System.Drawing.Bitmap] $bitmap) {
     , $pixels
 }
 
-# The screen before a toast, after `$settle` lets any banner still up time out.
-function Capture-Before([bool] $settle) {
-    if ($settle) { Start-Sleep -Seconds 8 }
+# Clears the notifications of every app registered as `pushups w1`, which takes their banners off
+# the screen. An idle session keeps a banner up until it gets input, so one an earlier case or run
+# left would cover the next. Windows PowerShell has the WinRT types pwsh lacks.
+function Clear-ProbeNotifications {
+    $command = @'
+$null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+Get-ChildItem 'HKCU:\Software\Classes\AppUserModelId' -ErrorAction SilentlyContinue |
+    Where-Object { (Get-ItemProperty $_.PSPath).DisplayName -eq 'pushups w1' } |
+    ForEach-Object { [Windows.UI.Notifications.ToastNotificationManager]::History.Clear($_.PSChildName) }
+'@
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    $clear = Start-Process powershell.exe -ArgumentList '-NoProfile', '-EncodedCommand', $encoded -NoNewWindow -PassThru
+    if (-not $clear.WaitForExit([int] $ExitBound.TotalMilliseconds)) {
+        $clear.Kill()
+        Note "- clearing the probe's notifications did not finish within $ExitBound"
+    }
+}
+
+# The screen before a toast, once the probe's earlier notifications are cleared.
+function Capture-Before {
+    Clear-ProbeNotifications
+    # The cleared banners slide out.
+    Start-Sleep -Seconds 1
     $bitmap = Capture-Screen
     $pixels = Get-Pixels $bitmap
     $bitmap.Dispose()
@@ -194,7 +214,7 @@ $beside = Join-Path $app 'w1-out'
 # Pass 1, the small data: a running tap, then a tap on a toast whose app has stopped.
 $small = "w1 small $(Get-Random)"
 $clicks = @()
-$before = Capture-Before $false
+$before = Capture-Before
 $probe = Start-Probe 'small' "pushups w1 small" $small
 if ((Wait-Shown $probe) -notlike 'shown *') { $passed = $false } else {
     $clicks += Click-Banner 'small' $before $probe.Out ('^message started_app=false data_len=' + $small.Length + ' ' + [regex]::Escape($small) + '$')
@@ -203,7 +223,7 @@ Stop-Probe $probe
 
 # The probe stops while its banner is still up, so the click makes Windows start the app for the tap.
 $closed = "w1 closed $(Get-Random)"
-$before = Capture-Before ($clicks -notcontains 'passed')
+$before = Capture-Before
 $probe = Start-Probe 'small-closed' "pushups w1 closed" $closed
 $shown = Wait-Shown $probe
 Stop-Probe $probe
@@ -220,8 +240,8 @@ if ($started) {
     Get-Content (Join-Path $beside 'events.log') -ErrorAction SilentlyContinue | Write-Host
 }
 
-# Pass 2, 1 KiB of data, shown and clicked, once the banner of the toast the tap-started probe showed has gone.
-$before = Capture-Before $true
+# Pass 2, 1 KiB of data, shown and clicked.
+$before = Capture-Before
 $probe = Start-Probe '1KiB' 'pushups w1 1KiB' (Random-Data 1024)
 if ((Wait-Shown $probe) -notlike 'shown *') { $passed = $false } else {
     $clicks += Click-Banner '1KiB' $before $probe.Out '^message started_app=false data_len=1024 '
