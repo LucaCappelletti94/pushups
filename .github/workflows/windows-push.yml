@@ -70,6 +70,13 @@ jobs:
           WNS_OBJECT_ID: ${{ secrets.WNS_OBJECT_ID }}
           WNS_CLIENT_SECRET: ${{ secrets.WNS_CLIENT_SECRET }}
         run: ./ci/windows/w1.ps1
+      - name: The screens where no banner was clicked
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: w1-screens
+          path: ${{ runner.temp }}/w1/screens
+          if-no-files-found: ignore
   example:
     name: Example (${{ matrix.example }})
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
