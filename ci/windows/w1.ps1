@@ -34,9 +34,9 @@ public static class Win32Input {
         mouse_event(0x0004, 0, 0, 0, 0);
     }
 
-    // The rectangle in the lower right quarter where `after` differs from `before` in a block at
-    // least 150 by 50 pixels, as a toast banner does, or null. Columns and rows with only a few
-    // changed pixels, a cursor or a clock, do not count.
+    // The rectangle in the right half of the screen, below its top third, where `after` differs
+    // from `before` in a block at least 150 by 50 pixels, as a toast banner does, or null. Columns
+    // and rows with only a few changed pixels, a cursor or a clock, do not count.
     public static int[] Banner(int[] before, int[] after, int width, int height) {
         int left = width / 2, top = height / 3;
         var columns = new int[width];

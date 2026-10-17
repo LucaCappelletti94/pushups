@@ -2,11 +2,12 @@
 //!
 //! It installs `pushups` with `PROBE_REMOTE_ID`, or the id in `remote_id.txt` beside the exe, as the
 //! WNS remote id, and with the display name and the `icon.png` beside the exe as the app
-//! notification's identity. It shows a notification carrying `PROBE_DATA`, or the bytes in
-//! `data.txt` beside the exe, as its `data`, and appends every step and event to `events.log` in
+//! notification's identity. With `PROBE_TITLE` set it shows a notification under that title
+//! carrying `PROBE_DATA` as its `data`. It appends every step and event to `events.log` in
 //! `PROBE_OUT`, or `w1-out` beside the exe, one line each. It runs until `stop` appears in that
 //! directory or five minutes pass. The files beside the exe are what a process Windows starts for
-//! a tap finds.
+//! a tap finds, and that process shows nothing, which leaves the banner slot to the script's next
+//! toast.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -19,8 +20,6 @@ use pushups::{Config, Event, Message, Notification, WnsConfig};
 
 const RUN_BOUND: Duration = Duration::from_secs(300);
 const DISPLAY_NAME: &str = "pushups w1";
-const DEFAULT_TITLE: &str = "pushups w1";
-const DEFAULT_DATA: &str = "w1 tap";
 
 /// The directory beside the exe, which a process Windows starts for a tap finds without an environment.
 fn beside_exe(name: &str) -> PathBuf {
@@ -40,13 +39,6 @@ fn remote_id() -> Option<String> {
             .ok()
             .map(|id| id.trim().to_owned())
     })
-}
-
-fn data() -> String {
-    std::env::var("PROBE_DATA")
-        .ok()
-        .or_else(|| fs::read_to_string(beside_exe("data.txt")).ok())
-        .unwrap_or_else(|| DEFAULT_DATA.to_owned())
 }
 
 fn append(file: &str, line: &str) {
@@ -95,15 +87,16 @@ fn main() -> ExitCode {
     }
     append("events.log", "installed");
     pushups::set_handler(on_event);
-    let payload = data();
-    let title = std::env::var("PROBE_TITLE").unwrap_or_else(|_| DEFAULT_TITLE.to_owned());
-    let notification = Notification::new(title)
-        .body("a tap on me delivers my data")
-        .data(payload.clone())
-        .icon(icon.to_string_lossy().into_owned());
-    match notification.show() {
-        Ok(()) => append("events.log", &format!("shown data_len={}", payload.len())),
-        Err(error) => append("events.log", &format!("show failed {error:?}")),
+    if let Ok(title) = std::env::var("PROBE_TITLE") {
+        let payload = std::env::var("PROBE_DATA").unwrap_or_default();
+        let notification = Notification::new(title)
+            .body("a tap on me delivers my data")
+            .data(payload.clone())
+            .icon(icon.to_string_lossy().into_owned());
+        match notification.show() {
+            Ok(()) => append("events.log", &format!("shown data_len={}", payload.len())),
+            Err(error) => append("events.log", &format!("show failed {error:?}")),
+        }
     }
     let stop = out_dir().join("stop");
     let deadline = Instant::now() + RUN_BOUND;
