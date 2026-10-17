@@ -15,7 +15,9 @@ links = "tauri-plugin-pushups"
 [dependencies]
 # Depended on directly so the build script receives `DEP_PUSHUPS_ANDROID`.
 pushups = { version = "0.1.0", path = ".." }
-tauri = { version = "2.12", default-features = false }
+# 2.12.3 makes the `@_cdecl` entry points of its iOS library public, which iOS release builds on
+# Xcode 27 need to link.
+tauri = { version = "2.12.3", default-features = false }
 
 [build-dependencies]
 tauri-plugin = { version = "2.7", features = ["build"] }
