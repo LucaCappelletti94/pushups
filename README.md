@@ -130,3 +130,7 @@ use pushups::{Config, WnsConfig};
 let config = Config::new().windows(WnsConfig::new("00000000-0000-0000-0000-000000000000"));
 # let _ = config;
 ```
+
+## Alternatives
+
+[ALTERNATIVES.md](https://github.com/LucaCappelletti94/pushups/blob/main/ALTERNATIVES.md) compares the other Rust crates that receive pushes, by framework and system.
