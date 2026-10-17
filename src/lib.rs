@@ -154,6 +154,10 @@ pub fn register() -> Result<(), Error> {
 
 /// Asks the user to let pushes show notifications, and returns the answer.
 ///
+/// On Linux and Windows it reports transport readiness, the session bus and a distributor on
+/// Linux and `PushNotificationManager::IsSupported` on Windows, and the notification setting is
+/// what [`permission_status`] reports.
+///
 /// On the web a grant subscribes again when the browser refused an earlier [`register`] for want
 /// of the permission, as Safari refuses one outside a user gesture, so the token still arrives
 /// as [`Event::Token`].
@@ -168,11 +172,27 @@ pub async fn request_permission() -> Result<Permission, Error> {
     Platform::request_permission().await
 }
 
-// Holds `request_permission` to its documented `Send` future on every native target.
+/// Reports the notification permission the platform holds, without asking the user.
+///
+/// Linux has no notification permission, so its answer is [`Permission::Granted`] once
+/// [`install`] returned, and Windows reports the App SDK's `AppNotificationManager.Setting`.
+///
+/// Off the web the future is `Send`, so a multi-threaded executor such as Tauri's can await it.
+///
+/// # Errors
+///
+/// The errors of [`install`], and [`Error::Platform`] when the platform cannot answer.
+pub async fn permission_status() -> Result<Permission, Error> {
+    Platform::permission_status().await
+}
+
+// Holds `request_permission` and `permission_status` to their documented `Send` futures on every
+// native target.
 #[cfg(not(target_arch = "wasm32"))]
 const _: fn() = || {
     fn send<T: Send>(_: &T) {}
     send(&request_permission());
+    send(&permission_status());
 };
 
 /// Sets the function that receives every [`Event`], replacing the previous one.

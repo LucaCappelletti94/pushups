@@ -3,6 +3,7 @@ package rs.pushups
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationManagerCompat
@@ -100,4 +101,50 @@ object Pushups {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         appContext.startActivity(intent)
     }
+
+    /**
+     * Reports the state of the notification permission without asking, as one of
+     * [STATUS_GRANTED], [STATUS_DENIED] and [STATUS_NOT_DETERMINED].
+     */
+    @JvmStatic
+    fun permissionStatus(): Int {
+        val appContext = context ?: return STATUS_NOT_DETERMINED
+        if (Build.VERSION.SDK_INT < 33) {
+            return if (enabled(appContext)) STATUS_GRANTED else STATUS_DENIED
+        }
+        val granted = appContext.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        return when {
+            granted -> if (enabled(appContext)) STATUS_GRANTED else STATUS_DENIED
+            asked(appContext) -> STATUS_DENIED
+            else -> STATUS_NOT_DETERMINED
+        }
+    }
+
+    private fun enabled(context: Context): Boolean =
+        NotificationManagerCompat.from(context).areNotificationsEnabled()
+
+    private fun asked(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_ASKED, false)
+
+    /**
+     * Remembers that the prompt answered, so [permissionStatus] can tell a refusal from
+     * an app the user has never been asked.
+     */
+    internal fun markPromptAnswered(context: Context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_ASKED, true).apply()
+    }
+
+    private const val PREFS = "pushups"
+    private const val KEY_ASKED = "permission_prompt_answered"
+
+    /** [permissionStatus]'s answer, the permission granted and notifications enabled. */
+    const val STATUS_GRANTED = 0
+
+    /** [permissionStatus]'s answer, the user or the system refusing notifications. */
+    const val STATUS_DENIED = 1
+
+    /** [permissionStatus]'s answer, the user has not been asked yet. */
+    const val STATUS_NOT_DETERMINED = 2
 }

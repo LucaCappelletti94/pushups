@@ -19,6 +19,10 @@ impl Backend for Unsupported {
     fn request_permission() -> impl Future<Output = Result<Permission, Error>> {
         ready(Err(Error::Unsupported))
     }
+
+    fn permission_status() -> impl Future<Output = Result<Permission, Error>> {
+        ready(Err(Error::Unsupported))
+    }
 }
 
 #[cfg(test)]
@@ -36,6 +40,10 @@ mod tests {
         assert_eq!(Unsupported::register(), Err(Error::Unsupported));
         assert_eq!(
             futures_executor::block_on(Unsupported::request_permission()),
+            Err(Error::Unsupported)
+        );
+        assert_eq!(
+            futures_executor::block_on(Unsupported::permission_status()),
             Err(Error::Unsupported)
         );
         Unsupported::handler_set();

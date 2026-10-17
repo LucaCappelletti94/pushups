@@ -26,6 +26,10 @@ object Probe {
     @JvmStatic
     external fun permission(): String?
 
+    /** The answer of `pushups::permission_status`, `Granted`, `Denied`, `NotDetermined` or `error ...`. */
+    @JvmStatic
+    external fun permissionStatus(): String
+
     /** Every event the handler received, one per line. */
     @JvmStatic
     external fun events(): String

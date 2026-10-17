@@ -11,6 +11,8 @@ license = "MIT"
 proc-macro = true
 
 [dependencies]
+# Finds the name the calling crate gives its `pushups` dependency.
+proc-macro-crate = "3"
 proc-macro2 = "1"
 quote = "1"
 serde_json = "1"

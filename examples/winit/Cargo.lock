@@ -1553,6 +1553,7 @@ dependencies = [
 name = "pushups-example-support"
 version = "0.0.0"
 dependencies = [
+ "font8x8",
  "js-sys",
  "pushups",
  "serde_json",
@@ -1563,6 +1564,7 @@ dependencies = [
 name = "pushups-macros"
 version = "0.1.0"
 dependencies = [
+ "proc-macro-crate",
  "proc-macro2",
  "quote",
  "serde_json",
@@ -1573,7 +1575,6 @@ dependencies = [
 name = "pushups-winit-example"
 version = "0.0.0"
 dependencies = [
- "font8x8",
  "futures-executor",
  "js-sys",
  "pushups",

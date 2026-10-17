@@ -42,6 +42,7 @@ class PermissionActivity : Activity() {
         handler.removeCallbacks(timeout)
         val granted = grantResults.isNotEmpty() &&
             grantResults[0] == PackageManager.PERMISSION_GRANTED
+        Pushups.markPromptAnswered(this)
         replyWith(granted)
         finish()
     }

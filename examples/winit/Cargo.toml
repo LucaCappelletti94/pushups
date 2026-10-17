@@ -12,14 +12,15 @@ name = "main"
 crate-type = ["cdylib"]
 
 [dependencies]
-# The 8×8 bitmap font the window's lines are drawn in.
-font8x8 = "0.3"
-futures-executor = "0.3"
 pushups = { path = "../..", features = ["serde"] }
 pushups-example-support = { path = "../support" }
 # Puts the drawn pixels in the window, which winit itself leaves empty.
 softbuffer = "0.4"
 winit = "=0.31.0-beta.3"
+
+# Blocks on the permission prompt on a thread of its own, which the web cannot do.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+futures-executor = "0.3"
 
 [target.'cfg(target_os = "android")'.dependencies]
 winit = { version = "=0.31.0-beta.3", features = ["android-native-activity"] }

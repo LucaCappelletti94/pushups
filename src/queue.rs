@@ -38,6 +38,7 @@ const FCM_TOKEN: u8 = 2;
 const MESSAGES_DROPPED: u8 = 3;
 const WEB_PUSH_TOKEN: u8 = 4;
 const REGISTRATION_FAILED: u8 = 5;
+const UNREGISTERED: u8 = 6;
 
 /// An event waiting in the queue.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,15 +52,11 @@ pub(crate) enum Entry {
         auth: [u8; 16],
     },
     RegistrationFailed(String),
+    /// The distributor dropped the app's registration, on Android or Linux.
+    Unregistered,
 }
 
 impl Entry {
-    /// The distributor dropped the app's registration, on Android or Linux.
-    #[cfg(any(target_os = "android", target_os = "linux"))]
-    pub(crate) fn unregistered() -> Self {
-        Self::RegistrationFailed("the distributor unregistered the app".to_owned())
-    }
-
     pub(crate) fn into_event(self) -> Event {
         match self {
             Self::Message(message) => Event::Message(message),
@@ -76,6 +73,7 @@ impl Entry {
                 expires: None,
             }),
             Self::RegistrationFailed(reason) => Event::registration_failed(reason),
+            Self::Unregistered => Event::RegistrationFailed(crate::Error::Unregistered),
         }
     }
 
@@ -109,6 +107,10 @@ impl Entry {
             Self::RegistrationFailed(reason) => {
                 out.push(REGISTRATION_FAILED);
                 push_bytes(out, reason.as_bytes())
+            }
+            Self::Unregistered => {
+                out.push(UNREGISTERED);
+                Ok(())
             }
         }
     }
@@ -159,6 +161,7 @@ enum Record<'bytes> {
         auth: &'bytes [u8; 16],
     },
     RegistrationFailed(&'bytes str),
+    Unregistered,
 }
 
 impl<'bytes> Record<'bytes> {
@@ -205,6 +208,7 @@ impl<'bytes> Record<'bytes> {
                 let (reason, rest) = take_text(rest)?;
                 Some((Self::RegistrationFailed(reason), rest))
             }
+            UNREGISTERED => Some((Self::Unregistered, rest)),
             _ => None,
         }
     }
@@ -230,6 +234,7 @@ impl<'bytes> Record<'bytes> {
                 auth: *auth,
             },
             Self::RegistrationFailed(reason) => Entry::RegistrationFailed(reason.to_owned()),
+            Self::Unregistered => Entry::Unregistered,
         }
     }
 }
@@ -428,6 +433,7 @@ mod tests {
             Entry::MessagesDropped,
             web_push_token("https://ntfy.sh/up123?up=1"),
             Entry::RegistrationFailed("unregistered by the distributor".to_owned()),
+            Entry::Unregistered,
             message(b"", false),
         ];
         assert_eq!(decode(&encoded(&entries)), entries);
@@ -503,6 +509,22 @@ mod tests {
         assert_eq!(
             Entry::RegistrationFailed("gone".to_owned()).into_event(),
             Event::RegistrationFailed(Error::Platform("gone".to_owned()))
+        );
+    }
+
+    #[test]
+    fn an_unregistration_survives_the_file_as_its_own_reason() {
+        let bytes = encoded(&[
+            Entry::Unregistered,
+            Entry::RegistrationFailed("other".to_owned()),
+        ]);
+        let events: Vec<Event> = decode(&bytes).into_iter().map(Entry::into_event).collect();
+        assert_eq!(
+            events,
+            [
+                Event::RegistrationFailed(Error::Unregistered),
+                Event::RegistrationFailed(Error::Platform("other".to_owned())),
+            ]
         );
     }
 

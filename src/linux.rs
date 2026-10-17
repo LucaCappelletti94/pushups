@@ -152,6 +152,18 @@ impl Backend for Linux {
         ready(Ok(permission))
     }
 
+    fn permission_status() -> impl Future<Output = Result<Permission, Error>> {
+        let installed = RUNTIME
+            .get()
+            .is_some_and(|runtime| runtime.owns_name.load(Ordering::Acquire));
+        ready(if installed {
+            // Linux has no notification permission.
+            Ok(Permission::Granted)
+        } else {
+            Err(Error::NotConfigured)
+        })
+    }
+
     /// Binds the UI session to the handler just set, and hands it the queue if the session was
     /// waiting for one.
     fn handler_set() {
@@ -423,7 +435,7 @@ impl Connector {
         {
             let state = call.0.state.lock();
             if known_token(&state, &args) {
-                state.inbox.receive(Entry::unregistered());
+                state.inbox.receive(Entry::Unregistered);
             }
         }
         DISPATCHER.flush();
@@ -588,6 +600,14 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+
+    #[test]
+    fn the_status_before_install_is_not_configured() {
+        assert_eq!(
+            futures_executor::block_on(Linux::permission_status()),
+            Err(Error::NotConfigured)
+        );
+    }
 
     #[test]
     fn the_activation_file_starts_the_executable_marked_as_activated() {

@@ -9,6 +9,8 @@ pub(crate) trait Backend {
 
     fn request_permission() -> impl Future<Output = Result<Permission, Error>>;
 
+    fn permission_status() -> impl Future<Output = Result<Permission, Error>>;
+
     /// A handler was set, so events kept outside the dispatcher go to it now.
     fn handler_set() {}
 

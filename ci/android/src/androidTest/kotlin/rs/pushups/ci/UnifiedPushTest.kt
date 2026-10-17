@@ -111,7 +111,7 @@ class UnifiedPushTest {
             val undecrypted = "undecrypted-${UUID.randomUUID()}"
             service.onMessage(PushMessage(undecrypted.toByteArray(), false), "default")
             service.onUnregistered("default")
-            awaitLine(Probe::events, "the distributor unregistered the app", UI_MS)
+            awaitLine(Probe::events, "the UnifiedPush distributor unregistered the app", UI_MS)
             assertFalse(Probe.events().contains(undecrypted))
         }
     }

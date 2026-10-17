@@ -29,14 +29,12 @@ fn main() {
     // iOS apps build only on macOS, the one host where Tauri can edit their entitlements and Info.plist.
     #[cfg(target_os = "macos")]
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("ios") {
-        // A debug build signs with a development profile, a release build with a distribution one.
-        let environment = if std::env::var("PROFILE").as_deref() == Ok("release") {
-            "production"
-        } else {
-            "development"
-        };
+        // An app's own value stays. Without one, Xcode replaces `development` with the value of
+        // the provisioning profile it signs with, so an export for distribution reads `production`.
         tauri_plugin::mobile::update_entitlements(|entitlements| {
-            entitlements.insert("aps-environment".into(), environment.into());
+            if !entitlements.contains_key("aps-environment") {
+                entitlements.insert("aps-environment".into(), "development".into());
+            }
         })
         .expect("the app's entitlements are updated");
         // A push delivered with the app out of the foreground needs the mode, and the project may
@@ -66,7 +64,7 @@ fn main() {
 }
 
 /// Asks cargo to run this script again when the Tauri CLI names another generated project, or
-/// when `tauri android init` or `tauri ios init` rewrites the file this script edits, since the
+/// when `tauri android init` or `tauri ios init` rewrites a file this script edits, since the
 /// edit lives in that file and a cached run would leave it out.
 fn rerun_with_tauri_projects() {
     println!("cargo::rerun-if-env-changed=TAURI_ANDROID_PROJECT_PATH");
@@ -80,11 +78,9 @@ fn rerun_with_tauri_projects() {
         std::env::var_os("TAURI_IOS_PROJECT_PATH"),
         std::env::var("TAURI_IOS_APP_NAME"),
     ) {
-        edited.push(
-            Path::new(&project)
-                .join(format!("{app}_iOS"))
-                .join(format!("{app}_iOS.entitlements")),
-        );
+        let ios = Path::new(&project).join(format!("{app}_iOS"));
+        edited.push(ios.join(format!("{app}_iOS.entitlements")));
+        edited.push(ios.join("Info.plist"));
     }
     // A missing path would make cargo rerun this script on every build.
     for file in edited.iter().filter(|file| file.exists()) {

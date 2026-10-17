@@ -149,14 +149,18 @@ class PushupsTest {
     fun a05_thePromptAnswerIsReported() {
         if (Build.VERSION.SDK_INT < 33) {
             // Before Android 13 notifications need no runtime permission, so no prompt shows.
+            assertEquals("Granted", Probe.permissionStatus())
             Probe.startPermission()
             assertEquals("Granted", awaitPermission())
             return
         }
+        assertEquals("NotDetermined", Probe.permissionStatus())
         Probe.startPermission()
         assertEquals("Denied", answerPrompt("permission_deny_button"))
+        assertEquals("Denied", Probe.permissionStatus())
         Probe.startPermission()
         assertEquals("Granted", answerPrompt("permission_allow_button"))
+        assertEquals("Granted", Probe.permissionStatus())
         // Granted already, so no prompt shows.
         Probe.startPermission()
         assertEquals("Granted", awaitPermission())

@@ -35,6 +35,11 @@ pub enum Error {
     /// A VAPID public key given as base64url is not the 87 characters of a 65-byte key.
     #[error("invalid VAPID public key: {0}")]
     InvalidVapidKey(VapidKeyError),
+    /// The UnifiedPush distributor dropped the app's registration, on Android or Linux. The app
+    /// calls [`register`](crate::register) again to keep receiving pushes, as the UnifiedPush
+    /// specification asks.
+    #[error("the UnifiedPush distributor unregistered the app")]
+    Unregistered,
 }
 
 #[cfg(any(

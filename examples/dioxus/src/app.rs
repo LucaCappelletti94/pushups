@@ -24,6 +24,9 @@ pub fn App() -> Element {
         while let Some(event) = events.next().await {
             log(&describe(&event));
             lines.write().push(support::shown(&event));
+            if let Err(error) = support::register_again(&event) {
+                lines.write().push(format!("register failed: {error}"));
+            }
         }
     });
     rsx! {

@@ -2,6 +2,9 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Permission {
+    /// The user has not been asked yet, so [`request_permission`](crate::request_permission)
+    /// would prompt.
+    NotDetermined,
     /// Pushes may show notifications.
     Granted,
     /// The user refused, or the system refuses without asking.
