@@ -22,7 +22,7 @@ mod linux {
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
-    use pushups::{Config, Error, Event, LinuxConfig, UnifiedPushConfig};
+    use pushups::{Config, Error, Event, LinuxConfig, Permission, UnifiedPushConfig};
     use zbus::zvariant::{OwnedValue, Value};
 
     const CHILD: &str = "PUSHUPS_TEST_CHILD";
@@ -251,6 +251,12 @@ mod linux {
             return;
         }
         installed.expect("install connects to the private bus");
+        let status = futures_executor::block_on(pushups::permission_status());
+        assert_eq!(
+            status,
+            Ok(Permission::Granted),
+            "the status after install gave {status:?}"
+        );
         let (events, received) = mpsc::channel();
         pushups::set_handler(move |event| {
             let _ = events.send(event);
@@ -267,7 +273,7 @@ mod linux {
                 return;
             }
             REFUSE => &["VAPID_REQUIRED", "org.unifiedpush.Distributor.fake"],
-            UNREGISTER => &["the distributor unregistered the app"],
+            UNREGISTER => &[],
             NO_DISTRIBUTOR => &["no UnifiedPush distributor"],
             other => panic!("unknown scenario {other}"),
         };
@@ -276,6 +282,11 @@ mod linux {
             let left = deadline.saturating_duration_since(Instant::now());
             match received.recv_timeout(left) {
                 Ok(Event::RegistrationFailed(error)) => {
+                    assert_eq!(
+                        scenario == UNREGISTER,
+                        error == Error::Unregistered,
+                        "{scenario}: {error:?}"
+                    );
                     let error = error.to_string();
                     for part in expected {
                         assert!(error.contains(part), "{scenario}: {error}");
@@ -295,17 +306,18 @@ mod linux {
     }
 
     /// The distributor unregisters the app, and the handler, which the connector's `Unregistered`
-    /// call delivers to, registers again from inside that call.
+    /// call delivers to, registers again from inside that call, as an app does on that reason.
     fn reregister() {
         pushups::install(config()).expect("install connects to the private bus");
         let (failures, received) = mpsc::channel();
         let retried = std::sync::atomic::AtomicBool::new(false);
         pushups::set_handler(move |event| {
             if let Event::RegistrationFailed(error) = event {
-                if !retried.swap(true, Ordering::SeqCst) {
+                // The flag guards only its own value, so no ordering beyond the swap is needed.
+                if error == Error::Unregistered && !retried.swap(true, Ordering::Relaxed) {
                     pushups::register().expect("register starts from the handler");
                 }
-                let _ = failures.send(error.to_string());
+                let _ = failures.send(error);
             }
         });
         pushups::register().expect("register starts");
@@ -313,10 +325,7 @@ mod linux {
             let error = received
                 .recv_timeout(BOUND)
                 .unwrap_or_else(|_| panic!("no {attempt} RegistrationFailed within {BOUND:?}"));
-            assert!(
-                error.contains("the distributor unregistered the app"),
-                "{attempt}: {error}"
-            );
+            assert_eq!(error, Error::Unregistered, "{attempt}");
         }
     }
 

@@ -10,6 +10,8 @@ publish = false
 futures-executor = "0.3"
 pushups = { path = "../.." }
 pushups-example-support = { path = "../support" }
+# Puts the drawn pixels in the window, which tao itself leaves empty.
+softbuffer = "0.4"
 tao = "0.37"
 
 [features]

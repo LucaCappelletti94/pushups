@@ -482,11 +482,38 @@ async function workerUrl(origin) {
   });
 }
 
+/** A settings screen reads the permission without prompting, in a fresh, a denied, and a granted browser, matching the browser's own state. */
+async function permissionStatus(origin) {
+  const states = [
+    ["prompt", "not_determined", "default"],
+    ["denied", "denied", "denied"],
+    ["granted", "granted", "granted"],
+  ];
+  for (const [state, wanted, browserState] of states) {
+    await withBrowser(origin, state, async (browser) => {
+      const probe = await Probe.open(browser, origin);
+      const refused = await probe.page
+        .evaluate(() => window.probe.permissionStatus())
+        .catch((error) => error.message);
+      expect(
+        refused === "Config lacks the part this target needs",
+        `the status before install is refused, got ${refused}`,
+      );
+      await probe.install(false);
+      const status = await probe.page.evaluate(() => window.probe.permissionStatus());
+      expect(status === wanted, `the ${state} status, got ${status}`);
+      const permission = await probe.page.evaluate(() => Notification.permission);
+      expect(permission === browserState, `the ${state} browser state, got ${permission}`);
+      await probe.close(`permission-${state}`);
+    });
+  }
+}
+
 mkdirSync(join(out, "rust"), { recursive: true });
 mkdirSync(join(out, "js"), { recursive: true });
 const { server, origin } = await serve();
 try {
-  const scenarios = [misuse, denied, grantedLater, resumed, staticWorker, rotated, concurrent, rustWorker, workerUrl, updated];
+  const scenarios = [misuse, denied, grantedLater, resumed, staticWorker, rotated, concurrent, rustWorker, workerUrl, updated, permissionStatus];
   for (const scenario of scenarios.filter(({ name }) => only.length === 0 || only.includes(name))) {
     log(`scenario ${scenario.name}`);
     await scenario(origin);

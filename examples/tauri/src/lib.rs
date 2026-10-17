@@ -25,6 +25,9 @@ pub fn run() {
     pushups::set_handler(|event| {
         log(&describe(&event));
         page_show(support::shown(&event));
+        if let Err(error) = support::register_again(&event) {
+            log(&format!("register failed: {error}"));
+        }
     });
     if let Err(error) = pushups::register() {
         log(&format!("register failed: {error}"));

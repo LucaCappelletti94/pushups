@@ -158,6 +158,20 @@ pub extern "system" fn Java_rs_pushups_ci_Probe_permission<'caller>(
     java_string(unowned, PERMISSION.lock().take())
 }
 
+/// `Probe.permissionStatus()`: the answer of `pushups::permission_status` as `Granted`,
+/// `Denied` or `NotDetermined`, or `error ...`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_pushups_ci_Probe_permissionStatus<'caller>(
+    unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    let answer = match futures_executor::block_on(pushups::permission_status()) {
+        Ok(permission) => format!("{permission:?}"),
+        Err(error) => format!("error {error}"),
+    };
+    java_string(unowned, Some(answer))
+}
+
 /// `Probe.events()`: every event so far, one per line.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_pushups_ci_Probe_events<'caller>(

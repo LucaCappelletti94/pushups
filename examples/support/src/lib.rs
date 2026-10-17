@@ -7,6 +7,21 @@
 
 use pushups::{Event, Message, Token};
 
+pub mod text;
+
+/// Registers again when the UnifiedPush distributor dropped the app's registration, as the
+/// specification asks, and leaves every other event alone.
+///
+/// # Errors
+///
+/// The error of [`pushups::register`].
+pub fn register_again(event: &Event) -> Result<(), pushups::Error> {
+    match event {
+        Event::RegistrationFailed(pushups::Error::Unregistered) => pushups::register(),
+        _ => Ok(()),
+    }
+}
+
 /// The payload's string field `name`, for a JSON payload that carries it.
 #[must_use]
 pub fn field(message: &Message, name: &str) -> Option<String> {

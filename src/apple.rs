@@ -7,6 +7,7 @@ mod runtime;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::ptr::NonNull;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -16,7 +17,9 @@ use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::Bool;
 use objc2_foundation::{NSError, NSFileManager, NSSearchPathDirectory, NSSearchPathDomainMask};
-use objc2_user_notifications::{UNAuthorizationOptions, UNUserNotificationCenter};
+use objc2_user_notifications::{
+    UNAuthorizationOptions, UNAuthorizationStatus, UNNotificationSettings, UNUserNotificationCenter,
+};
 use parking_lot::Mutex;
 
 use crate::backend::Backend;
@@ -116,6 +119,34 @@ impl Backend for Apple {
                         | UNAuthorizationOptions::Sound,
                     &answered,
                 );
+        }
+        reply
+            .await
+            .unwrap_or_else(|oneshot::Canceled| Err(Error::permission_unanswered()))
+    }
+
+    async fn permission_status() -> Result<Permission, Error> {
+        if STATE.get().is_none() {
+            return Err(Error::NotConfigured);
+        }
+        let (sender, reply) = oneshot::channel();
+        let sender = Mutex::new(Some(sender));
+        // The center copies the block, so this reference ends before the await and the future
+        // holds only `reply`, which keeps it `Send`.
+        {
+            let answered =
+                block2::RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {
+                    // SAFETY: the system retains the settings object it passes for the callback, so
+                    // the non-null pointer is aligned, initialized and valid for the borrow, and the
+                    // shared reference aliases no mutable access to it.
+                    let settings = unsafe { settings.as_ref() };
+                    let answer = Ok(permission_from_status(settings.authorizationStatus()));
+                    if let Some(sender) = sender.lock().take() {
+                        let _ = sender.send(answer);
+                    }
+                });
+            UNUserNotificationCenter::currentNotificationCenter()
+                .getNotificationSettingsWithCompletionHandler(&answered);
         }
         reply
             .await
@@ -263,4 +294,56 @@ fn finish_after_background_work(
 /// `Retained` objects the crate keeps for the life of the process, such as its own delegates, which the system holds weakly.
 fn keep<T: ?Sized + objc2::Message>(object: Retained<T>) {
     std::mem::forget(object);
+}
+
+/// Maps the notification settings' `UNAuthorizationStatus` to the permission the app sees.
+fn permission_from_status(status: UNAuthorizationStatus) -> Permission {
+    if status == UNAuthorizationStatus::Authorized
+        || status == UNAuthorizationStatus::Provisional
+        || status == UNAuthorizationStatus::Ephemeral
+    {
+        return Permission::Granted;
+    }
+    if status == UNAuthorizationStatus::NotDetermined {
+        return Permission::NotDetermined;
+    }
+    // A value the bindings do not name, as the system adds one, reports no grant.
+    Permission::Denied
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_authorization_statuses_map_to_the_permissions() {
+        assert_eq!(
+            permission_from_status(UNAuthorizationStatus::NotDetermined),
+            Permission::NotDetermined
+        );
+        assert_eq!(
+            permission_from_status(UNAuthorizationStatus::Denied),
+            Permission::Denied
+        );
+        assert_eq!(
+            permission_from_status(UNAuthorizationStatus::Authorized),
+            Permission::Granted
+        );
+        assert_eq!(
+            permission_from_status(UNAuthorizationStatus::Provisional),
+            Permission::Granted
+        );
+        assert_eq!(
+            permission_from_status(UNAuthorizationStatus::Ephemeral),
+            Permission::Granted
+        );
+    }
+
+    #[test]
+    fn an_unknown_authorization_status_reports_no_grant() {
+        assert_eq!(
+            permission_from_status(UNAuthorizationStatus(7)),
+            Permission::Denied
+        );
+    }
 }

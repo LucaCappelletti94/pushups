@@ -10,7 +10,8 @@ use web_sys::ServiceWorkerRegistration;
 use crate::backend::Backend;
 use crate::dispatch::DISPATCHER;
 use crate::web_parts::{
-    Subscribing, permission_from, static_worker_script, subscription_key, web_push_token,
+    Subscribing, permission_from, permission_state_from, static_worker_script, subscription_key,
+    web_push_token,
 };
 use crate::{Config, Error, Event, Message, Notification, Permission, VapidPublicKey};
 
@@ -259,6 +260,24 @@ impl Backend for Web {
             let _ = subscribe_and_emit();
         }
         Ok(permission)
+    }
+
+    fn permission_status() -> impl Future<Output = Result<Permission, Error>> {
+        let result = PAGE.with_borrow(|page| {
+            if page.is_none() {
+                return Err(Error::NotConfigured);
+            }
+            let window = web_sys::window().ok_or(Error::Unsupported)?;
+            if !Reflect::has(&window, &JsValue::from_str("Notification")).unwrap_or(false) {
+                return Err(Error::Unsupported);
+            }
+            let notification = field(&window, "Notification")?;
+            let state = field(&notification, "permission")?
+                .as_string()
+                .unwrap_or_default();
+            permission_state_from(&state)
+        });
+        std::future::ready(result)
     }
 
     fn serve_service_worker<H, F>(handler: H) -> Result<(), Error>

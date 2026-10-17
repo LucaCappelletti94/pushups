@@ -1,7 +1,7 @@
 //! The app both entry points run, `main` on desktop, iOS and the web and `android_main` on Android.
 
 use std::rc::Rc;
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
 
 use pushups::{Config, Context, Event, Message, VapidPublicKey};
 use pushups_example_support as support;
@@ -10,11 +10,21 @@ use pushups_example_support as support;
 #[cfg(not(target_arch = "wasm32"))]
 use pushups::{LinuxConfig, UnifiedPushConfig, WnsConfig};
 use winit::application::ApplicationHandler;
+#[cfg(not(target_arch = "wasm32"))]
+use winit::event::ElementState;
 use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowAttributes, WindowId};
 
 use crate::screen::Screen;
+
+/// What the event loop wakes for, a push event or the answer to the permission prompt.
+enum Update {
+    Push(Event),
+    /// The prompt's answer, which the web shows on its button instead.
+    #[cfg(not(target_arch = "wasm32"))]
+    Permission(String),
+}
 
 /// Installs `pushups`, before the event loop exists.
 pub(crate) fn install() {
@@ -59,30 +69,24 @@ fn config() -> Config {
     })
 }
 
-/// Registers, asks for permission, and runs the event loop. On the web the loop does not block
-/// and keeps running in the page's event loop after `main` returns.
+/// Registers and runs the event loop. On the web the loop does not block and keeps running in
+/// the page's event loop after `main` returns.
 pub(crate) fn run(event_loop: EventLoop) -> Result<(), Box<dyn std::error::Error>> {
     let proxy = event_loop.create_proxy();
-    let (sender, events) = channel();
+    let (sender, updates) = channel();
+    let pushes = sender.clone();
+    let waker = proxy.clone();
     pushups::set_handler(move |event| {
         // A closed channel means the app is exiting.
-        let _ = sender.send(event);
-        proxy.wake_up();
+        let _ = pushes.send(Update::Push(event));
+        waker.wake_up();
     });
     if let Err(error) = pushups::register() {
         log(&format!("register failed: {error}"));
     }
+    #[cfg(target_arch = "wasm32")]
     ask_permission();
-    Ok(event_loop.run_app(App::new(events))?)
-}
-
-/// Asks for permission and logs the answer, off the thread that runs the event loop.
-#[cfg(not(target_arch = "wasm32"))]
-fn ask_permission() {
-    std::thread::spawn(|| {
-        let answer = futures_executor::block_on(pushups::request_permission());
-        log(&format!("permission {answer:?}"));
-    });
+    Ok(event_loop.run_app(App::new(updates, sender, proxy))?)
 }
 
 /// Wires the page's button to ask for permission, since the prompt needs the click's gesture.
@@ -121,16 +125,64 @@ fn ask_permission() {
 struct App {
     window: Option<Rc<dyn Window>>,
     screen: Screen,
-    events: Receiver<Event>,
+    updates: Receiver<Update>,
+    // The native prompt's answer comes back through these, while the web answers on its button.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(dead_code, reason = "the web asks from its button")
+    )]
+    sender: Sender<Update>,
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(dead_code, reason = "the web asks from its button")
+    )]
+    proxy: EventLoopProxy,
+    /// A prompt is open, so another click asks nothing.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(dead_code, reason = "the web asks from its button")
+    )]
+    asking: bool,
 }
 
 impl App {
-    fn new(events: Receiver<Event>) -> Self {
+    fn new(updates: Receiver<Update>, sender: Sender<Update>, proxy: EventLoopProxy) -> Self {
+        let screen = Screen::new();
+        // The web asks from its button, so only a native window explains the click.
+        #[cfg(not(target_arch = "wasm32"))]
+        let screen = {
+            let mut screen = screen;
+            screen.push("Click, tap or press a key to allow notifications".to_owned());
+            screen
+        };
         Self {
             window: None,
-            screen: Screen::new(),
-            events,
+            screen,
+            updates,
+            sender,
+            proxy,
+            asking: false,
         }
+    }
+
+    /// Asks for permission off the thread that runs the event loop, and hands the answer back to
+    /// the window, unless a prompt is open already.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ask_permission(&mut self) {
+        if self.asking {
+            return;
+        }
+        self.asking = true;
+        let (sender, proxy) = (self.sender.clone(), self.proxy.clone());
+        // A thread of its own, outside any async runtime, so blocking on the prompt is safe.
+        std::thread::spawn(move || {
+            let answer = match futures_executor::block_on(pushups::request_permission()) {
+                Ok(permission) => format!("{permission:?}"),
+                Err(error) => format!("failed: {error}"),
+            };
+            let _ = sender.send(Update::Permission(answer));
+            proxy.wake_up();
+        });
     }
 }
 
@@ -164,9 +216,22 @@ impl ApplicationHandler for App {
     }
 
     fn proxy_wake_up(&mut self, _event_loop: &dyn ActiveEventLoop) {
-        for event in self.events.try_iter() {
-            log(&describe(&event));
-            self.screen.push(support::shown(&event));
+        for update in self.updates.try_iter() {
+            match update {
+                Update::Push(event) => {
+                    log(&describe(&event));
+                    self.screen.push(support::shown(&event));
+                    if let Err(error) = support::register_again(&event) {
+                        log(&format!("register failed: {error}"));
+                    }
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                Update::Permission(answer) => {
+                    log(&format!("permission {answer}"));
+                    self.screen.push(format!("Notifications: {answer}"));
+                    self.asking = false;
+                }
+            }
         }
     }
 
@@ -183,6 +248,18 @@ impl ApplicationHandler for App {
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
+            }
+            // A mouse button, a touch or a key, the user's action the prompt answers.
+            #[cfg(not(target_arch = "wasm32"))]
+            WindowEvent::PointerButton {
+                state: ElementState::Pressed,
+                ..
+            } => self.ask_permission(),
+            #[cfg(not(target_arch = "wasm32"))]
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state == ElementState::Pressed && !event.repeat =>
+            {
+                self.ask_permission();
             }
             _ => {}
         }

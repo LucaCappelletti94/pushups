@@ -117,6 +117,25 @@ pub async fn request_permission() -> Result<String, JsError> {
     })
 }
 
+/// Reports the notification permission without asking, naming the answer.
+///
+/// # Errors
+///
+/// The error of `pushups::permission_status`.
+#[wasm_bindgen(js_name = permissionStatus)]
+pub async fn permission_status() -> Result<String, JsError> {
+    let answer = pushups::permission_status()
+        .await
+        .map_err(|error| JsError::new(&error.to_string()))?;
+    Ok(match answer {
+        Permission::NotDetermined => "not_determined".to_owned(),
+        Permission::Granted => "granted".to_owned(),
+        Permission::Denied => "denied".to_owned(),
+        Permission::Dismissed => "dismissed".to_owned(),
+        other => format!("{other:?}"),
+    })
+}
+
 /// Hands over and forgets every event received so far, as plain objects.
 ///
 /// # Errors

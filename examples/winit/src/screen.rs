@@ -5,13 +5,10 @@ use std::collections::VecDeque;
 use std::num::NonZeroU32;
 use std::rc::Rc;
 
-use font8x8::UnicodeFonts as _;
+use pushups_example_support::text::{self, Frame, Insets};
 use softbuffer::{Context, Surface};
 use winit::window::Window;
 
-const BACKGROUND: u32 = 0x000e_1824;
-const TITLE: u32 = 0x00f6_7017;
-const TEXT: u32 = 0x00f5_f7fa;
 const TITLE_TEXT: &str = "pushups winit example";
 /// The lines kept, more than any window shows once they wrap.
 const KEPT: usize = 32;
@@ -68,48 +65,28 @@ impl Screen {
         else {
             return;
         };
+        let (Ok(columns), Ok(rows)) = (usize::try_from(size.width), usize::try_from(size.height))
+        else {
+            return;
+        };
         if surface.resize(width, height).is_err() {
             return;
         }
         let Ok(mut buffer) = surface.buffer_mut() else {
             return;
         };
-        buffer.fill(BACKGROUND);
-        let (width, height) = (size.width as usize, size.height as usize);
-        let scale = ((window.scale_factor() * 1.5).round() as usize).max(1);
-        let glyph = 8 * scale;
-        let row = glyph + 4 * scale;
-        let insets = insets(window.as_ref());
-        let left = insets.left + 2 * glyph;
-        let top = insets.top + 2 * glyph;
-        let bottom = height.saturating_sub(insets.bottom + 2 * glyph);
-        let columns = width.saturating_sub(left + insets.right + 2 * glyph) / glyph;
-        if columns == 0 {
-            let _ = buffer.present();
-            return;
-        }
-        let mut canvas = Canvas {
-            pixels: &mut buffer,
-            width,
-            height,
-            scale,
+        let frame = Frame {
+            width: columns,
+            height: rows,
+            scale: text::scale(window.scale_factor()),
+            insets: insets(window.as_ref()),
         };
-        let mut y = top;
-        for text in wrap(TITLE_TEXT, columns) {
-            canvas.text(left, y, text, TITLE);
-            y += row;
-        }
-        y += row;
-        let fitting = bottom.saturating_sub(y) / row;
-        let rows: Vec<&str> = self
-            .lines
-            .iter()
-            .flat_map(|line| wrap(line, columns))
-            .collect();
-        for text in &rows[rows.len().saturating_sub(fitting)..] {
-            canvas.text(left, y, text, TEXT);
-            y += row;
-        }
+        text::draw(
+            &mut buffer,
+            &frame,
+            TITLE_TEXT,
+            self.lines.iter().map(String::as_str),
+        );
         let _ = buffer.present();
     }
 }
@@ -117,13 +94,13 @@ impl Screen {
 /// The edges system bars cover, from the safe area winit reports, or on Android, where winit
 /// reports none, from the Activity's content rectangle.
 fn insets(window: &dyn Window) -> Insets {
+    let edge = |pixels: i64| usize::try_from(pixels).unwrap_or(0);
     #[cfg(target_os = "android")]
     {
         use winit::platform::android::WindowExtAndroid as _;
 
         let size = window.surface_size();
         let rect = window.content_rect();
-        let edge = |pixels: i64| usize::try_from(pixels).unwrap_or(0);
         Insets {
             top: edge(rect.top.into()),
             left: edge(rect.left.into()),
@@ -135,77 +112,10 @@ fn insets(window: &dyn Window) -> Insets {
     {
         let area = window.safe_area();
         Insets {
-            top: area.top as usize,
-            left: area.left as usize,
-            bottom: area.bottom as usize,
-            right: area.right as usize,
-        }
-    }
-}
-
-struct Insets {
-    top: usize,
-    left: usize,
-    bottom: usize,
-    right: usize,
-}
-
-/// The line cut into pieces of at most `columns` characters, at a space where one falls inside.
-fn wrap(line: &str, columns: usize) -> impl Iterator<Item = &str> {
-    let mut rest = line;
-    std::iter::from_fn(move || {
-        if rest.is_empty() {
-            return None;
-        }
-        let Some((limit, next)) = rest.char_indices().nth(columns) else {
-            return Some(std::mem::take(&mut rest));
-        };
-        let space = if next == ' ' {
-            Some(limit)
-        } else {
-            rest[..limit].rfind(' ').filter(|&space| space > 0)
-        };
-        let (piece, tail) = match space {
-            Some(space) => (&rest[..space], &rest[space + 1..]),
-            None => rest.split_at(limit),
-        };
-        rest = tail;
-        Some(piece)
-    })
-}
-
-struct Canvas<'a> {
-    pixels: &'a mut [u32],
-    width: usize,
-    height: usize,
-    scale: usize,
-}
-
-impl Canvas<'_> {
-    /// Draws `text` with its top left corner at `x`, `y`, clipped to the buffer.
-    fn text(&mut self, x: usize, y: usize, text: &str, color: u32) {
-        let glyph = 8 * self.scale;
-        for (index, character) in text.chars().enumerate() {
-            let rows = font8x8::BASIC_FONTS
-                .get(character)
-                .or_else(|| font8x8::BASIC_FONTS.get('?'))
-                .unwrap_or_default();
-            let left = x + index * glyph;
-            for (row, bits) in rows.iter().enumerate() {
-                for column in 0..8 {
-                    if bits & (1 << column) != 0 {
-                        self.block(left + column * self.scale, y + row * self.scale, color);
-                    }
-                }
-            }
-        }
-    }
-
-    fn block(&mut self, x: usize, y: usize, color: u32) {
-        for row in y..(y + self.scale).min(self.height) {
-            let start = row * self.width + x.min(self.width);
-            let end = row * self.width + (x + self.scale).min(self.width);
-            self.pixels[start..end].fill(color);
+            top: edge(area.top.into()),
+            left: edge(area.left.into()),
+            bottom: edge(area.bottom.into()),
+            right: edge(area.right.into()),
         }
     }
 }

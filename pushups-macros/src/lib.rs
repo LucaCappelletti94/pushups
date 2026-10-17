@@ -46,6 +46,7 @@ pub fn firebase_config(input: TokenStream) -> TokenStream {
         Err(message) => return error("firebase_config", span, &message),
     };
     let include_path = path.to_string_lossy().into_owned();
+    let pushups = pushups_path();
     let entries = clients.iter().map(|client| {
         let package_name = &client.package_name;
         let application_id = &client.application_id;
@@ -53,7 +54,7 @@ pub fn firebase_config(input: TokenStream) -> TokenStream {
         let gcm_sender_id = &client.gcm_sender_id;
         let project_id = &client.project_id;
         quote! {
-            ::pushups::__private::android::FirebaseClient {
+            #pushups::__private::android::FirebaseClient {
                 package_name: #package_name,
                 application_id: #application_id,
                 api_key: #api_key,
@@ -68,16 +69,16 @@ pub fn firebase_config(input: TokenStream) -> TokenStream {
         #[cfg(target_os = "android")]
         #[unsafe(no_mangle)]
         pub unsafe extern "system" fn Java_rs_pushups_FirebaseConfig_values(
-            env: *mut ::pushups::__private::android::JNIEnv,
-            _class: ::pushups::__private::android::jclass,
-            package_name: ::pushups::__private::android::jstring,
-        ) -> ::pushups::__private::android::jobjectArray {
-            const CLIENTS: &[::pushups::__private::android::FirebaseClient] =
+            env: *mut #pushups::__private::android::JNIEnv,
+            _class: #pushups::__private::android::jclass,
+            package_name: #pushups::__private::android::jstring,
+        ) -> #pushups::__private::android::jobjectArray {
+            const CLIENTS: &[#pushups::__private::android::FirebaseClient] =
                 &[#(#entries),*];
 
             // SAFETY: `env` and `package_name` are live JNI arguments of the calling frame and
             // `firebase_values` only converts them while the frame is live.
-            unsafe { ::pushups::__private::android::firebase_values(env, package_name, CLIENTS) }
+            unsafe { #pushups::__private::android::firebase_values(env, package_name, CLIENTS) }
         }
     }
     .into()
@@ -125,23 +126,24 @@ pub fn background_handler(args: TokenStream, item: TokenStream) -> TokenStream {
         return error("background_handler", input.sig.ident.span(), message);
     }
     let name = &input.sig.ident;
+    let pushups = pushups_path();
     quote! {
         #item
-        const _: fn(::pushups::Context, ::pushups::Message) = #name;
+        const _: fn(#pushups::Context, #pushups::Message) = #name;
 
         #[cfg(target_os = "android")]
         #[unsafe(no_mangle)]
         pub unsafe extern "system" fn Java_rs_pushups_BackgroundHandler_handle(
-            env: *mut ::pushups::__private::android::JNIEnv,
-            _class: ::pushups::__private::android::jclass,
-            context: ::pushups::__private::android::jobject,
-            payload: ::pushups::__private::android::jbyteArray,
-            started_app: ::pushups::__private::android::jboolean,
+            env: *mut #pushups::__private::android::JNIEnv,
+            _class: #pushups::__private::android::jclass,
+            context: #pushups::__private::android::jobject,
+            payload: #pushups::__private::android::jbyteArray,
+            started_app: #pushups::__private::android::jboolean,
         ) {
             // SAFETY: `env`, `context` and `payload` are live JNI arguments of the calling frame
             // and `run_background_handler` only converts them while the frame is live.
             unsafe {
-                ::pushups::__private::android::run_background_handler(
+                #pushups::__private::android::run_background_handler(
                     env,
                     context,
                     payload,
@@ -160,7 +162,7 @@ pub fn background_handler(args: TokenStream, item: TokenStream) -> TokenStream {
         ) {
             // SAFETY: the Apple backend passes a payload of `len` bytes alive for the call.
             unsafe {
-                ::pushups::__private::apple::run_background_handler(payload, len, started_app, #name)
+                #pushups::__private::apple::run_background_handler(payload, len, started_app, #name)
             }
         }
 
@@ -171,9 +173,9 @@ pub fn background_handler(args: TokenStream, item: TokenStream) -> TokenStream {
             __pushups_background_handler;
 
         #[cfg(any(target_os = "linux", target_os = "windows"))]
-        #[::pushups::__private::linkme::distributed_slice(::pushups::__private::BACKGROUND_HANDLERS)]
-        #[linkme(crate = ::pushups::__private::linkme)]
-        static __PUSHUPS_BACKGROUND_HANDLER: fn(::pushups::Context, ::pushups::Message) = #name;
+        #[#pushups::__private::linkme::distributed_slice(#pushups::__private::BACKGROUND_HANDLERS)]
+        #[linkme(crate = #pushups::__private::linkme)]
+        static __PUSHUPS_BACKGROUND_HANDLER: fn(#pushups::Context, #pushups::Message) = #name;
 
         // Makes a second handler a duplicate symbol at link time, as on the other targets.
         #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -194,6 +196,19 @@ fn validate(input: &syn::ItemFn) -> Option<&'static str> {
         Some("the handler must not take `self`")
     } else {
         None
+    }
+}
+
+/// The path of `pushups` in the calling crate, under the name its manifest gives the dependency.
+/// `pushups` never expands these macros in its own library, so finding the crate itself, as in
+/// its doctests, or finding no manifest gives `::pushups`.
+fn pushups_path() -> TokenStream2 {
+    match proc_macro_crate::crate_name("pushups") {
+        Ok(proc_macro_crate::FoundCrate::Name(name)) => {
+            let name = quote::format_ident!("{name}");
+            quote!(::#name)
+        }
+        Ok(proc_macro_crate::FoundCrate::Itself) | Err(_) => quote!(::pushups),
     }
 }
 

@@ -72,6 +72,18 @@ pub(crate) fn permission_from(answer: &str) -> Result<Permission, Error> {
     }
 }
 
+/// The state of `Notification.permission`, which the browser answers from its own record.
+pub(crate) fn permission_state_from(state: &str) -> Result<Permission, Error> {
+    match state {
+        "granted" => Ok(Permission::Granted),
+        "denied" => Ok(Permission::Denied),
+        "default" => Ok(Permission::NotDetermined),
+        other => Err(Error::Platform(format!(
+            "unknown notification permission state {other:?}"
+        ))),
+    }
+}
+
 /// How the page's subscribes stand, which decides whether a permission grant subscribes again.
 #[derive(Debug, Default)]
 pub(crate) struct Subscribing {
@@ -187,6 +199,17 @@ mod tests {
         assert_eq!(permission_from("denied"), Ok(Permission::Denied));
         assert_eq!(permission_from("default"), Ok(Permission::Dismissed));
         assert!(permission_from("prompt").is_err());
+    }
+
+    #[test]
+    fn browser_permission_states_map_to_permission() {
+        assert_eq!(permission_state_from("granted"), Ok(Permission::Granted));
+        assert_eq!(permission_state_from("denied"), Ok(Permission::Denied));
+        assert_eq!(
+            permission_state_from("default"),
+            Ok(Permission::NotDetermined)
+        );
+        assert!(permission_state_from("prompt").is_err());
     }
 
     #[test]

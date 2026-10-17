@@ -40,6 +40,11 @@ static VAPID: OnceLock<String> = OnceLock::new();
 static PERMISSIONS: Mutex<BTreeMap<jlong, oneshot::Sender<bool>>> = Mutex::new(BTreeMap::new());
 static NEXT_PERMISSION: AtomicI64 = AtomicI64::new(0);
 
+/// The status codes the module's `permissionStatus` returns, mirroring its constants.
+const STATUS_GRANTED: i32 = 0;
+const STATUS_DENIED: i32 = 1;
+const STATUS_NOT_DETERMINED: i32 = 2;
+
 /// The module version the handshake saw, when it differed from the crate's.
 static MISMATCHED_MODULE: OnceLock<String> = OnceLock::new();
 
@@ -111,6 +116,24 @@ impl Backend for Android {
             Ok(false) => Ok(Permission::Denied),
             Err(oneshot::Canceled) => Err(Error::permission_unanswered()),
         }
+    }
+
+    fn permission_status() -> impl Future<Output = Result<Permission, Error>> {
+        let result = runtime().and_then(|runtime| {
+            let status = runtime
+                .vm
+                .attach_current_thread(|env| -> jni::errors::Result<i32> {
+                    env.call_static_method(
+                        &runtime.pushups,
+                        jni_str!("permissionStatus"),
+                        jni_sig!("()I"),
+                        &[],
+                    )?
+                    .i()
+                });
+            status.map_err(Error::platform).and_then(permission_from)
+        });
+        std::future::ready(result)
     }
 
     /// Binds the UI session to the handler just set, and hands it the queue if the session was
@@ -268,7 +291,7 @@ pub extern "system" fn Java_rs_pushups_Native_onUnregistered<'caller>(
     _unowned: EnvUnowned<'caller>,
     _class: JClass<'caller>,
 ) {
-    receive(Entry::unregistered());
+    receive(Entry::Unregistered);
 }
 
 /// `Native.onRegistered(token, error)`, the answer to [`register`]. Exactly one is non-null.
@@ -306,5 +329,40 @@ pub extern "system" fn Java_rs_pushups_Native_onPermissionResult<'caller>(
     if let Some(sender) = PERMISSIONS.lock().remove(&request_id) {
         // A dropped receiver means the app stopped waiting for the answer.
         let _ = sender.send(granted);
+    }
+}
+
+/// Maps the status the module's `permissionStatus` returns to the permission the app sees, and
+/// refuses a value the module does not report.
+fn permission_from(status: i32) -> Result<Permission, Error> {
+    match status {
+        STATUS_GRANTED => Ok(Permission::Granted),
+        STATUS_DENIED => Ok(Permission::Denied),
+        STATUS_NOT_DETERMINED => Ok(Permission::NotDetermined),
+        other => Err(Error::Platform(format!(
+            "the module reported the unknown permission status {other}"
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_module_statuses_map_to_the_permissions() {
+        assert_eq!(permission_from(STATUS_GRANTED), Ok(Permission::Granted));
+        assert_eq!(permission_from(STATUS_DENIED), Ok(Permission::Denied));
+        assert_eq!(
+            permission_from(STATUS_NOT_DETERMINED),
+            Ok(Permission::NotDetermined)
+        );
+    }
+
+    #[test]
+    fn an_unknown_module_status_is_a_platform_error() {
+        for other in [i32::MIN, -1, 3, i32::MAX] {
+            assert!(permission_from(other).is_err());
+        }
     }
 }

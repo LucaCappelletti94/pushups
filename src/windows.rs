@@ -65,6 +65,7 @@ use windows::Foundation::TypedEventHandler;
 #[cfg(target_os = "windows")]
 use windows_core::Interface as _;
 
+use crate::Permission;
 #[cfg(target_os = "windows")]
 use crate::backend::Backend;
 #[cfg(target_os = "windows")]
@@ -74,7 +75,7 @@ use crate::delivered::Delivered;
 #[cfg(target_os = "windows")]
 use crate::dispatch::DISPATCHER;
 #[cfg(target_os = "windows")]
-use crate::{Config, Error, Event, Message, Notification, Permission, Token};
+use crate::{Config, Error, Event, Message, Notification, Token};
 
 /// The 100-nanosecond ticks from 1601 to the Unix epoch, the base of `Windows.Foundation.DateTime`.
 const EPOCH_1601_TO_1970: i64 = 11_644_473_600 * 10_000_000;
@@ -130,6 +131,20 @@ fn launch_argument_data(argument: &str) -> Option<Vec<u8>> {
         }
     }
     None
+}
+
+/// The `AppNotificationSetting` value for `Enabled` in the bindings, the only setting
+/// `permission_status` reports as granted.
+const SETTING_ENABLED: i32 = 0;
+
+/// Maps the raw `AppNotificationSetting` of `AppNotificationManager.Setting` to the permission
+/// `permission_status` reports.
+fn permission_from_setting(setting: i32) -> Permission {
+    if setting == SETTING_ENABLED {
+        Permission::Granted
+    } else {
+        Permission::Denied
+    }
 }
 
 /// What `install` sets up, once per process.
@@ -506,6 +521,22 @@ impl Backend for Windows {
             Permission::Denied
         }))
     }
+
+    fn permission_status() -> impl Future<Output = Result<Permission, Error>> {
+        let result = RUNTIME.get().and_then(|runtime| {
+            // Without the display name and icon, `install` never registered the manager.
+            runtime.notifications.is_some().then(|| {
+                let manager =
+                    bindings::AppNotificationManager::Default().map_err(Error::platform)?;
+                let setting = manager.Setting().map_err(Error::platform)?;
+                Ok(permission_from_setting(setting.0))
+            })
+        });
+        std::future::ready(match result {
+            Some(result) => result,
+            None => Err(Error::NotConfigured),
+        })
+    }
 }
 
 /// Creates the fresh channel, waiting for WNS's answer.
@@ -554,6 +585,17 @@ mod tests {
             icon_uri_text("ms-appx:///Assets/icon.png"),
             "ms-appx:///Assets/icon.png"
         );
+    }
+
+    #[test]
+    fn the_enabled_setting_is_the_only_grant() {
+        assert_eq!(
+            permission_from_setting(SETTING_ENABLED),
+            Permission::Granted
+        );
+        for other in [1, 2, 3, 4, 5, 9] {
+            assert_eq!(permission_from_setting(other), Permission::Denied);
+        }
     }
 
     #[test]
