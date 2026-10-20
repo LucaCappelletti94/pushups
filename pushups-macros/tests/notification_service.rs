@@ -39,7 +39,9 @@ fn notification_service_expands_under_a_renamed_dependency() {
         .current_dir(consumer.path())
         .env(
             "CARGO_TARGET_DIR",
-            workspace.join("target/notification-service"),
+            std::env::current_exe()
+                .expect("the test executable")
+                .with_file_name("notification-service"),
         )
         .output()
         .expect("cargo runs");
