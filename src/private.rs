@@ -53,6 +53,92 @@ pub mod apple {
     }
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+pub mod ios {
+    use core::ffi::c_void;
+
+    use crate::{Error, Message, Notification, RenderingContext};
+
+    /// The adapter's completion thunk. The machine settles the request exactly once, with
+    /// the settled outcome and, for a rendered alert, the transform's fields.
+    ///
+    /// `token` is the adapter's retained completion box, which the thunk releases after its
+    /// one call. Each string pointer is null or `*_len` readable UTF-8 bytes, alive for the
+    /// call, and a null body on a rendered alert clears the body.
+    pub type Finish = unsafe extern "C" fn(
+        token: *mut c_void,
+        outcome: i32,
+        marker: *const u8,
+        marker_len: usize,
+        title: *const u8,
+        title_len: usize,
+        body: *const u8,
+        body_len: usize,
+        tag: *const u8,
+        tag_len: usize,
+        data: *const u8,
+        data_len: usize,
+        navigate: *const u8,
+        navigate_len: usize,
+    );
+
+    /// Allocates the service handle released by `deallocated`.
+    #[must_use]
+    pub fn create() -> *mut c_void {
+        crate::apple::service::create()
+    }
+
+    /// Starts the rendering request for the alert the adapter received, superseding a pending
+    /// one, under the remaining budget the adapter measured, and runs the app's transform.
+    ///
+    /// # Safety
+    ///
+    /// `service` is a live, aligned handle from `create` that cannot be destroyed during this call. `user_info` points to `user_info_len` readable bytes. `finish` may run on any thread and owns the retained `token` until its single call.
+    pub unsafe fn receive(
+        service: *const c_void,
+        user_info: *const u8,
+        user_info_len: usize,
+        budget_nanos: u64,
+        finish: Finish,
+        token: *mut c_void,
+        handler: fn(RenderingContext, Message) -> Result<Notification, Error>,
+    ) {
+        // SAFETY: the caller passed a live handle, a live thunk and a payload of
+        // `user_info_len` bytes.
+        unsafe {
+            crate::apple::service::receive(
+                service,
+                user_info,
+                user_info_len,
+                budget_nanos,
+                finish,
+                token,
+                handler,
+            );
+        }
+    }
+
+    /// The platform's `serviceExtensionTimeWillExpire` for the instance's handle.
+    ///
+    /// # Safety
+    ///
+    /// `service` is a live handle from `create`.
+    pub unsafe fn expired(service: *const c_void) {
+        // SAFETY: the caller passed a live handle.
+        unsafe { crate::apple::service::expired(service) }
+    }
+
+    /// Settles the pending request and destroys the service handle.
+    ///
+    /// # Safety
+    ///
+    /// `service` is the live handle from `create`, exclusively released once with no concurrent calls.
+    pub unsafe fn deallocated(service: *mut c_void) {
+        // SAFETY: the caller released the handle exactly once.
+        unsafe { crate::apple::service::deallocated(service) }
+    }
+}
+
 #[cfg(target_os = "android")]
 pub mod android {
     use jni::EnvUnowned;

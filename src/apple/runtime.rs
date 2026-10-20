@@ -493,8 +493,14 @@ unsafe extern "C-unwind" fn did_receive_response(
     if let Some(response) = unsafe { response.as_ref() } {
         // SAFETY: `notification` is a getter of `UNNotificationResponse`.
         let notification: Retained<AnyObject> = unsafe { msg_send![response, notification] };
-        if let Some(payload) = remote_payload(&notification) {
-            let _ = super::receive(payload, Arrival::Tap);
+        if let Some(info) = remote_info(&notification) {
+            #[cfg(target_os = "ios")]
+            let payload = tap_payload(&info).or_else(|| json(&info));
+            #[cfg(target_os = "macos")]
+            let payload = json(&info);
+            if let Some(payload) = payload {
+                let _ = super::receive(payload, Arrival::Tap);
+            }
         }
     }
     match original_with(this, cmd) {
@@ -506,8 +512,26 @@ unsafe extern "C-unwind" fn did_receive_response(
     }
 }
 
+/// Extracts the rendered alert's exact tap payload.
+#[cfg(target_os = "ios")]
+fn tap_payload(info: &AnyObject) -> Option<Vec<u8>> {
+    // SAFETY: `info` is the notification content's `NSDictionary`.
+    unsafe {
+        let key = objc2_foundation::ns_string!("pushups.notification-data");
+        let value: Option<Retained<AnyObject>> = msg_send![info, objectForKey: key];
+        let value = value?;
+        let string = value.downcast_ref::<NSString>()?;
+        Some(string.to_string().into_bytes())
+    }
+}
+
 /// The `userInfo` of a remote `UNNotification` as JSON, or `None` for a local one.
 fn remote_payload(notification: &AnyObject) -> Option<Vec<u8>> {
+    remote_info(notification).and_then(|info| json(&info))
+}
+
+/// Returns user info only for a remote notification.
+fn remote_info(notification: &AnyObject) -> Option<Retained<AnyObject>> {
     // SAFETY: each getter belongs to the class it is sent to, `UNNotification`, `UNNotificationRequest` and `UNNotificationContent`.
     unsafe {
         let request: Retained<AnyObject> = msg_send![notification, request];
@@ -523,7 +547,7 @@ fn remote_payload(notification: &AnyObject) -> Option<Vec<u8>> {
         }
         let content: Retained<AnyObject> = msg_send![&*request, content];
         let info: Retained<AnyObject> = msg_send![&*content, userInfo];
-        json(&info)
+        Some(info)
     }
 }
 

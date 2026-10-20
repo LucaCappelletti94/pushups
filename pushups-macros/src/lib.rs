@@ -186,6 +186,119 @@ pub fn background_handler(args: TokenStream, item: TokenStream) -> TokenStream {
     .into()
 }
 
+/// Exports a synchronous `fn(RenderingContext, Message) -> Result<Notification, Error>` for the [iOS service extension](https://github.com/LucaCappelletti94/pushups/blob/main/docs/mobile-notifications.md).
+#[proc_macro_attribute]
+pub fn notification_service(args: TokenStream, item: TokenStream) -> TokenStream {
+    let item: TokenStream2 = item.into();
+    let input: syn::ItemFn = match syn::parse2(item.clone()) {
+        Ok(input) => input,
+        Err(error) => return error.to_compile_error().into(),
+    };
+    if !args.is_empty() {
+        let span = args
+            .into_iter()
+            .next()
+            .map_or_else(|| input.sig.ident.span(), |token| token.span().into());
+        return error("notification_service", span, "takes no arguments");
+    }
+    if let Some(message) = validate(&input) {
+        return error("notification_service", input.sig.ident.span(), message);
+    }
+    let name = &input.sig.ident;
+    let pushups = pushups_path();
+    quote! {
+        #item
+        const _: fn(
+            #pushups::RenderingContext,
+            #pushups::Message,
+        ) -> core::result::Result<#pushups::Notification, #pushups::Error> = #name;
+
+        #[cfg(any(target_os = "ios", target_os = "macos"))]
+        #[unsafe(no_mangle)]
+        pub extern "C" fn __pushups_notification_service_create() -> *mut ::core::ffi::c_void {
+            #pushups::__private::ios::create()
+        }
+
+        /// # Safety
+        ///
+        /// The service and non-null payload must remain valid for the call, and the completion thunk must accept exclusive ownership of the retained token on any thread.
+        #[cfg(any(target_os = "ios", target_os = "macos"))]
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn __pushups_notification_service_receive(
+            service: *const ::core::ffi::c_void,
+            user_info: *const u8,
+            user_info_len: usize,
+            budget_nanos: u64,
+            finish: #pushups::__private::ios::Finish,
+            token: *mut ::core::ffi::c_void,
+        ) {
+            // SAFETY: the adapter guarantees live input storage and transfers its thread-safe completion token.
+            unsafe {
+                #pushups::__private::ios::receive(
+                    service,
+                    user_info,
+                    user_info_len,
+                    budget_nanos,
+                    finish,
+                    token,
+                    #name,
+                )
+            }
+        }
+
+        /// # Safety
+        ///
+        /// The service handle must remain live throughout the call.
+        #[cfg(any(target_os = "ios", target_os = "macos"))]
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn __pushups_notification_service_expired(
+            service: *const ::core::ffi::c_void,
+        ) {
+            // SAFETY: the adapter passes its live service handle.
+            unsafe {
+                #pushups::__private::ios::expired(service)
+            }
+        }
+
+        /// # Safety
+        ///
+        /// The service handle must be exclusively released once, with no concurrent calls.
+        #[cfg(any(target_os = "ios", target_os = "macos"))]
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn __pushups_notification_service_deallocated(
+            service: *mut ::core::ffi::c_void,
+        ) {
+            // SAFETY: the adapter releases the service handle it created, exactly once.
+            unsafe {
+                #pushups::__private::ios::deallocated(service)
+            }
+        }
+
+        // Keeps the exports through the linker's dead-strip, since only the adapter names them.
+        #[cfg(any(target_os = "ios", target_os = "macos"))]
+        #[used]
+        static __PUSHUPS_NOTIFICATION_SERVICE_KEPT: (
+            extern "C" fn() -> *mut ::core::ffi::c_void,
+            unsafe extern "C" fn(
+                *const ::core::ffi::c_void,
+                *const u8,
+                usize,
+                u64,
+                #pushups::__private::ios::Finish,
+                *mut ::core::ffi::c_void,
+            ),
+            unsafe extern "C" fn(*const ::core::ffi::c_void),
+            unsafe extern "C" fn(*mut ::core::ffi::c_void),
+        ) = (
+            __pushups_notification_service_create,
+            __pushups_notification_service_receive,
+            __pushups_notification_service_expired,
+            __pushups_notification_service_deallocated,
+        );
+    }
+    .into()
+}
+
 /// The rules a background handler function must satisfy.
 fn validate(input: &syn::ItemFn) -> Option<&'static str> {
     if input.sig.asyncness.is_some() {
