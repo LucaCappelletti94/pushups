@@ -55,92 +55,70 @@ pub mod apple {
 
 #[cfg(target_os = "android")]
 pub mod android {
-    use jni::EnvUnowned;
-    use jni::objects::{JByteArray, JObjectArray, JString};
-    pub use jni::sys::{JNIEnv, jboolean, jbyteArray, jclass, jobject, jobjectArray, jstring};
+    pub use crate::__pushups_android_exports as exports;
+    pub use crate::android_boundary::boundary;
+    pub use jni;
+
+    use jni::objects::{JByteArray, JObject, JString};
+    use jni::{JNIEnv, sys::jobjectArray};
 
     pub use super::FirebaseClient;
     use crate::{Context, Message};
 
-    /// Returns the four values of the client [`select_client`](super::select_client) picks as a
-    /// `String[]`, or `null` when none fits.
+    /// Returns the selected client's values as a Java-owned array in the caller's native frame.
     ///
-    /// The array is a new local reference of the calling native method's frame, which the JVM
-    /// takes over when that method returns it. A JNI failure throws a `RuntimeException` and
-    /// returns `null`.
+    /// # Errors
     ///
-    /// # Safety
-    ///
-    /// `env` is the `JNIEnv*` of the native method running on this thread, and `package_name`
-    /// is a `java.lang.String` local reference of that call (or `null`).
-    pub unsafe fn firebase_values(
-        env: *mut JNIEnv,
-        package_name: jstring,
+    /// Returns JNI conversion or allocation errors.
+    pub fn firebase_values(
+        env: &mut JNIEnv<'_>,
+        package_name: &JString<'_>,
         clients: &[FirebaseClient],
-    ) -> jobjectArray {
-        // SAFETY: the JVM passed `env` to the native method running now.
-        let mut unowned = unsafe { EnvUnowned::from_raw(env) };
-        crate::android::throwing(&mut unowned, |env| {
-            // SAFETY: a `String` local reference of this call, wrapped once.
-            let package_name = unsafe { JString::from_raw(env, package_name) };
-            let package_name = package_name.try_to_string(env)?;
-            let Some(client) = super::select_client(clients, &package_name) else {
-                return Ok(JObjectArray::<JString>::default());
-            };
-            let values = [
-                client.application_id,
-                client.api_key,
-                client.gcm_sender_id,
-                client.project_id,
-            ];
-            let empty = JString::from_str(env, "")?;
-            let array = JObjectArray::<JString>::new(env, values.len(), &empty)?;
-            for (index, value) in values.into_iter().enumerate() {
-                let value = JString::from_str(env, value)?;
-                array.set_element(env, index, &value)?;
-            }
-            Ok(array)
-        })
-        .into_raw()
+    ) -> jni::errors::Result<jobjectArray> {
+        let package_name: String = env.get_string(package_name)?.into();
+        let Some(client) = super::select_client(clients, &package_name) else {
+            return Ok(std::ptr::null_mut());
+        };
+        let values = [
+            client.application_id,
+            client.api_key,
+            client.gcm_sender_id,
+            client.project_id,
+        ];
+        let array = env.new_object_array(4, "java/lang/String", JObject::null())?;
+        for (index, value) in (0..).zip(values) {
+            let value = env.new_string(value)?;
+            env.set_object_array_element(&array, index, &value)?;
+        }
+        Ok(array.into_raw())
     }
 
-    /// Runs the app's background handler for one push.
+    /// Runs the handler with owned payload bytes and raw context handles valid until the callback returns.
     ///
-    /// The handler gets a copy of the payload and a [`Context`] holding the raw `JavaVM` and `Context`, which stay
-    /// owned by the JVM and valid until this call returns. A JNI failure or a panic in the
-    /// handler throws a `RuntimeException` back to the service.
+    /// # Errors
     ///
-    /// # Safety
-    ///
-    /// `env` is the `JNIEnv*` of the native method running on this thread, and `context` and
-    /// `payload` are an `android.content.Context` and a `byte[]` local reference of that call.
-    pub unsafe fn run_background_handler(
-        env: *mut JNIEnv,
-        context: jobject,
-        payload: jbyteArray,
-        started_app: jboolean,
+    /// Returns JNI conversion errors.
+    pub fn run_background_handler(
+        env: &mut JNIEnv<'_>,
+        context: &JObject<'_>,
+        payload: &JByteArray<'_>,
+        started_app: bool,
         handler: fn(Context, Message),
-    ) {
-        // SAFETY: the JVM passed `env` to the native method running now.
-        let mut unowned = unsafe { EnvUnowned::from_raw(env) };
-        crate::android::throwing(&mut unowned, |env| {
-            // SAFETY: a `byte[]` local reference of this call, wrapped once.
-            let payload = unsafe { JByteArray::from_raw(env, payload) };
-            let payload = env.convert_byte_array(&payload)?;
-            let vm = env.get_java_vm()?;
-            let context = Context {
-                vm: vm.get_raw().cast(),
-                context: context.cast(),
-            };
-            handler(
-                context,
-                Message {
-                    payload,
-                    started_app,
-                },
-            );
-            Ok(())
-        });
+    ) -> jni::errors::Result<()> {
+        let payload = env.convert_byte_array(payload)?;
+        let vm = env.get_java_vm()?;
+        let context = Context {
+            vm: vm.get_java_vm_pointer().cast(),
+            context: context.as_raw().cast(),
+        };
+        handler(
+            context,
+            Message {
+                payload,
+                started_app,
+            },
+        );
+        Ok(())
     }
 }
 

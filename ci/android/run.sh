@@ -107,6 +107,12 @@ run_variant() {
   adb exec-out run-as "$package" cat files/jacoco.ec > "$out/$variant.ec"
 }
 
+run_variant jni-registered "" default PanicBoundaryTest panicCase registered
+run_variant jni-dropped "" default PanicBoundaryTest panicCase dropped
+run_variant jni-unregistered "" default PanicBoundaryTest panicCase unregistered
+run_variant jni-session "" default PanicBoundaryTest panicCase session
+# The generated export's failure policy, in a fresh install.
+run_variant jni-boundary "config-real" default NativeBoundaryTest
 run_variant full "config-real background-handler" default PushupsTest
 run_variant fallback-name config-real fallback-name FallbackNameTest
 run_variant no-background-handler config-real default NoBackgroundHandlerTest

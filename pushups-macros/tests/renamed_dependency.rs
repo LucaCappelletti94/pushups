@@ -33,9 +33,12 @@ fn both_macros_expand_under_a_renamed_dependency() {
     std::fs::create_dir(consumer.path().join("src")).expect("the consumer's src");
     std::fs::write(
         consumer.path().join("src/lib.rs"),
-        "notifications::firebase_config!(\"google-services.json\");\n\n\
+        "#![forbid(unsafe_code)]\n\
+         pub struct FirebaseConfig;\n\
+         pub struct BackgroundHandler;\n\n\
+         notifications::firebase_config!(\"google-services.json\");\n\n\
          #[notifications::background_handler]\n\
-         fn on_push(_context: notifications::Context, _message: notifications::Message) {}\n",
+         fn handle(_context: notifications::Context, _message: notifications::Message) {}\n",
     )
     .expect("the consumer's source");
     let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))

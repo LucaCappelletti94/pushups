@@ -149,6 +149,12 @@ jobs:
           google-services-json: ci/android/probe/google-services.json
           google-services-json-secret: ${{ secrets.GOOGLE_SERVICES_JSON }}
           fcm-service-account: ${{ secrets.FCM_SERVICE_ACCOUNT }}
+      - name: Compile renamed macros with unsafe code forbidden on Android
+        env:
+          CARGO_BUILD_TARGET: x86_64-linux-android
+        run: |
+          cargo +stable fetch --target x86_64-linux-android
+          cargo +stable test -p pushups-macros --target x86_64-unknown-linux-gnu --test renamed_dependency
       - name: Lint the probe under every configuration it is built with
         working-directory: ci/android/probe
         run: |

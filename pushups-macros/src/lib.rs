@@ -67,18 +67,16 @@ pub fn firebase_config(input: TokenStream) -> TokenStream {
         const _: &[u8] = include_bytes!(#include_path);
 
         #[cfg(target_os = "android")]
-        #[unsafe(no_mangle)]
-        pub unsafe extern "system" fn Java_rs_pushups_FirebaseConfig_values(
-            env: *mut #pushups::__private::android::JNIEnv,
-            _class: #pushups::__private::android::jclass,
-            package_name: #pushups::__private::android::jstring,
-        ) -> #pushups::__private::android::jobjectArray {
-            const CLIENTS: &[#pushups::__private::android::FirebaseClient] =
-                &[#(#entries),*];
-
-            // SAFETY: `env` and `package_name` are live JNI arguments of the calling frame and
-            // `firebase_values` only converts them while the frame is live.
-            unsafe { #pushups::__private::android::firebase_values(env, package_name, CLIENTS) }
+        #pushups::__private::android::exports! {
+            fn Java_rs_pushups_FirebaseConfig_values<'local>(
+                env: #pushups::__private::android::jni::JNIEnv<'local>,
+                _class: #pushups::__private::android::jni::objects::JClass<'local>,
+                package_name: #pushups::__private::android::jni::objects::JString<'local>,
+            ) -> #pushups::__private::android::jni::sys::jobjectArray {
+                const CLIENTS: &[#pushups::__private::android::FirebaseClient] =
+                    &[#(#entries),*];
+                #pushups::__private::android::firebase_values(env, &package_name, CLIENTS)
+            }
         }
     }
     .into()
@@ -97,6 +95,8 @@ pub fn firebase_config(input: TokenStream) -> TokenStream {
 /// and runs off the main thread for every push the system delivers, within Apple's 30 seconds.
 /// On Linux and Windows it adds the function to a `linkme` slice the crate reads, since an
 /// executable there exports no symbol the crate could look up.
+///
+/// Android native calls preserve a pending Java exception and translate JNI errors or unwinding panics into Java exceptions.
 ///
 /// # Example
 ///
@@ -132,22 +132,19 @@ pub fn background_handler(args: TokenStream, item: TokenStream) -> TokenStream {
         const _: fn(#pushups::Context, #pushups::Message) = #name;
 
         #[cfg(target_os = "android")]
-        #[unsafe(no_mangle)]
-        pub unsafe extern "system" fn Java_rs_pushups_BackgroundHandler_handle(
-            env: *mut #pushups::__private::android::JNIEnv,
-            _class: #pushups::__private::android::jclass,
-            context: #pushups::__private::android::jobject,
-            payload: #pushups::__private::android::jbyteArray,
-            started_app: #pushups::__private::android::jboolean,
-        ) {
-            // SAFETY: `env`, `context` and `payload` are live JNI arguments of the calling frame
-            // and `run_background_handler` only converts them while the frame is live.
-            unsafe {
+        #pushups::__private::android::exports! {
+            fn Java_rs_pushups_BackgroundHandler_handle<'local>(
+                env: #pushups::__private::android::jni::JNIEnv<'local>,
+                _class: #pushups::__private::android::jni::objects::JClass<'local>,
+                context: #pushups::__private::android::jni::objects::JObject<'local>,
+                payload: #pushups::__private::android::jni::objects::JByteArray<'local>,
+                started_app: #pushups::__private::android::jni::sys::jboolean,
+            ) -> () {
                 #pushups::__private::android::run_background_handler(
                     env,
-                    context,
-                    payload,
-                    started_app,
+                    &context,
+                    &payload,
+                    started_app != #pushups::__private::android::jni::sys::JNI_FALSE,
                     #name,
                 )
             }
