@@ -99,13 +99,21 @@ object ProcessState : Application.ActivityLifecycleCallbacks {
 
     private fun handleTap(context: Context, intent: Intent?, firstActivity: Boolean) {
         val extras = intent?.extras ?: return
-        val id = extras.getString(MSG_ID) ?: return
+        val tapId = extras.getString(Presentation.TAP_ID)
+        val id = tapId ?: extras.getString(MSG_ID) ?: return
+        val data = extras.getByteArray(Presentation.TAP_DATA)
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         loadDelivered(prefs)
         if (synchronized(lock) { delivered.contains(id) }) return
         val startedApp = tapStartedApp(firstActivity)
-        val bytes = tapPayload(extras).toString().toByteArray(StandardCharsets.UTF_8)
-        invokeNative("onMessage") { Native.onMessage(bytes, startedApp) }
+        if (data != null) {
+            // A presentation tap: the data's exact bytes, never re-encoded.
+            invokeNative("onMessage") { Native.onMessage(data, startedApp) }
+        } else if (tapId == null) {
+            // An FCM tap carries the message data as its extras, re-encoded as it always has.
+            val bytes = tapPayload(extras).toString().toByteArray(StandardCharsets.UTF_8)
+            invokeNative("onMessage") { Native.onMessage(bytes, startedApp) }
+        }
         rememberDelivered(prefs, id)
     }
 

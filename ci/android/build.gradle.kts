@@ -7,13 +7,13 @@ plugins {
 }
 
 val ci = layout.projectDirectory
+val harnessBuildDir = providers.gradleProperty("pushups.buildDir").getOrElse("build")
 val jacocoVersion = providers.gradleProperty("pushups.jacoco").get()
-// The test manifest of run.sh's variant, under src/androidTest/manifests.
 val manifestVariant = providers.gradleProperty("pushups.manifest").getOrElse("default")
 
 project(":pushups") {
     // Keeps build output out of the crate's own `android/` directory.
-    layout.buildDirectory.set(ci.dir("build/pushups"))
+    layout.buildDirectory.set(ci.dir("$harnessBuildDir/pushups"))
 
     pluginManager.withPlugin("com.android.library") {
         extensions.configure<LibraryExtension> {
@@ -29,8 +29,7 @@ project(":pushups") {
             sourceSets.getByName("androidTest") {
                 manifest.srcFile(ci.file("src/androidTest/manifests/$manifestVariant/AndroidManifest.xml"))
                 java.srcDir(ci.dir("src/androidTest/kotlin"))
-                // Filled by run.sh with the probe library for the device's ABI.
-                jniLibs.srcDir(ci.dir("build/jniLibs"))
+                jniLibs.srcDir(ci.dir("$harnessBuildDir/jniLibs"))
             }
         }
         dependencies {

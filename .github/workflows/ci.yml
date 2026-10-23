@@ -170,12 +170,15 @@ jobs:
           arch: x86_64
           disable-animations: true
           # The runner image exports its NDK path as a shell variable, which `env` cannot read.
-          script: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" ci/android/run.sh x86_64 "$RUNNER_TEMP/fcm-service-account.json" android-${{ matrix.api }}
+          script: |
+            ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" ci/android/run.sh x86_64 "$RUNNER_TEMP/fcm-service-account.json" android-${{ matrix.api }}
+            ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" bash ci/android/rendering.sh x86_64 android-${{ matrix.api }}-rendering
       - uses: actions/upload-artifact@v7
         with:
           name: android-${{ matrix.api }}-coverage
           path: |
             target/android-${{ matrix.api }}-rust.lcov
+            target/android-${{ matrix.api }}-rendering-rust.lcov
             target/android-${{ matrix.api }}-kotlin.xml
           if-no-files-found: error
 
@@ -291,7 +294,7 @@ jobs:
       - uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: target/coverage.lcov,target/android-29-rust.lcov,target/android-35-rust.lcov,target/android-29-kotlin.xml,target/android-35-kotlin.xml,target/linux-rust.lcov,target/web-rust.lcov,target/web-shim.lcov
+          files: target/coverage.lcov,target/android-29-rust.lcov,target/android-35-rust.lcov,target/android-29-rendering-rust.lcov,target/android-35-rendering-rust.lcov,target/android-29-kotlin.xml,target/android-35-kotlin.xml,target/linux-rust.lcov,target/web-rust.lcov,target/web-shim.lcov
           fail_ci_if_error: true
 
   example-android:

@@ -10,10 +10,10 @@ use std::panic::panic_any;
 use std::thread;
 
 use jni::JNIEnv;
-use jni::objects::{JClass, JString};
+use jni::objects::{JByteArray, JClass, JString};
 use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jstring};
 use parking_lot::Mutex;
-use pushups::{Config, Event, Message, Token, UnifiedPushConfig, VapidPublicKey};
+use pushups::{Config, Event, Message, Notification, Token, UnifiedPushConfig, VapidPublicKey};
 
 #[cfg(feature = "config-real")]
 pushups::firebase_config!("google-services.json");
@@ -24,7 +24,7 @@ pushups::firebase_config!("mismatched-services.json");
 
 /// Every event the handler received, one line each, in order.
 static EVENTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
-/// Every push the background handler received, one line each, in order.
+/// Every background push and fixture presentation failure, one line each.
 static HANDLED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// The answer to the last `startPermission`, until `permission` takes it.
 static PERMISSION: Mutex<Option<String>> = Mutex::new(None);
@@ -38,6 +38,34 @@ unsafe extern "C" {
 #[pushups::background_handler]
 fn on_push(_context: pushups::Context, message: Message) {
     HANDLED.lock().push(describe_message(&message));
+    if let Some(notification) = fixture_notification(&message.payload) {
+        // Exercise `JavaVM` attachment without capturing the callback's `Context`.
+        let failure = match std::thread::spawn(move || notification.show()).join() {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(format!("fixture presentation failed with {error}")),
+            Err(_) => Some("fixture presentation thread panicked".to_owned()),
+        };
+        if let Some(failure) = failure {
+            HANDLED.lock().push(failure);
+        }
+    }
+}
+
+/// The fixture a headless test push carries, as `{"headless":"<id>"}` with a unique `id`.
+#[cfg(feature = "background-handler")]
+fn fixture_notification(payload: &[u8]) -> Option<Notification> {
+    const MARKER: &str = "{\"headless\":\"";
+    let text = std::str::from_utf8(payload).ok()?;
+    let id = text.strip_prefix(MARKER)?.strip_suffix("\"}")?;
+    if id.is_empty() || id.contains('"') {
+        return None;
+    }
+    Some(
+        Notification::new(format!("pushups {id}"))
+            .body("shown by the background handler")
+            .tag(id)
+            .data(text.to_owned()),
+    )
 }
 
 fn describe(event: &Event) -> String {
@@ -72,6 +100,18 @@ fn java_string<'local>(
     match text {
         Some(text) => env.new_string(text).map(JString::into_raw),
         None => Ok(JString::default().into_raw()),
+    }
+}
+
+/// A `String` from a Java string, `None` for `null`.
+fn optional_string<'local>(
+    env: &mut JNIEnv<'local>,
+    value: &JString<'local>,
+) -> jni::errors::Result<Option<String>> {
+    if value.as_raw().is_null() {
+        Ok(None)
+    } else {
+        Ok(Some(env.get_string(value)?.into()))
     }
 }
 
@@ -214,6 +254,41 @@ pushups::__private::android::exports! {
         _class: JClass<'local>,
     ) -> jstring {
         java_string(env, Some(HANDLED.lock().join("\n")))
+    }
+
+    /// `Probe.presentBytes(...)`: `null`, or the error of `Notification::show`. `data` arrives as
+    /// UTF-8 bytes, which JNI 0.21's string decoding would corrupt as a Java string.
+    fn Java_rs_pushups_ci_Probe_presentBytes<'local>(
+        env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        title: JString<'local>,
+        body: JString<'local>,
+        navigate: JString<'local>,
+        tag: JString<'local>,
+        icon: JString<'local>,
+        data: JByteArray<'local>,
+    ) -> jstring {
+        let title: String = env.get_string(&title)?.into();
+        let mut notification = Notification::new(title);
+        if let Some(body) = optional_string(env, &body)? {
+            notification = notification.body(body);
+        }
+        if let Some(navigate) = optional_string(env, &navigate)? {
+            notification = notification.navigate(navigate);
+        }
+        if let Some(tag) = optional_string(env, &tag)? {
+            notification = notification.tag(tag);
+        }
+        if let Some(icon) = optional_string(env, &icon)? {
+            notification = notification.icon(icon);
+        }
+        if !data.as_raw().is_null() {
+            match String::from_utf8(env.convert_byte_array(&data)?) {
+                Ok(data) => notification = notification.data(data),
+                Err(error) => return java_string(env, Some(format!("invalid UTF-8 data: {error}"))),
+            }
+        }
+        java_string(env, notification.show().err().map(|error| error.to_string()))
     }
 
     /// `Probe.writeCoverage(path)`: writes the coverage profile to `path`, `true` on success.

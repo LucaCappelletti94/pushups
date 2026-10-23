@@ -121,6 +121,20 @@ object Pushups {
         }
     }
 
+    /** Presents through the application context and returns `null` on success or an error message. */
+    @JvmStatic
+    fun present(
+        title: String,
+        body: String?,
+        navigate: String?,
+        tag: String?,
+        icon: String?,
+        data: String?,
+    ): String? {
+        val appContext = context ?: return "the module has no application context"
+        return Presentation.present(appContext, title, body, navigate, tag, icon, data)
+    }
+
     private fun enabled(context: Context): Boolean =
         NotificationManagerCompat.from(context).areNotificationsEnabled()
 
