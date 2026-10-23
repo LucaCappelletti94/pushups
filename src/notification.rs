@@ -62,26 +62,30 @@ impl Notification {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
-#[cfg_attr(docsrs, doc(cfg(any(target_os = "linux", target_os = "windows"))))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(any(target_os = "linux", target_os = "windows", target_os = "android")))
+)]
 impl Notification {
-    /// Shows the notification in the desktop's notification centre, where the system shows
-    /// nothing for a push by itself.
+    /// Presents a desktop notification or an Android data-message notification without an `Activity`.
     ///
     /// A tap on a notification with [`data`](Notification::data) reaches the app as an
     /// [`Event::Message`](crate::Event::Message) carrying it, and starts the app when it has exited.
     ///
     /// # Errors
     ///
-    /// [`Error::NotConfigured`](crate::Error::NotConfigured) before [`install`](crate::install),
-    /// and on Windows without [`WnsConfig::app_notifications`](crate::WnsConfig::app_notifications).
-    /// [`Error::Platform`](crate::Error::Platform) when the notification service refuses the
-    /// notification or does not answer within five seconds.
+    /// [`Error::NotConfigured`](crate::Error::NotConfigured) before desktop [`install`](crate::install), and on Windows without [`WnsConfig::app_notifications`](crate::WnsConfig::app_notifications).
+    /// [`Error::AndroidModuleMissing`](crate::Error::AndroidModuleMissing) or [`Error::AndroidModuleMismatch`](crate::Error::AndroidModuleMismatch) when the Android runtime is unavailable.
+    /// [`Error::Platform`](crate::Error::Platform) when presentation is refused or the desktop service does not answer within five seconds.
+    /// Android refuses denied notification permission, a disabled channel, a missing launcher or an icon URL.
     pub fn show(&self) -> Result<(), crate::Error> {
         #[cfg(target_os = "linux")]
         let shown = crate::linux::show(self);
         #[cfg(target_os = "windows")]
         let shown = crate::windows::show(self);
+        #[cfg(target_os = "android")]
+        let shown = crate::android::show(self);
         shown
     }
 }

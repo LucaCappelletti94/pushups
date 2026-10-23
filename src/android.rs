@@ -21,7 +21,7 @@ use crate::backend::Backend;
 use crate::dispatch::DISPATCHER;
 use crate::inbox::{self, Inbox};
 use crate::queue::Entry;
-use crate::{Config, Error, Event, Message, Permission, Token};
+use crate::{Config, Error, Event, Message, Notification, Permission, Token};
 
 /// What `Native.init` hands over, once per process.
 struct Runtime {
@@ -132,6 +132,52 @@ impl Backend for Android {
             runtime.inbox.lock().handler_set();
             DISPATCHER.flush();
         }
+    }
+}
+
+/// Shows `notification` through the module's presentation, without opening an Activity.
+pub(crate) fn show(notification: &Notification) -> Result<(), Error> {
+    let runtime = runtime()?;
+    let refused = with_attached(&runtime.vm, |env| -> jni::errors::Result<Option<String>> {
+        let title = JObject::from(env.new_string(&notification.title)?);
+        let body = string(env, notification.body.as_deref())?;
+        let navigate = string(env, notification.navigate.as_deref())?;
+        let tag = string(env, notification.tag.as_deref())?;
+        let icon = string(env, notification.icon.as_deref())?;
+        let data = string(env, notification.data.as_deref())?;
+        let message = env
+            .call_static_method(
+                &runtime.pushups,
+                "present",
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+                &[
+                    JValue::Object(&title),
+                    JValue::Object(&body),
+                    JValue::Object(&navigate),
+                    JValue::Object(&tag),
+                    JValue::Object(&icon),
+                    JValue::Object(&data),
+                ],
+            )?
+            .l()?;
+        if message.as_raw().is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(env.get_string(&JString::from(message))?.into()))
+        }
+    })
+    .map_err(Error::platform)?;
+    refused.map_or(Ok(()), |message| Err(Error::platform(message)))
+}
+
+/// A Java string for `value`, or `null`.
+fn string<'local>(
+    env: &mut JNIEnv<'local>,
+    value: Option<&str>,
+) -> jni::errors::Result<JObject<'local>> {
+    match value {
+        Some(value) => Ok(JObject::from(env.new_string(value)?)),
+        None => Ok(JObject::null()),
     }
 }
 

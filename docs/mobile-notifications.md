@@ -53,6 +53,20 @@ Shared files require the same App Group entitlement on both targets. Shared keys
 
 Tauri and direct `tao` or `winit` applications embed the same native extension target in their Apple project and link the Rust static library. Their build tooling owns target creation, embedding, provisioning and signing. The application's APNs entitlement and registration remain separate from service-extension packaging.
 
+## Android presentation
+
+An Android data-message handler can call `Notification::show` without a foreground `Activity`. Presentation uses retained process state and attaches the calling Rust thread to the JVM. Android 8 and later use the `pushups` channel with the application label and default importance.
+
+The application icon supplies the small icon, with a platform icon as the fallback when the application has none. Denied notification permission, disabled notifications or channel, a missing launcher, and an icon URL return an error. Presentation never fetches an icon URL.
+
+An exact `tag` replaces the corresponding notification, while an absent `tag` gives each notification an independent identity. An immutable `PendingIntent` explicitly opens the application's launcher with the navigation URL and exact UTF-8 `data`, including an empty string. Without `data`, the tap opens the application without generating a tap message.
+
+Tap data reaches `Event::Message` through the foreground delivery path and never invokes the background handler. Lifecycle re-creation does not deliver it twice. `Message.started_app` is `true` for a tap that creates the process's first `Activity` when no earlier push has arrived, and is `false` after a headless push or in a live foreground session.
+
+The Android `Context` passed to `#[pushups::background_handler]` contains a JNI local reference valid only for that synchronous callback. Consumer futures must own their payload and executor state and must not retain that `Context` after the callback returns. `Notification::show` uses the retained runtime independently of the callback reference.
+
 ## Acceptance boundary
 
 `ci/apple/run.sh` exercises native transformation and completion on macOS, then links and verifies Rust entry symbols in ad-hoc-signed iOS device and simulator extension bundles. The harness does not execute an iOS extension in the simulator or establish locked-iPhone alert delivery, background scheduling, real keychain accessibility or visible locked-device rendering, which require device acceptance.
+
+`ci/android/rendering.sh` exercises headless presentation, refusal cases, tagged replacement and launcher tap delivery on a booted Android device or emulator.
