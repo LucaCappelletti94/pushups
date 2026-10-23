@@ -11,7 +11,7 @@ const map = libCoverage.createCoverageMap({});
 for (const name of readdirSync(counters).filter((name) => name.endsWith(".json"))) {
   map.merge(JSON.parse(readFileSync(join(counters, name), "utf8")));
 }
-// Paths relative to the repository root, as Sonar and Codecov resolve them.
+// Paths relative to the repository root, as Codecov resolves them.
 const projectRoot = resolve(import.meta.dirname, "../..");
 const context = libReport.createContext({ dir: dirname(lcov), coverageMap: map });
 reports.create("lcovonly", { file: basename(lcov), projectRoot }).execute(context);

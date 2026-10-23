@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Turns the counters the harness saved under <out dir> into LCOV files for Codecov and Sonar.
+# Turns the counters the harness saved under <out dir> into LCOV files for Codecov.
 # ci/web/report.sh <out dir> <Rust LCOV file> <shim LCOV file>
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
