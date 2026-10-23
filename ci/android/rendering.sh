@@ -9,6 +9,7 @@ root=$(cd "$ci/../.." && pwd)
 build=$ci/build-rendering
 out=$build/runs
 package=rs.pushups.example
+files=/data/data/$package/files
 bound=900
 
 case $abi in
@@ -43,7 +44,7 @@ run() {
   adb shell wm dismiss-keyguard
   adb logcat -c
   timeout $bound adb shell am instrument -w -e class "rs.pushups.ci.$class" \
-    "$package/androidx.test.runner.AndroidJUnitRunner" \
+    -e coverage true -e coverageFile "$files/jacoco.ec" "$package/androidx.test.runner.AndroidJUnitRunner" \
     | tee "$out/$name.txt" || true
   grep -q '^OK (' "$out/$name.txt" || {
     echo "rendering: $class failed" >&2
@@ -52,6 +53,7 @@ run() {
     exit 1
   }
   adb exec-out run-as "$package" cat files/pushups.profraw > "$out/$name.profraw"
+  adb exec-out run-as "$package" cat files/jacoco.ec > "$out/$name.ec"
 }
 
 # Fresh processes isolate first-launch attribution and disabled-channel settings.
@@ -65,4 +67,12 @@ tools=$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin
 "$tools/llvm-cov" export -format=lcov -instr-profile "$out/pushups.profdata" \
   "$out/probe.so" "$root/src" \
   | sed "s|^SF:$root/|SF:|" > "$root/target/$report-rust.lcov"
+
+jacoco=$(sed -n 's/^pushups\.jacoco=//p' "$ci/gradle.properties")
+cli=$build/jacococli-$jacoco.jar
+curl -fsSL -o "$cli" "https://repo1.maven.org/maven2/org/jacoco/org.jacoco.cli/$jacoco/org.jacoco.cli-$jacoco-nodeps.jar"
+java -jar "$cli" report "$out"/*.ec \
+  --classfiles "$build/pushups/tmp/kotlin-classes/debug" \
+  --sourcefiles "$root/android/src/main/kotlin" \
+  --xml "$root/target/$report-kotlin.xml" >/dev/null
 echo "rendering: every step passed"

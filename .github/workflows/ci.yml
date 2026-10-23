@@ -180,6 +180,7 @@ jobs:
             target/android-${{ matrix.api }}-rust.lcov
             target/android-${{ matrix.api }}-rendering-rust.lcov
             target/android-${{ matrix.api }}-kotlin.xml
+            target/android-${{ matrix.api }}-rendering-kotlin.xml
           if-no-files-found: error
 
   web-coverage:
@@ -294,7 +295,7 @@ jobs:
       - uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: target/coverage.lcov,target/android-29-rust.lcov,target/android-35-rust.lcov,target/android-29-rendering-rust.lcov,target/android-35-rendering-rust.lcov,target/android-29-kotlin.xml,target/android-35-kotlin.xml,target/linux-rust.lcov,target/web-rust.lcov,target/web-shim.lcov
+          files: target/coverage.lcov,target/android-29-rust.lcov,target/android-35-rust.lcov,target/android-29-rendering-rust.lcov,target/android-35-rendering-rust.lcov,target/android-29-kotlin.xml,target/android-35-kotlin.xml,target/android-29-rendering-kotlin.xml,target/android-35-rendering-kotlin.xml,target/linux-rust.lcov,target/web-rust.lcov,target/web-shim.lcov
           fail_ci_if_error: true
 
   example-android:
