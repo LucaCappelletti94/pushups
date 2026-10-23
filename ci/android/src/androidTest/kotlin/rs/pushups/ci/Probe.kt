@@ -14,6 +14,10 @@ object Probe {
     @JvmStatic
     external fun setHandler()
 
+    /** Installs a handler that panics on the selected event. */
+    @JvmStatic
+    external fun setPanickingHandler(kind: String, requestId: String)
+
     /** `null`, or the error of `pushups::register`. */
     @JvmStatic
     external fun register(): String?
@@ -41,4 +45,44 @@ object Probe {
     /** Writes the Rust coverage profile to [path]. */
     @JvmStatic
     external fun writeCoverage(path: String): Boolean
+
+    /** `true`, the generated export's success boolean. */
+    @JvmStatic
+    external fun boundaryTrue(): Boolean
+
+    /** `null`, the generated export's null string return. */
+    @JvmStatic
+    external fun boundaryNull(): String?
+
+    /** A fresh Java string echoing [id], the generated export's object return. */
+    @JvmStatic
+    external fun boundaryObject(id: String): String
+
+    /** Fails a JNI call inside the export; the guard must throw a `RuntimeException`. */
+    @JvmStatic
+    external fun boundaryError(): String?
+
+    /** Panics inside the export; the guard must catch it and throw a `RuntimeException`. */
+    @JvmStatic
+    external fun boundaryPanic(id: String)
+
+    /** Records `boundary nested <id>` when its body runs, which the guard must not do while [boundaryPending] leaves an exception pending. */
+    @JvmStatic
+    external fun boundaryNested(id: String): String?
+
+    /** Leaves a distinctive `IllegalStateException` pending, then enters [boundaryNested]'s entrypoint through it. */
+    @JvmStatic
+    external fun boundaryPending(id: String)
+
+    /** Leaves a distinctive `IllegalStateException` pending and then panics. */
+    @JvmStatic
+    external fun boundaryPanicPending(id: String)
+
+    /** Panics with a payload whose destructor panics. */
+    @JvmStatic
+    external fun boundaryPanickingDrop(id: String)
+
+    /** Returns `recovered <id>`, proving the process survives the guard's failures. */
+    @JvmStatic
+    external fun boundaryRecovery(id: String): String
 }

@@ -35,7 +35,7 @@ thiserror = "2"
 
 [target.'cfg(target_os = "android")'.dependencies]
 futures-channel = { version = "0.3", default-features = false, features = ["std"] }
-jni = "0.22"
+jni = "0.21"
 
 [target.'cfg(any(target_os = "android", all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
 # The `dioxus` the app depends on resolves this to its own version.

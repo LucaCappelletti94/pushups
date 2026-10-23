@@ -11,12 +11,12 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use futures_channel::oneshot;
-use jni::errors::ThrowRuntimeExAndDefault;
-use jni::objects::{Global, JByteArray, JClass, JObject, JString, JValue};
-use jni::sys::{jboolean, jlong};
-use jni::{Env, EnvUnowned, JavaVM, jni_sig, jni_str};
+use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString, JValue};
+use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jlong};
+use jni::{JNIEnv, JavaVM};
 use parking_lot::Mutex;
 
+use crate::android_boundary::with_attached;
 use crate::backend::Backend;
 use crate::dispatch::DISPATCHER;
 use crate::inbox::{self, Inbox};
@@ -26,7 +26,7 @@ use crate::{Config, Error, Event, Message, Permission, Token};
 /// What `Native.init` hands over, once per process.
 struct Runtime {
     vm: JavaVM,
-    pushups: Global<JClass<'static>>,
+    pushups: GlobalRef,
     /// Behind one lock, so a drain and a concurrent push keep their order.
     inbox: Mutex<Inbox>,
 }
@@ -73,22 +73,20 @@ impl Backend for Android {
 
     fn register() -> Result<(), Error> {
         let runtime = runtime()?;
-        runtime
-            .vm
-            .attach_current_thread(|env| -> jni::errors::Result<()> {
-                let vapid = match VAPID.get() {
-                    Some(vapid) => JObject::from(env.new_string(vapid)?),
-                    None => JObject::null(),
-                };
-                env.call_static_method(
-                    &runtime.pushups,
-                    jni_str!("register"),
-                    jni_sig!("(Ljava/lang/String;)V"),
-                    &[JValue::Object(&vapid)],
-                )?
-                .v()
-            })
-            .map_err(Error::platform)
+        with_attached(&runtime.vm, |env| -> jni::errors::Result<()> {
+            let vapid = match VAPID.get() {
+                Some(vapid) => JObject::from(env.new_string(vapid)?),
+                None => JObject::null(),
+            };
+            env.call_static_method(
+                &runtime.pushups,
+                "register",
+                "(Ljava/lang/String;)V",
+                &[JValue::Object(&vapid)],
+            )?
+            .v()
+        })
+        .map_err(Error::platform)
     }
 
     async fn request_permission() -> Result<Permission, Error> {
@@ -96,17 +94,15 @@ impl Backend for Android {
         let id = NEXT_PERMISSION.fetch_add(1, Ordering::Relaxed);
         let (sender, reply) = oneshot::channel();
         PERMISSIONS.lock().insert(id, sender);
-        let asked = runtime
-            .vm
-            .attach_current_thread(|env| -> jni::errors::Result<()> {
-                env.call_static_method(
-                    &runtime.pushups,
-                    jni_str!("requestPermission"),
-                    jni_sig!("(J)V"),
-                    &[JValue::Long(id)],
-                )?
-                .v()
-            });
+        let asked = with_attached(&runtime.vm, |env| -> jni::errors::Result<()> {
+            env.call_static_method(
+                &runtime.pushups,
+                "requestPermission",
+                "(J)V",
+                &[JValue::Long(id)],
+            )?
+            .v()
+        });
         if let Err(error) = asked {
             PERMISSIONS.lock().remove(&id);
             return Err(Error::platform(error));
@@ -120,17 +116,10 @@ impl Backend for Android {
 
     fn permission_status() -> impl Future<Output = Result<Permission, Error>> {
         let result = runtime().and_then(|runtime| {
-            let status = runtime
-                .vm
-                .attach_current_thread(|env| -> jni::errors::Result<i32> {
-                    env.call_static_method(
-                        &runtime.pushups,
-                        jni_str!("permissionStatus"),
-                        jni_sig!("()I"),
-                        &[],
-                    )?
+            let status = with_attached(&runtime.vm, |env| -> jni::errors::Result<i32> {
+                env.call_static_method(&runtime.pushups, "permissionStatus", "()I", &[])?
                     .i()
-                });
+            });
             status.map_err(Error::platform).and_then(permission_from)
         });
         std::future::ready(result)
@@ -155,45 +144,36 @@ fn receive(entry: Entry) {
     DISPATCHER.flush();
 }
 
-/// Runs `body` in the calling native method's environment, where a JNI error throws a
-/// `RuntimeException` back to the Kotlin caller and returns `T`'s default.
-pub(crate) fn throwing<'local, T: Default>(
-    unowned: &mut EnvUnowned<'local>,
-    body: impl FnOnce(&mut Env<'local>) -> jni::errors::Result<T>,
-) -> T {
-    unowned.with_env(body).resolve::<ThrowRuntimeExAndDefault>()
-}
-
-/// `Native.handshake(moduleVersion)`, from `PushupsProvider.onCreate` before any other export.
-/// Whether the Kotlin module is this crate's version. Its signature never changes, so a module
-/// and a crate of any two versions can make this call.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_rs_pushups_Native_handshake<'caller>(
-    mut unowned: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-    module_version: JString<'caller>,
-) -> jboolean {
-    let module = throwing(&mut unowned, |env| module_version.try_to_string(env));
-    if module == env!("CARGO_PKG_VERSION") {
-        return true;
+crate::__pushups_android_exports! {
+    /// `Native.handshake(moduleVersion)`, from `PushupsProvider.onCreate` before any other export.
+    /// Whether the Kotlin module is this crate's version. Its signature never changes, so a module
+    /// and a crate of any two versions can make this call.
+    fn Java_rs_pushups_Native_handshake<'local>(
+        env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        module_version: JString<'local>,
+    ) -> jboolean {
+        let module: String = env.get_string(&module_version)?.into();
+        if module == env!("CARGO_PKG_VERSION") {
+            Ok(JNI_TRUE)
+        } else {
+            let _ = MISMATCHED_MODULE.set(module);
+            Ok(JNI_FALSE)
+        }
     }
-    let _ = MISMATCHED_MODULE.set(module);
-    false
-}
 
-/// `Native.init(context, filesDir)`, from `PushupsProvider.onCreate`.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_rs_pushups_Native_init<'caller>(
-    mut unowned: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-    _context: JObject<'caller>,
-    files_dir: JString<'caller>,
-) {
-    throwing(&mut unowned, |env| {
-        let files_dir = PathBuf::from(files_dir.try_to_string(env)?);
+    /// `Native.init(context, filesDir)`, from `PushupsProvider.onCreate`.
+    fn Java_rs_pushups_Native_init<'local>(
+        env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        _context: JObject<'local>,
+        files_dir: JString<'local>,
+    ) -> () {
+        let files_dir: String = env.get_string(&files_dir)?.into();
+        let files_dir = PathBuf::from(files_dir);
         // Looked up inside a call from Kotlin, so the app's class loader finds it.
-        let pushups = env.find_class(jni_str!("rs/pushups/Pushups"))?;
-        let pushups = env.new_global_ref(pushups)?;
+        let pushups = env.find_class("rs/pushups/Pushups")?;
+        let pushups = env.new_global_ref(&pushups)?;
         let vm = env.get_java_vm()?;
         // The provider runs once per process, and a second call has nothing new to give.
         let _ = RUNTIME.set(Runtime {
@@ -202,72 +182,64 @@ pub extern "system" fn Java_rs_pushups_Native_init<'caller>(
             inbox: Mutex::new(Inbox::headless(files_dir.join(QUEUE_FILE))),
         });
         Ok(())
-    });
-}
-
-/// `Native.onSession(active)`, when a UI session begins or ends.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_rs_pushups_Native_onSession<'caller>(
-    _unowned: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-    active: jboolean,
-) {
-    if let Some(runtime) = RUNTIME.get() {
-        inbox::session_changed(&runtime.inbox, active);
     }
-}
 
-/// `Native.onToken(token)`, from `onNewToken`.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_rs_pushups_Native_onToken<'caller>(
-    mut unowned: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-    token: JString<'caller>,
-) {
-    throwing(&mut unowned, |env| {
-        receive(Entry::FcmToken(token.try_to_string(env)?));
+    /// `Native.onSession(active)`, when a UI session begins or ends.
+    fn Java_rs_pushups_Native_onSession<'local>(
+        _env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        active: jboolean,
+    ) -> () {
+        if let Some(runtime) = RUNTIME.get() {
+            inbox::session_changed(&runtime.inbox, active != JNI_FALSE);
+        }
         Ok(())
-    });
-}
+    }
 
-/// `Native.onMessage(payload, startedApp)`, from `onMessageReceived` and notification taps.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_rs_pushups_Native_onMessage<'caller>(
-    mut unowned: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-    payload: JByteArray<'caller>,
-    started_app: jboolean,
-) {
-    throwing(&mut unowned, |env| {
+    /// `Native.onToken(token)`, from `onNewToken`.
+    fn Java_rs_pushups_Native_onToken<'local>(
+        env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        token: JString<'local>,
+    ) -> () {
+        let token: String = env.get_string(&token)?.into();
+        receive(Entry::FcmToken(token));
+        Ok(())
+    }
+
+    /// `Native.onMessage(payload, startedApp)`, from `onMessageReceived` and notification taps.
+    fn Java_rs_pushups_Native_onMessage<'local>(
+        env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        payload: JByteArray<'local>,
+        started_app: jboolean,
+    ) -> () {
         let payload = env.convert_byte_array(&payload)?;
         receive(Entry::Message(Message {
             payload,
-            started_app,
+            started_app: started_app != JNI_FALSE,
         }));
         Ok(())
-    });
-}
+    }
 
-/// `Native.onMessagesDropped()`, from `onDeletedMessages`.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_rs_pushups_Native_onMessagesDropped<'caller>(
-    _unowned: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-) {
-    receive(Entry::MessagesDropped);
-}
+    /// `Native.onMessagesDropped()`, from `onDeletedMessages`.
+    fn Java_rs_pushups_Native_onMessagesDropped<'local>(
+        _env: JNIEnv<'local>,
+        _class: JClass<'local>,
+    ) -> () {
+        receive(Entry::MessagesDropped);
+        Ok(())
+    }
 
-/// `Native.onWebPushToken(endpoint, p256dh, auth)`, from a UnifiedPush endpoint.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_rs_pushups_Native_onWebPushToken<'caller>(
-    mut unowned: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-    endpoint: JString<'caller>,
-    p256dh: JByteArray<'caller>,
-    auth: JByteArray<'caller>,
-) {
-    throwing(&mut unowned, |env| {
-        let endpoint = endpoint.try_to_string(env)?;
+    /// `Native.onWebPushToken(endpoint, p256dh, auth)`, from a UnifiedPush endpoint.
+    fn Java_rs_pushups_Native_onWebPushToken<'local>(
+        env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        endpoint: JString<'local>,
+        p256dh: JByteArray<'local>,
+        auth: JByteArray<'local>,
+    ) -> () {
+        let endpoint: String = env.get_string(&endpoint)?.into();
         let p256dh = env.convert_byte_array(&p256dh)?;
         let auth = env.convert_byte_array(&auth)?;
         let entry = match (<[u8; 65]>::try_from(p256dh), <[u8; 16]>::try_from(auth)) {
@@ -282,53 +254,51 @@ pub extern "system" fn Java_rs_pushups_Native_onWebPushToken<'caller>(
         };
         receive(entry);
         Ok(())
-    });
-}
+    }
 
-/// `Native.onUnregistered()`, when the UnifiedPush distributor dropped the registration.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_rs_pushups_Native_onUnregistered<'caller>(
-    _unowned: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-) {
-    receive(Entry::Unregistered);
-}
+    /// `Native.onUnregistered()`, when the UnifiedPush distributor dropped the registration.
+    fn Java_rs_pushups_Native_onUnregistered<'local>(
+        _env: JNIEnv<'local>,
+        _class: JClass<'local>,
+    ) -> () {
+        receive(Entry::Unregistered);
+        Ok(())
+    }
 
-/// `Native.onRegistered(token, error)`, the answer to [`register`]. Exactly one is non-null.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_rs_pushups_Native_onRegistered<'caller>(
-    mut unowned: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-    token: JString<'caller>,
-    error: JString<'caller>,
-) {
-    throwing(&mut unowned, |env| {
-        let event = if token.is_null() {
-            let reason = if error.is_null() {
+    /// `Native.onRegistered(token, error)`, the answer to [`register`]. Exactly one is non-null.
+    fn Java_rs_pushups_Native_onRegistered<'local>(
+        env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        token: JString<'local>,
+        error: JString<'local>,
+    ) -> () {
+        let event = if token.as_raw().is_null() {
+            let reason = if error.as_raw().is_null() {
                 "FCM gave neither a token nor an error".to_owned()
             } else {
-                error.try_to_string(env)?
+                env.get_string(&error)?.into()
             };
             Event::registration_failed(reason)
         } else {
-            Event::Token(Token::Fcm(token.try_to_string(env)?))
+            let token: String = env.get_string(&token)?.into();
+            Event::Token(Token::Fcm(token))
         };
         DISPATCHER.emit(event);
         Ok(())
-    });
-}
+    }
 
-/// `Native.onPermissionResult(requestId, granted)`, the answer to [`request_permission`].
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_rs_pushups_Native_onPermissionResult<'caller>(
-    _unowned: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-    request_id: jlong,
-    granted: jboolean,
-) {
-    if let Some(sender) = PERMISSIONS.lock().remove(&request_id) {
-        // A dropped receiver means the app stopped waiting for the answer.
-        let _ = sender.send(granted);
+    /// `Native.onPermissionResult(requestId, granted)`, the answer to [`request_permission`].
+    fn Java_rs_pushups_Native_onPermissionResult<'local>(
+        _env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        request_id: jlong,
+        granted: jboolean,
+    ) -> () {
+        if let Some(sender) = PERMISSIONS.lock().remove(&request_id) {
+            // A dropped receiver means the app stopped waiting for the answer.
+            let _ = sender.send(granted != JNI_FALSE);
+        }
+        Ok(())
     }
 }
 

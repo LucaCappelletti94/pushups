@@ -10,6 +10,8 @@
 pub mod __private;
 #[cfg(target_os = "android")]
 mod android;
+#[cfg(target_os = "android")]
+mod android_boundary;
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod apple;
 mod backend;
