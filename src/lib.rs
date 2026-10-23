@@ -55,6 +55,7 @@ mod permission;
     test
 ))]
 mod queue;
+mod rendering;
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -120,7 +121,8 @@ pub use error::{Error, VapidKeyError};
 pub use event::{Event, Message};
 pub use notification::Notification;
 pub use permission::Permission;
-pub use pushups_macros::{background_handler, firebase_config};
+pub use pushups_macros::{background_handler, firebase_config, notification_service};
+pub use rendering::{RenderingContext, RenderingOutcome};
 pub use token::{Token, WebPushKeys, WebPushSubscription};
 pub use worker_file::write_service_worker;
 

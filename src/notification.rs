@@ -1,5 +1,4 @@
-/// A notification, as a web service worker's Rust handler builds it for a push, and as a Linux or
-/// Windows app shows it with [`show`](Notification::show).
+/// Notification content for a service worker, an iOS service extension or native presentation.
 ///
 /// The fields follow the `notification` member of a Declarative Web Push message.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -13,7 +12,7 @@ pub struct Notification {
 }
 
 impl Notification {
-    /// A notification with this title, which must not be empty.
+    /// A notification with this title.
     #[must_use]
     pub fn new(title: impl Into<String>) -> Self {
         Self {
@@ -29,32 +28,33 @@ impl Notification {
         self
     }
 
-    /// The URL opened when the user clicks the notification.
+    /// The navigation URL, stored in the rendered user info on iOS.
     #[must_use]
     pub fn navigate(mut self, url: impl Into<String>) -> Self {
         self.navigate = Some(url.into());
         self
     }
 
-    /// The tag under which a later notification replaces this one.
+    /// The replacement tag for presentation, or the iOS extension's thread identifier.
     #[must_use]
     pub fn tag(mut self, tag: impl Into<String>) -> Self {
         self.tag = Some(tag.into());
         self
     }
 
-    /// The URL of the icon.
+    /// The icon URL, unsupported by mobile rendering and presentation.
     #[must_use]
     pub fn icon(mut self, url: impl Into<String>) -> Self {
         self.icon = Some(url.into());
         self
     }
 
-    /// What a tap on the notification hands back, as the payload of an [`Event::Message`](crate::Event::Message)
-    /// on Linux and Windows. A tap on the web opens or focuses a page and delivers no event.
+    /// The UTF-8 payload a native notification tap delivers as [`Event::Message`](crate::Event::Message).
+    ///
+    /// Web notification taps open or focus a page without delivering an event.
     ///
     /// Windows refuses a toast past about 5 KB, which with a short title leaves room for about
-    /// 3.5 KB of `data`, and [`show`](Notification::show) then fails.
+    /// 3.5 KB of `data`, and `Notification::show` then fails.
     #[must_use]
     pub fn data(mut self, data: impl Into<String>) -> Self {
         self.data = Some(data.into());

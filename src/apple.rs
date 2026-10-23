@@ -3,6 +3,7 @@
 //! `install` runs on the main thread before the toolkit's loop. It takes over the notification center's delegate at once, since Apple requires it before launch finishes, and the app delegate when `didFinishLaunching` posts, since a toolkit may create it only inside `UIApplicationMain`.
 
 mod runtime;
+pub(crate) mod service;
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
