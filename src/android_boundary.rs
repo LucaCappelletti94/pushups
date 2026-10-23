@@ -66,8 +66,7 @@ pub fn boundary<'local, T: Return>(
             let translated = catch_unwind(AssertUnwindSafe(|| {
                 raise(env, "Rust native callback panicked");
             }));
-            if let Err(payload) = translated {
-                std::mem::forget(payload);
+            if let Err(_payload) = translated {
                 env.fatal_error("JNI panic translation failed");
             }
             T::failure()
