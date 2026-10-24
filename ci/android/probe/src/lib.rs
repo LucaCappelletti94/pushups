@@ -36,7 +36,7 @@ unsafe extern "C" {
 
 #[cfg(feature = "background-handler")]
 #[pushups::background_handler]
-fn on_push(_context: pushups::Context, message: Message) {
+fn on_push(context: pushups::Context<'_>, message: Message) {
     HANDLED.lock().push(describe_message(&message));
     if let Some(notification) = fixture_notification(&message.payload) {
         // Exercise `JavaVM` attachment without capturing the callback's `Context`.
@@ -49,23 +49,72 @@ fn on_push(_context: pushups::Context, message: Message) {
             HANDLED.lock().push(failure);
         }
     }
+    if let Some(id) = fixture_id(&message.payload, "context") {
+        HANDLED.lock().push(describe_context(context, id));
+    }
+}
+
+/// The unique `id` a fixture push carries as `{"<key>":"<id>"}`.
+#[cfg(feature = "background-handler")]
+fn fixture_id<'a>(payload: &'a [u8], key: &str) -> Option<&'a str> {
+    let text = std::str::from_utf8(payload).ok()?;
+    let id = text
+        .strip_prefix("{\"")?
+        .strip_prefix(key)?
+        .strip_prefix("\":\"")?
+        .strip_suffix("\"}")?;
+    (!id.is_empty() && !id.contains('"')).then_some(id)
 }
 
 /// The fixture a headless test push carries, as `{"headless":"<id>"}` with a unique `id`.
 #[cfg(feature = "background-handler")]
 fn fixture_notification(payload: &[u8]) -> Option<Notification> {
-    const MARKER: &str = "{\"headless\":\"";
-    let text = std::str::from_utf8(payload).ok()?;
-    let id = text.strip_prefix(MARKER)?.strip_suffix("\"}")?;
-    if id.is_empty() || id.contains('"') {
-        return None;
-    }
+    let id = fixture_id(payload, "headless")?;
     Some(
         Notification::new(format!("pushups {id}"))
             .body("shown by the background handler")
             .tag(id)
-            .data(text.to_owned()),
+            .data(String::from_utf8_lossy(payload).into_owned()),
     )
+}
+
+/// The files directory of the context a push arrived on, read through `with_jni` and again on a worker from the kept global reference.
+#[cfg(feature = "background-handler")]
+fn describe_context(context: pushups::Context<'_>, id: &str) -> String {
+    let kept = context.with_jni(|env, context| -> jni::errors::Result<_> {
+        Ok((
+            files_dir(env, context)?,
+            env.get_java_vm()?,
+            env.new_global_ref(context)?,
+        ))
+    });
+    let (files, vm, application) = match kept {
+        Ok(kept) => kept,
+        Err(error) => return format!("context {id} failed with {error}"),
+    };
+    let worker = thread::spawn(move || -> jni::errors::Result<String> {
+        let mut env = vm.attach_current_thread()?;
+        files_dir(&mut env, application.as_obj())
+    });
+    match worker.join() {
+        Ok(Ok(worker)) => format!("context {id} files={files} worker={worker}"),
+        Ok(Err(error)) => format!("context {id} worker failed with {error}"),
+        Err(_) => format!("context {id} worker panicked"),
+    }
+}
+
+#[cfg(feature = "background-handler")]
+fn files_dir(
+    env: &mut JNIEnv<'_>,
+    context: &jni::objects::JObject<'_>,
+) -> jni::errors::Result<String> {
+    let dir = env
+        .call_method(context, "getFilesDir", "()Ljava/io/File;", &[])?
+        .l()?;
+    let path = env
+        .call_method(&dir, "getPath", "()Ljava/lang/String;", &[])?
+        .l()?;
+    Ok(env.get_string(&JString::from(path))?.into())
 }
 
 fn describe(event: &Event) -> String {

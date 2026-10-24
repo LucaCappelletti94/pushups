@@ -63,7 +63,7 @@ use pushups::{Context, Message};
 pushups::firebase_config!("tests/fixtures/google-services.json");
 
 #[pushups::background_handler]
-fn on_push(context: Context, message: Message) {
+fn on_push(context: Context<'_>, message: Message) {
     let _ = (context, message.payload);
 }
 ```

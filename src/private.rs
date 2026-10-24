@@ -179,7 +179,7 @@ pub mod android {
         Ok(array.into_raw())
     }
 
-    /// Runs the handler with owned payload bytes and raw context handles valid until the callback returns.
+    /// Runs the handler with owned payload bytes and a [`Context`] borrowing this callback.
     ///
     /// # Errors
     ///
@@ -189,14 +189,10 @@ pub mod android {
         context: &JObject<'_>,
         payload: &JByteArray<'_>,
         started_app: bool,
-        handler: fn(Context, Message),
+        handler: fn(Context<'_>, Message),
     ) -> jni::errors::Result<()> {
         let payload = env.convert_byte_array(payload)?;
-        let vm = env.get_java_vm()?;
-        let context = Context {
-            vm: vm.get_java_vm_pointer().cast(),
-            context: context.as_raw().cast(),
-        };
+        let context = Context::new(env, context);
         handler(
             context,
             Message {

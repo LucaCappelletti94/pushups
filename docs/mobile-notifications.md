@@ -63,10 +63,12 @@ An exact `tag` replaces the corresponding notification, while an absent `tag` gi
 
 Tap data reaches `Event::Message` through the foreground delivery path and never invokes the background handler. Lifecycle re-creation does not deliver it twice. `Message.started_app` is `true` for a tap that creates the process's first `Activity` when no earlier push has arrived, and is `false` after a headless push or in a live foreground session.
 
-The Android `Context` passed to `#[pushups::background_handler]` contains a JNI local reference valid only for that synchronous callback. Consumer futures must own their payload and executor state and must not retain that `Context` after the callback returns. `Notification::show` uses the retained runtime independently of the callback reference.
+The `Context` passed to `#[pushups::background_handler]` borrows the native callback, so it cannot outlive the handler or leave its thread. On Android, `Context::with_jni` lends the callback's JNI `0.21` environment and the `android.content.Context` the push arrived on. The closure can return a global reference or anything built from one, such as an explicit key-store context, while its local references stay inside it. `Notification::show` uses the retained runtime independently of the callback.
 
 ## Acceptance boundary
 
 `ci/apple/run.sh` exercises native transformation and completion on macOS, then links and verifies Rust entry symbols in ad-hoc-signed iOS device and simulator extension bundles. The harness does not execute an iOS extension in the simulator or establish locked-iPhone alert delivery, background scheduling, real keychain accessibility or visible locked-device rendering, which require device acceptance.
 
-`ci/android/rendering.sh` exercises headless presentation, refusal cases, tagged replacement and launcher tap delivery on a booted Android device or emulator.
+`ci/android/rendering.sh` exercises headless presentation, refusal cases, tagged replacement, launcher tap delivery and the context `with_jni` lends on a booted Android device or emulator.
+
+`ci/android/compile-contract/check.sh` type-checks an Android app that forbids `unsafe` code and confirms that keeping the `Context`, sending it to another thread or returning a local reference from `with_jni` fails to compile.
