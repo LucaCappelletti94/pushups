@@ -5,9 +5,7 @@
 
 use std::sync::{Mutex, PoisonError};
 
-use pushups::{
-    Config, Context, Event, LinuxConfig, Message, UnifiedPushConfig, VapidPublicKey, WnsConfig,
-};
+use pushups::{Config, Context, Message};
 use pushups_example_support as support;
 use tauri::Webview;
 use tauri::webview::PageLoadEvent;
@@ -23,7 +21,7 @@ pub fn run() {
         Err(error) => log(&format!("install failed: {error}")),
     }
     pushups::set_handler(|event| {
-        log(&describe(&event));
+        log(&support::describe(&event));
         page_show(support::shown(&event));
         if let Err(error) = support::register_again(&event) {
             log(&format!("register failed: {error}"));
@@ -48,10 +46,7 @@ pub fn run() {
 /// API since the prompt needs the click's gesture, and returns the answer for the page to show.
 #[tauri::command]
 async fn allow() -> String {
-    let answer = match pushups::request_permission().await {
-        Ok(permission) => format!("{permission:?}"),
-        Err(error) => format!("failed: {error}"),
-    };
+    let answer = support::permission(pushups::request_permission().await);
     log(&format!("permission {answer}"));
     answer
 }
@@ -94,53 +89,13 @@ fn show_in(webview: &Webview, line: &str) {
 
 /// The app's configuration from build-time keys, `PUSHUPS_VAPID_PUBLIC_KEY` (base64url) for UnifiedPush on Linux and Android and `PUSHUPS_WNS_REMOTE_ID` for Windows.
 fn config() -> Config {
-    // The bundle identifier, which also names the app on the Linux session bus.
-    let mut config = Config::new().linux(
-        LinuxConfig::new("rs.pushups.example")
-            .app_notifications("pushups example", support::app_icon()),
-    );
-    if let Some(remote_id) = option_env!("PUSHUPS_WNS_REMOTE_ID") {
-        config = config.windows(
-            WnsConfig::new(remote_id).app_notifications("pushups example", support::app_icon()),
-        );
-    }
-    if let Some(key) = option_env!("PUSHUPS_VAPID_PUBLIC_KEY") {
-        let key =
-            VapidPublicKey::from_base64url(key).expect("PUSHUPS_VAPID_PUBLIC_KEY is a VAPID key");
-        config = config.unified_push(UnifiedPushConfig::new(key));
-    }
-    config
-}
-
-fn describe(event: &Event) -> String {
-    let at = support::now_ms();
-    match event {
-        Event::Token(token) => format!("ui token at_ms={at} {}", support::token(token)),
-        Event::RegistrationFailed(error) => format!("ui registration failed at_ms={at} {error}"),
-        Event::Message(message) => format!(
-            "ui message at_ms={at} started_app={} {} payload={}",
-            message.started_app,
-            support::timing(message, at),
-            String::from_utf8_lossy(&message.payload)
-        ),
-        Event::MessagesDropped => format!("ui messages dropped at_ms={at}"),
-    }
+    support::desktop_config()
 }
 
 /// Runs off the main thread for every push the system delivers.
 #[pushups::background_handler]
 fn on_push(_context: Context, message: Message) {
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
-    if let Err(error) = support::popup(&message) {
-        log(&format!("popup failed: {error}"));
-    }
-    let entered = support::now_ms();
-    log(&format!(
-        "handler started_app={} entered_at_ms={entered} {} payload={}",
-        message.started_app,
-        support::timing(&message, entered),
-        String::from_utf8_lossy(&message.payload)
-    ));
+    support::handle_push(&message, log);
 }
 
 fn log(line: &str) {

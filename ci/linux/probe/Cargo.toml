@@ -23,6 +23,7 @@ path = "src/notifier.rs"
 
 [dependencies]
 pushups = { path = "../../..", features = ["serde"] }
+pushups-probe-support = { path = "../../probe-support" }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt", "time"] }
 web-push = "0.11"

@@ -9,43 +9,24 @@
 //! a tap finds, and that process shows nothing, which leaves the banner slot to the script's next
 //! toast.
 
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use pushups::{Config, Event, Message, Notification, WnsConfig};
+use pushups_probe_support::{beside_exe, remote_id};
 
 const RUN_BOUND: Duration = Duration::from_secs(300);
 const DISPLAY_NAME: &str = "pushups w1";
-
-/// The directory beside the exe, which a process Windows starts for a tap finds without an environment.
-fn beside_exe(name: &str) -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join(name)))
-        .unwrap_or_else(|| PathBuf::from(name))
-}
 
 fn out_dir() -> PathBuf {
     std::env::var_os("PROBE_OUT").map_or_else(|| beside_exe("w1-out"), PathBuf::from)
 }
 
-fn remote_id() -> Option<String> {
-    std::env::var("PROBE_REMOTE_ID").ok().or_else(|| {
-        fs::read_to_string(beside_exe("remote_id.txt"))
-            .ok()
-            .map(|id| id.trim().to_owned())
-    })
-}
-
 fn append(file: &str, line: &str) {
-    let path = out_dir().join(file);
-    if let Ok(mut log) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(log, "{line}");
-    }
+    pushups_probe_support::append(&out_dir(), file, line);
 }
 
 fn describe_message(message: &Message) -> String {

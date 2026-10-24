@@ -7,8 +7,7 @@
 //! `$PROBE_OUT/stop` appears or five minutes pass. When the session bus starts it for a push or a
 //! tap, `pushups::install` keeps it headless and never returns.
 
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::thread;
@@ -17,6 +16,7 @@ use std::time::{Duration, Instant};
 use pushups::{
     Config, Event, LinuxConfig, Message, Notification, UnifiedPushConfig, VapidPublicKey,
 };
+use pushups_probe_support::describe_message;
 
 const APP_ID: &str = "rs.pushups.LinuxProbe";
 const RUN_BOUND: Duration = Duration::from_secs(300);
@@ -26,18 +26,7 @@ fn out_dir() -> PathBuf {
 }
 
 fn append(file: &str, line: &str) {
-    let path = out_dir().join(file);
-    if let Ok(mut log) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(log, "{line}");
-    }
-}
-
-fn describe_message(message: &Message) -> String {
-    format!(
-        "message started_app={} {}",
-        message.started_app,
-        String::from_utf8_lossy(&message.payload)
-    )
+    pushups_probe_support::append(&out_dir(), file, line);
 }
 
 #[pushups::background_handler]

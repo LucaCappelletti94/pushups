@@ -2,10 +2,14 @@
 //! with the same wall-clock times under their own prefix, and the CI scripts can match them.
 //!
 //! An example keeps what an app author writes, the `install`, the handler, the button that asks
-//! for permission, the background handler and the worker entry, and takes the log line format,
-//! the timing and the desktop popup from this crate, calling `log` with its own prefix.
+//! for permission, the background handler and the worker entry, and takes the configuration from
+//! the build-time keys, the log line format, the timing, the worker's notification and the desktop
+//! popup from this crate, calling `log` with its own prefix.
 
-use pushups::{Event, Message, Token};
+use pushups::{
+    Config, Event, LinuxConfig, Message, Notification, Permission, Token, UnifiedPushConfig,
+    VapidPublicKey, WebPushConfig, WnsConfig,
+};
 
 pub mod text;
 
@@ -177,4 +181,100 @@ pub fn app_icon() -> String {
         .unwrap_or(icon)
         .to_string_lossy()
         .into_owned()
+}
+
+/// The desktop and UnifiedPush configuration from the build-time keys, `PUSHUPS_WNS_REMOTE_ID` for
+/// Windows and `PUSHUPS_VAPID_PUBLIC_KEY` (base64url) for UnifiedPush on Linux and Android.
+#[must_use]
+pub fn desktop_config() -> Config {
+    // The bundle identifier, which also names the app on the Linux session bus.
+    let mut config = Config::new().linux(
+        LinuxConfig::new("rs.pushups.example").app_notifications("pushups example", app_icon()),
+    );
+    if let Some(remote_id) = option_env!("PUSHUPS_WNS_REMOTE_ID") {
+        config = config
+            .windows(WnsConfig::new(remote_id).app_notifications("pushups example", app_icon()));
+    }
+    if let Some(key) = vapid_public_key() {
+        config = config.unified_push(UnifiedPushConfig::new(key));
+    }
+    config
+}
+
+/// The Web Push configuration from the build-time `PUSHUPS_VAPID_PUBLIC_KEY`, `None` without it.
+///
+/// `PUSHUPS_WEB_WORKER=static` registers the static worker, otherwise the Rust handler runs, from
+/// `worker_path` when the example serves its own worker entry.
+#[must_use]
+pub fn web_push(worker_path: Option<&str>) -> Option<WebPushConfig> {
+    let web = WebPushConfig::new(vapid_public_key()?);
+    Some(match (option_env!("PUSHUPS_WEB_WORKER"), worker_path) {
+        (Some("static"), _) => web,
+        (_, Some(path)) => web.rust_handler().service_worker_path(path),
+        (_, None) => web.rust_handler(),
+    })
+}
+
+fn vapid_public_key() -> Option<VapidPublicKey> {
+    let key = option_env!("PUSHUPS_VAPID_PUBLIC_KEY")?;
+    Some(VapidPublicKey::from_base64url(key).expect("PUSHUPS_VAPID_PUBLIC_KEY is a VAPID key"))
+}
+
+/// The line an example logs for every event its handler receives.
+#[must_use]
+pub fn describe(event: &Event) -> String {
+    let at = now_ms();
+    match event {
+        Event::Token(token) => format!("ui token at_ms={at} {}", self::token(token)),
+        Event::RegistrationFailed(error) => format!("ui registration failed at_ms={at} {error}"),
+        Event::Message(message) => format!(
+            "ui message at_ms={at} started_app={} {} payload={}",
+            message.started_app,
+            timing(message, at),
+            String::from_utf8_lossy(&message.payload)
+        ),
+        Event::MessagesDropped => format!("ui messages dropped at_ms={at}"),
+    }
+}
+
+/// The line an example's background handler logs for `message`, entered at `entered`.
+#[must_use]
+pub fn handled(message: &Message, entered: u128) -> String {
+    format!(
+        "handler started_app={} entered_at_ms={entered} {} payload={}",
+        message.started_app,
+        timing(message, entered),
+        String::from_utf8_lossy(&message.payload)
+    )
+}
+
+/// What an example's background handler does for every push, the desktop popup on Linux and Windows and the handler line, both logged through `log`.
+pub fn handle_push(message: &Message, log: impl Fn(&str)) {
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    if let Err(error) = popup(message) {
+        log(&format!("popup failed: {error}"));
+    }
+    log(&handled(message, now_ms()));
+}
+
+/// The answer to the permission prompt, as an example logs and shows it.
+#[must_use]
+pub fn permission(answer: Result<Permission, pushups::Error>) -> String {
+    match answer {
+        Ok(permission) => format!("{permission:?}"),
+        Err(error) => format!("failed: {error}"),
+    }
+}
+
+/// What an example's service worker shows for `message`, its `title` and `body` or the push's timing, after logging the timing through `log`.
+pub fn worker_notification(message: &Message, log: impl Fn(&str)) -> Notification {
+    let at = now_ms();
+    let line = timing(message, at);
+    log(&format!("worker push at_ms={at} {line}"));
+    Notification::new(field(message, "title").unwrap_or_else(|| "pushups from Rust".to_owned()))
+        .body(
+            field(message, "body")
+                .unwrap_or_else(|| format!("built in the service worker, {line}")),
+        )
+        .navigate("/")
 }

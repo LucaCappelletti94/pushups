@@ -7,50 +7,23 @@
 //! that directory or five minutes pass. The files beside the exe are what a process Windows starts
 //! for a push finds.
 
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use pushups::{Config, Event, Message, Token, WnsConfig};
+use pushups_probe_support::{beside_exe, describe_message, remote_id};
 
 const RUN_BOUND: Duration = Duration::from_secs(300);
-
-/// The directory beside the exe, which a process Windows starts for a push finds without an environment.
-fn beside_exe(name: &str) -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join(name)))
-        .unwrap_or_else(|| PathBuf::from(name))
-}
 
 fn out_dir() -> PathBuf {
     std::env::var_os("PROBE_OUT").map_or_else(|| beside_exe("w0-out"), PathBuf::from)
 }
 
-fn remote_id() -> Option<String> {
-    std::env::var("PROBE_REMOTE_ID").ok().or_else(|| {
-        fs::read_to_string(beside_exe("remote_id.txt"))
-            .ok()
-            .map(|id| id.trim().to_owned())
-    })
-}
-
 fn append(file: &str, line: &str) {
-    let path = out_dir().join(file);
-    if let Ok(mut log) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(log, "{line}");
-    }
-}
-
-fn describe_message(message: &Message) -> String {
-    format!(
-        "message started_app={} {}",
-        message.started_app,
-        String::from_utf8_lossy(&message.payload)
-    )
+    pushups_probe_support::append(&out_dir(), file, line);
 }
 
 /// Runs for every push. In a process Windows started for the push, it also calls `register`, which
