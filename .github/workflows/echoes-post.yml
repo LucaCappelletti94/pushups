@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 10
     permissions:
       actions: read
+      # Resolving the review threads of copies the pull request removed.
+      contents: write
       pull-requests: write
     # This job holds a write token, so it checks out nothing and treats the payload as data.
     steps:
@@ -25,7 +27,7 @@ jobs:
           path: ${{ runner.temp }}/echoes-payload
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
-      - uses: LucaCappelletti94/cargo-echoes@fe825077e5322a8bd3fa82c8c5a55f2d49cbe016  # v1.10.2
+      - uses: LucaCappelletti94/cargo-echoes@14ca2c9fa250b4eb8cd59c47f187b1f2281fb484  # v1.10.4
         with:
           mode: post
           payload: ${{ runner.temp }}/echoes-payload
