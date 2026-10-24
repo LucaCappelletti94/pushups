@@ -57,7 +57,7 @@ pub mod apple {
 pub mod ios {
     use core::ffi::c_void;
 
-    use crate::{Error, Message, Notification, RenderingContext};
+    use crate::{Error, Message, Rendering, RenderingContext};
 
     /// The adapter's completion thunk. The machine settles the request exactly once, with
     /// the settled outcome and, for a rendered alert, the transform's fields.
@@ -82,10 +82,10 @@ pub mod ios {
         navigate_len: usize,
     );
 
-    /// Allocates the service handle released by `deallocated`.
+    /// Allocates the service handle released by `deallocated`, under the filtering policy the extension's `Info.plist` declares.
     #[must_use]
-    pub fn create() -> *mut c_void {
-        crate::apple::service::create()
+    pub fn create(filtering_declared: bool) -> *mut c_void {
+        crate::apple::service::create(filtering_declared)
     }
 
     /// Starts the rendering request for the alert the adapter received, superseding a pending
@@ -101,7 +101,7 @@ pub mod ios {
         budget_nanos: u64,
         finish: Finish,
         token: *mut c_void,
-        handler: fn(RenderingContext, Message) -> Result<Notification, Error>,
+        handler: fn(RenderingContext, Message) -> Result<Rendering, Error>,
     ) {
         // SAFETY: the caller passed a live handle, a live thunk and a payload of
         // `user_info_len` bytes.

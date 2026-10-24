@@ -7,37 +7,45 @@ An iOS notification service extension runs in its own process before an eligible
 The extension's Rust crate declares `crate-type = ["staticlib"]` and one callback, shown here for fixed-text rendering.
 
 ```rust
-use pushups::{Error, Message, Notification, RenderingContext};
+use pushups::{Error, Message, Notification, Rendering, RenderingContext};
 
 #[pushups::notification_service]
-fn render(context: RenderingContext, message: Message) -> Result<Notification, Error> {
+fn render(context: RenderingContext, message: Message) -> Result<Rendering, Error> {
     if context.is_cancelled() {
         return Err(Error::Platform("notification rendering expired".into()));
     }
     let data = String::from_utf8(message.payload)
         .map_err(|error| Error::Platform(error.to_string()))?;
-    Ok(Notification::new("New activity").data(data))
+    Ok(Notification::new("New activity").data(data).into())
 }
 ```
 
 Application-produced and encrypted rendering supply application-owned interpretation or decryption in that callback. `pushups` supplies no encryption, key storage, payload schema, network client or async runtime. The callback receives owned bytes containing the complete original APNs user-info dictionary as `JSON`, and `Message.started_app` is `false` because the extension does not launch the application.
 
-The callback runs on an extension-owned worker. `RenderingContext` is `Clone + Send + Sync` and contains an owned request identifier, a monotonic deadline and shared completion state, with `request_id()`, `deadline()`, `is_cancelled()` and `outcome()` accessors. Consumer async work must run on its own executor and obey the deadline and cancellation signal, without retaining native references.
+The callback runs on an extension-owned worker. `RenderingContext` is `Clone + Send + Sync` and contains an owned request identifier, a monotonic deadline and shared completion state, with `request_id()`, `deadline()`, `is_cancelled()`, `suppression()` and `outcome()` accessors. Consumer async work must run on its own executor and obey the deadline and cancellation signal, without retaining native references.
 
 Completion selects one terminal outcome exactly once. The bound is 25 seconds from receipt or the earlier platform expiration callback. Cancellation is cooperative, and work that returns after completion cannot change the notification.
 
 | Outcome | Presented content |
 |---|---|
 | `Rendered` | Returned title and body |
+| `SuppressionRequested` | Empty content, which hides the alert only under Apple's approved entitlement |
+| `SuppressionUndeclared` | Original safe alert |
 | `Failed` | Original safe alert |
 | `Panicked` | Original safe alert after an unwinding panic |
 | `Expired` | Original safe alert |
 | `WorkerUnavailable` | Original safe alert |
 | `Superseded` | Original safe alert for the displaced request |
 
-The final outcome is stored in the `pushups.rendering-outcome` user-info string. Abort-mode panics and process termination cannot run Rust cleanup, and iOS retains its original-alert fallback. The original alert must therefore remain safe to show without decryption.
+The final outcome is stored in the `pushups.rendering-outcome` user-info string, except for `SuppressionRequested`, whose empty content carries none and which `RenderingContext::outcome()` reports. Abort-mode panics and process termination cannot run Rust cleanup, and iOS retains its original-alert fallback. The original alert must therefore remain safe to show without decryption.
 
 A successful `Notification` replaces title and body, with an absent body clearing the body. `tag` maps to the native thread identifier, and `data` and `navigate` occupy reserved user-info keys while unrelated user info, attachments, badge, sound and category remain intact. Icon URLs are unsupported on mobile and select failure rather than fetching media.
+
+### Suppressing an alert
+
+`Rendering::NoAlert` asks for no alert, and an error or an empty title never means that. The extension's `Info.plist` declares the policy with `PushupsNotificationFiltering` set to `true`, and `RenderingContext::suppression()` reports `Declared` or `Undeclared`. Without the declaration, `NoAlert` settles `SuppressionUndeclared` on the original alert. With it, `NoAlert` completes with an empty `UNNotificationContent`.
+
+iOS cannot read an extension's signed entitlements at runtime, so `Declared` is the app's own assertion and `SuppressionRequested` only says the empty content went to the system. The alert disappears only when Apple has granted [`com.apple.developer.usernotifications.filtering`](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.usernotifications.filtering), the extension is signed with it, and the sender uses `apns-push-type: alert`. Before a release, `ios/check-filtering.sh <NotificationService.appex>` on macOS fails when the declaration and the signed entitlement disagree. Seeing the alert disappear on a device remains the release owner's check.
 
 ### Bundle and signing
 
@@ -67,7 +75,7 @@ The `Context` passed to `#[pushups::background_handler]` borrows the native call
 
 ## Acceptance boundary
 
-`ci/apple/run.sh` exercises native transformation and completion on macOS, then links and verifies Rust entry symbols in ad-hoc-signed iOS device and simulator extension bundles. The harness does not execute an iOS extension in the simulator or establish locked-iPhone alert delivery, background scheduling, real keychain accessibility or visible locked-device rendering, which require device acceptance.
+`ci/apple/run.sh` exercises native transformation and completion on macOS, including the empty content of a declared `NoAlert` and the safe alert of an undeclared one, then links and verifies Rust entry symbols in ad-hoc-signed iOS device and simulator extension bundles and runs `ios/check-filtering.sh` against them signed with and without the entitlement and the declaration. The harness does not execute an iOS extension in the simulator or establish Apple's filtering approval, locked-iPhone alert delivery, background scheduling, real keychain accessibility, visible locked-device rendering or a suppressed alert on a device, which require device acceptance.
 
 `ci/android/rendering.sh` exercises headless presentation, refusal cases, tagged replacement, launcher tap delivery and the context `with_jni` lends on a booted Android device or emulator.
 

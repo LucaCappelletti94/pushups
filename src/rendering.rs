@@ -10,14 +10,43 @@ use std::time::Instant;
 
 use parking_lot::Mutex;
 
+use crate::Notification;
 #[cfg(any(target_os = "ios", target_os = "macos", test))]
-use crate::{Error, Message, Notification};
+use crate::{Error, Message};
+
+/// What a [`notification_service`](crate::notification_service) callback asks the system to present.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Rendering {
+    /// Replace the original alert's title and body with this notification's.
+    Show(Notification),
+    /// Present no alert, honoured only under a declared [`Suppression`] policy.
+    NoAlert,
+}
+
+impl From<Notification> for Rendering {
+    fn from(notification: Notification) -> Self {
+        Self::Show(notification)
+    }
+}
+
+/// Whether the notification service extension declares Apple's filtering policy in its `Info.plist`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Suppression {
+    /// No declaration, so [`Rendering::NoAlert`] keeps the original alert.
+    Undeclared,
+    /// `PushupsNotificationFiltering` is true, an assertion iOS cannot check at runtime, so [`Rendering::NoAlert`] completes with empty content.
+    Declared,
+}
 
 /// What the system shows for the alert after the transform settles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderingOutcome {
     /// The transform's content replaced the original alert.
     Rendered,
+    /// The transform asked for no alert under a declared policy, and empty content went to the system.
+    SuppressionRequested,
+    /// The transform asked for no alert without a declared policy, and the original alert stands.
+    SuppressionUndeclared,
     /// The transform returned an error, or content the platform cannot show, such as an icon URL.
     Failed,
     /// The transform unwound.
@@ -36,6 +65,8 @@ impl RenderingOutcome {
     pub(crate) const fn marker(self) -> &'static str {
         match self {
             Self::Rendered => "rendered",
+            Self::SuppressionRequested => "suppression-requested",
+            Self::SuppressionUndeclared => "suppression-undeclared",
             Self::Failed => "failed",
             Self::Panicked => "panicked",
             Self::Expired => "expired",
@@ -68,6 +99,12 @@ impl RenderingContext {
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.state.cancelled.load(Ordering::Acquire) || Instant::now() >= self.state.deadline
+    }
+
+    /// Whether the extension declares the filtering policy that lets [`Rendering::NoAlert`] suppress the alert.
+    #[must_use]
+    pub fn suppression(&self) -> Suppression {
+        self.state.suppression
     }
 
     /// The settled outcome, or `None` while the transform runs.
@@ -113,6 +150,7 @@ pub(crate) fn mapped_fields(notification: Notification) -> Option<RenderedFields
 #[cfg(any(target_os = "ios", target_os = "macos", test))]
 pub(crate) struct RenderingService {
     current: Mutex<Option<Arc<RequestState>>>,
+    suppression: Suppression,
 }
 
 /// The process-wide generation of rendering requests, keeping request identities fresh
@@ -122,11 +160,12 @@ static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(any(target_os = "ios", target_os = "macos", test))]
 impl RenderingService {
-    /// The service with no request yet.
+    /// The service with no request yet, under the extension's declared policy.
     #[must_use]
-    pub(crate) const fn new() -> Self {
+    pub(crate) const fn new(suppression: Suppression) -> Self {
         Self {
             current: Mutex::new(None),
+            suppression,
         }
     }
 
@@ -136,13 +175,14 @@ impl RenderingService {
         &self,
         deadline: Instant,
         callback: CompletionCallback,
-        handler: fn(RenderingContext, Message) -> Result<Notification, Error>,
+        handler: fn(RenderingContext, Message) -> Result<Rendering, Error>,
         user_info: Vec<u8>,
     ) -> RenderingContext {
         let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
         let state = Arc::new(RequestState {
             id: format!("pushups-render-{generation}"),
             deadline,
+            suppression: self.suppression,
             cancelled: AtomicBool::new(false),
             completion: Mutex::new(Completion {
                 outcome: None,
@@ -187,9 +227,17 @@ impl RenderingService {
                     (RenderingOutcome::Expired, None)
                 } else {
                     match result {
-                        Ok(Ok(notification)) => match mapped_fields(notification) {
-                            Some(fields) => (RenderingOutcome::Rendered, Some(fields)),
-                            None => (RenderingOutcome::Failed, None),
+                        Ok(Ok(Rendering::Show(notification))) => {
+                            match mapped_fields(notification) {
+                                Some(fields) => (RenderingOutcome::Rendered, Some(fields)),
+                                None => (RenderingOutcome::Failed, None),
+                            }
+                        }
+                        Ok(Ok(Rendering::NoAlert)) => match worker_state.suppression {
+                            Suppression::Declared => (RenderingOutcome::SuppressionRequested, None),
+                            Suppression::Undeclared => {
+                                (RenderingOutcome::SuppressionUndeclared, None)
+                            }
                         },
                         Ok(Err(_)) => (RenderingOutcome::Failed, None),
                         Err(_) => (RenderingOutcome::Panicked, None),
@@ -227,6 +275,7 @@ impl RenderingService {
 pub(crate) struct RequestState {
     id: String,
     deadline: Instant,
+    suppression: Suppression,
     cancelled: AtomicBool,
     completion: Mutex<Completion>,
 }
@@ -328,7 +377,7 @@ mod tests {
 
     /// The consumer transform every scenario drives. A payload is a kind, optionally followed
     /// by `:sleep-<ms>`, which the transform sleeps before answering.
-    fn test_handler(_context: RenderingContext, message: Message) -> Result<Notification, Error> {
+    fn test_handler(_context: RenderingContext, message: Message) -> Result<Rendering, Error> {
         let Message {
             payload,
             started_app,
@@ -352,18 +401,20 @@ mod tests {
             "panic" => panic!("the test transform unwinds"),
             "icon" => Ok(Notification::new("Icon")
                 .body("Icon body")
-                .icon("https://example.com/icon.png")),
+                .icon("https://example.com/icon.png")
+                .into()),
+            "no-alert" => Ok(Rendering::NoAlert),
             "record" => {
                 MESSAGES.lock().push((payload, started_app));
-                Ok(rendered())
+                Ok(rendered().into())
             }
-            _ => Ok(rendered()),
+            _ => Ok(rendered().into()),
         }
     }
 
     #[test]
     fn the_context_keeps_its_identity_and_deadline_after_completion() {
-        let service = RenderingService::new();
+        let service = RenderingService::new(Suppression::Undeclared);
         let recorded = Arc::new(Mutex::new(Recorded::default()));
         let context = service.begin(
             deadline_in(5_000),
@@ -383,7 +434,7 @@ mod tests {
 
     #[test]
     fn a_transformed_alert_completes_rendered_with_its_mapped_fields() {
-        let service = RenderingService::new();
+        let service = RenderingService::new(Suppression::Undeclared);
         let recorded = Arc::new(Mutex::new(Recorded::default()));
         let context = service.begin(
             deadline_in(5_000),
@@ -407,7 +458,7 @@ mod tests {
 
     #[test]
     fn a_returned_error_completes_failed_on_the_fallback() {
-        let service = RenderingService::new();
+        let service = RenderingService::new(Suppression::Undeclared);
         let recorded = Arc::new(Mutex::new(Recorded::default()));
         let context = service.begin(
             deadline_in(5_000),
@@ -427,7 +478,7 @@ mod tests {
 
     #[test]
     fn an_unwinding_transform_completes_panicked() {
-        let service = RenderingService::new();
+        let service = RenderingService::new(Suppression::Undeclared);
         let recorded = Arc::new(Mutex::new(Recorded::default()));
         let context = service.begin(
             deadline_in(5_000),
@@ -447,7 +498,7 @@ mod tests {
 
     #[test]
     fn an_icon_url_completes_failed_on_the_fallback() {
-        let service = RenderingService::new();
+        let service = RenderingService::new(Suppression::Undeclared);
         let recorded = Arc::new(Mutex::new(Recorded::default()));
         let context = service.begin(
             deadline_in(5_000),
@@ -467,7 +518,7 @@ mod tests {
 
     #[test]
     fn the_payload_is_the_original_user_info_and_the_app_did_not_start() {
-        let service = RenderingService::new();
+        let service = RenderingService::new(Suppression::Undeclared);
         let recorded = Arc::new(Mutex::new(Recorded::default()));
         let payload = b"record:the-original-user-info".to_vec();
         let context = service.begin(
@@ -491,7 +542,7 @@ mod tests {
 
     #[test]
     fn a_worker_returning_after_the_deadline_completes_expired_once() {
-        let service = RenderingService::new();
+        let service = RenderingService::new(Suppression::Undeclared);
         let recorded = Arc::new(Mutex::new(Recorded::default()));
         service.begin(
             deadline_in(60),
@@ -513,7 +564,7 @@ mod tests {
 
     #[test]
     fn an_already_spent_budget_completes_expired_without_running_the_transform() {
-        let service = RenderingService::new();
+        let service = RenderingService::new(Suppression::Undeclared);
         let recorded = Arc::new(Mutex::new(Recorded::default()));
         let context = service.begin(
             Instant::now(),
@@ -543,7 +594,7 @@ mod tests {
 
     #[test]
     fn an_error_returning_after_the_deadline_completes_expired() {
-        let service = RenderingService::new();
+        let service = RenderingService::new(Suppression::Undeclared);
         let recorded = Arc::new(Mutex::new(Recorded::default()));
         service.begin(
             deadline_in(60),
@@ -559,7 +610,7 @@ mod tests {
 
     #[test]
     fn the_deadline_cancels_the_context_before_the_timer_delivers() {
-        let service = RenderingService::new();
+        let service = RenderingService::new(Suppression::Undeclared);
         let recorded = Arc::new(Mutex::new(Recorded::default()));
         let context = service.begin(
             deadline_in(80),
@@ -576,7 +627,7 @@ mod tests {
 
     #[test]
     fn a_newer_alert_supersedes_the_pending_one() {
-        let service = RenderingService::new();
+        let service = RenderingService::new(Suppression::Undeclared);
         let first = Arc::new(Mutex::new(Recorded::default()));
         let second = Arc::new(Mutex::new(Recorded::default()));
         let context_first = service.begin(
@@ -608,7 +659,7 @@ mod tests {
 
     #[test]
     fn a_supersession_after_the_deadline_completes_expired() {
-        let service = RenderingService::new();
+        let service = RenderingService::new(Suppression::Undeclared);
         let first = Arc::new(Mutex::new(Recorded::default()));
         let second = Arc::new(Mutex::new(Recorded::default()));
         let context_first = service.begin(
@@ -636,7 +687,7 @@ mod tests {
 
     #[test]
     fn a_stale_timer_cannot_complete_the_newer_request() {
-        let service = RenderingService::new();
+        let service = RenderingService::new(Suppression::Undeclared);
         let first = Arc::new(Mutex::new(Recorded::default()));
         let second = Arc::new(Mutex::new(Recorded::default()));
         let context_first = service.begin(
@@ -672,7 +723,7 @@ mod tests {
 
     #[test]
     fn the_platform_expiration_completes_expired_and_drops_the_late_worker() {
-        let service = RenderingService::new();
+        let service = RenderingService::new(Suppression::Undeclared);
         let recorded = Arc::new(Mutex::new(Recorded::default()));
         let context = service.begin(
             deadline_in(5_000),
@@ -692,7 +743,7 @@ mod tests {
 
     #[test]
     fn a_settled_request_ignores_later_expirations_and_deallocations() {
-        let service = RenderingService::new();
+        let service = RenderingService::new(Suppression::Undeclared);
         let recorded = Arc::new(Mutex::new(Recorded::default()));
         let context = service.begin(
             deadline_in(5_000),
@@ -712,7 +763,7 @@ mod tests {
 
     #[test]
     fn the_deallocation_supersedes_the_pending_request() {
-        let service = RenderingService::new();
+        let service = RenderingService::new(Suppression::Undeclared);
         let recorded = Arc::new(Mutex::new(Recorded::default()));
         let context = service.begin(
             deadline_in(5_000),
@@ -730,7 +781,7 @@ mod tests {
 
     #[test]
     fn reused_payloads_keep_fresh_request_ids() {
-        let service = RenderingService::new();
+        let service = RenderingService::new(Suppression::Undeclared);
         let payload = b"render".to_vec();
         let first = service.begin(
             deadline_in(5_000),
@@ -757,7 +808,7 @@ mod tests {
 
     #[test]
     fn the_completion_runs_outside_the_lock_and_reenters_the_service() {
-        let service = Arc::new(RenderingService::new());
+        let service = Arc::new(RenderingService::new(Suppression::Undeclared));
         let inner = Arc::clone(&service);
         let inner_recorded = Arc::new(Mutex::new(Recorded::default()));
         let inner_callback = callback(&inner_recorded);
@@ -809,6 +860,7 @@ mod tests {
         let state = Arc::new(RequestState {
             id: "late-request".to_owned(),
             deadline: Instant::now(),
+            suppression: Suppression::Undeclared,
             cancelled: AtomicBool::new(false),
             completion: Mutex::new(Completion {
                 outcome: None,
@@ -830,5 +882,91 @@ mod tests {
             assert_send_sync::<RenderingContext>();
             assert_send_sync::<RenderingOutcome>();
         };
+    }
+
+    #[test]
+    fn no_alert_under_a_declared_policy_completes_suppression_requested() {
+        let service = RenderingService::new(Suppression::Declared);
+        let recorded = Arc::new(Mutex::new(Recorded::default()));
+        let context = service.begin(
+            deadline_in(5_000),
+            callback(&recorded),
+            test_handler,
+            b"no-alert".to_vec(),
+        );
+        assert_eq!(context.suppression(), Suppression::Declared);
+        wait_for(|| recorded.lock().count == 1, Duration::from_secs(5));
+        let recorded = recorded.lock();
+        assert_eq!(
+            recorded.outcome,
+            Some(RenderingOutcome::SuppressionRequested)
+        );
+        assert!(recorded.fields.is_none());
+    }
+
+    #[test]
+    fn no_alert_without_a_declared_policy_keeps_the_original_alert() {
+        let service = RenderingService::new(Suppression::Undeclared);
+        let recorded = Arc::new(Mutex::new(Recorded::default()));
+        let context = service.begin(
+            deadline_in(5_000),
+            callback(&recorded),
+            test_handler,
+            b"no-alert".to_vec(),
+        );
+        assert_eq!(context.suppression(), Suppression::Undeclared);
+        wait_for(|| recorded.lock().count == 1, Duration::from_secs(5));
+        let recorded = recorded.lock();
+        assert_eq!(
+            recorded.outcome,
+            Some(RenderingOutcome::SuppressionUndeclared)
+        );
+        assert!(recorded.fields.is_none());
+    }
+
+    #[test]
+    fn a_no_alert_after_the_deadline_completes_expired_once() {
+        let service = RenderingService::new(Suppression::Declared);
+        let recorded = Arc::new(Mutex::new(Recorded::default()));
+        let context = service.begin(
+            deadline_in(50),
+            callback(&recorded),
+            test_handler,
+            b"no-alert:sleep-200".to_vec(),
+        );
+        wait_for(
+            || context.outcome() == Some(RenderingOutcome::Expired),
+            Duration::from_secs(5),
+        );
+        std::thread::sleep(Duration::from_millis(300));
+        let recorded = recorded.lock();
+        assert_eq!(recorded.count, 1);
+        assert_eq!(recorded.outcome, Some(RenderingOutcome::Expired));
+    }
+
+    #[test]
+    fn a_superseded_no_alert_cannot_settle_after_its_replacement() {
+        let service = RenderingService::new(Suppression::Declared);
+        let first = Arc::new(Mutex::new(Recorded::default()));
+        let second = Arc::new(Mutex::new(Recorded::default()));
+        let context_first = service.begin(
+            deadline_in(5_000),
+            callback(&first),
+            test_handler,
+            b"no-alert:sleep-200".to_vec(),
+        );
+        let context_second = service.begin(
+            deadline_in(5_000),
+            callback(&second),
+            test_handler,
+            b"render".to_vec(),
+        );
+        wait_for(
+            || context_second.outcome() == Some(RenderingOutcome::Rendered),
+            Duration::from_secs(5),
+        );
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(context_first.outcome(), Some(RenderingOutcome::Superseded));
+        assert_eq!(first.lock().count, 1);
     }
 }

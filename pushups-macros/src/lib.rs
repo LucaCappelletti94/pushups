@@ -183,7 +183,7 @@ pub fn background_handler(args: TokenStream, item: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Exports a synchronous `fn(RenderingContext, Message) -> Result<Notification, Error>` for the [iOS service extension](https://github.com/LucaCappelletti94/pushups/blob/main/docs/mobile-notifications.md).
+/// Exports a synchronous `fn(RenderingContext, Message) -> Result<Rendering, Error>` for the [iOS service extension](https://github.com/LucaCappelletti94/pushups/blob/main/docs/mobile-notifications.md).
 #[proc_macro_attribute]
 pub fn notification_service(args: TokenStream, item: TokenStream) -> TokenStream {
     let item: TokenStream2 = item.into();
@@ -208,12 +208,14 @@ pub fn notification_service(args: TokenStream, item: TokenStream) -> TokenStream
         const _: fn(
             #pushups::RenderingContext,
             #pushups::Message,
-        ) -> core::result::Result<#pushups::Notification, #pushups::Error> = #name;
+        ) -> core::result::Result<#pushups::Rendering, #pushups::Error> = #name;
 
         #[cfg(any(target_os = "ios", target_os = "macos"))]
         #[unsafe(no_mangle)]
-        pub extern "C" fn __pushups_notification_service_create() -> *mut ::core::ffi::c_void {
-            #pushups::__private::ios::create()
+        pub extern "C" fn __pushups_notification_service_create(
+            filtering_declared: bool,
+        ) -> *mut ::core::ffi::c_void {
+            #pushups::__private::ios::create(filtering_declared)
         }
 
         /// # Safety
@@ -275,7 +277,7 @@ pub fn notification_service(args: TokenStream, item: TokenStream) -> TokenStream
         #[cfg(any(target_os = "ios", target_os = "macos"))]
         #[used]
         static __PUSHUPS_NOTIFICATION_SERVICE_KEPT: (
-            extern "C" fn() -> *mut ::core::ffi::c_void,
+            extern "C" fn(bool) -> *mut ::core::ffi::c_void,
             unsafe extern "C" fn(
                 *const ::core::ffi::c_void,
                 *const u8,

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use crate::__private::ios::Finish;
 use crate::rendering::{CompletionCallback, RenderingOutcome, RenderingService};
-use crate::{Error, Message, Notification, RenderingContext};
+use crate::{Error, Message, Rendering, RenderingContext, Suppression};
 
 /// How long a transform may run before the alert is left as sent, inside Apple's 30 seconds.
 const RENDERING_BOUND: Duration = Duration::from_secs(25);
@@ -15,13 +15,18 @@ const RENDERING_BOUND: Duration = Duration::from_secs(25);
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 
 /// Creates the rendering service one native service instance owns, the handle `receive`,
-/// `expired` and `deallocated` take.
+/// `expired` and `deallocated` take, under the policy the extension's `Info.plist` declares.
 ///
 /// # Safety
 ///
 /// The handle is released exactly once, by `deallocated`.
-pub(crate) fn create() -> *mut c_void {
-    Box::into_raw(Box::new(RenderingService::new())).cast()
+pub(crate) fn create(filtering_declared: bool) -> *mut c_void {
+    let suppression = if filtering_declared {
+        Suppression::Declared
+    } else {
+        Suppression::Undeclared
+    };
+    Box::into_raw(Box::new(RenderingService::new(suppression))).cast()
 }
 
 /// Starts the request for the alert the adapter received, superseding a pending one, and
@@ -37,7 +42,7 @@ pub(crate) unsafe fn receive(
     budget_nanos: u64,
     finish: Finish,
     token: *mut c_void,
-    handler: fn(RenderingContext, Message) -> Result<Notification, Error>,
+    handler: fn(RenderingContext, Message) -> Result<Rendering, Error>,
 ) {
     // The deadline anchors before the payload copy, so the copy counts against the budget.
     let deadline = Instant::now()
@@ -145,8 +150,9 @@ fn field_bytes(value: Option<&str>) -> (*const u8, usize) {
     }
 }
 
-/// The code the settled outcome takes on the wire. `Rendered` applies the fields, and the
-/// other codes settle the original alert, which the marker distinguishes.
+/// The code the settled outcome takes on the wire. `Rendered` applies the fields,
+/// `SuppressionRequested` completes with empty content, and the other codes settle the
+/// original alert, which the marker distinguishes.
 #[must_use]
 fn outcome_code(outcome: RenderingOutcome) -> i32 {
     match outcome {
@@ -156,5 +162,7 @@ fn outcome_code(outcome: RenderingOutcome) -> i32 {
         RenderingOutcome::Expired => 3,
         RenderingOutcome::WorkerUnavailable => 4,
         RenderingOutcome::Superseded => 5,
+        RenderingOutcome::SuppressionRequested => 6,
+        RenderingOutcome::SuppressionUndeclared => 7,
     }
 }
