@@ -104,6 +104,22 @@ for (kind, marker) in [("error", "failed"), ("panic", "panicked"), ("icon", "fai
     expect(fallback.snapshot.content?.userInfo["original"] as? String == "ciphertext", "\(kind) preserves sender payload")
 }
 
+// The harness embeds an Info.plist declaring `PushupsNotificationFiltering`, which the default initializer reads.
+let suppressed = receive(service, ["kind": "no-alert", "original": "ciphertext"])
+wait(suppressed)
+if let content = suppressed.snapshot.content {
+    expect(content.title.isEmpty && content.subtitle.isEmpty && content.body.isEmpty, "declared no-alert clears every alert text")
+    expect(content.sound == nil && content.attachments.isEmpty, "declared no-alert has no sound or attachments")
+    expect(content.userInfo.isEmpty, "declared no-alert completes with fresh content, without the original payload or a marker")
+}
+
+let undeclaredService = PushupsNotificationService(filteringDeclared: false)
+let undeclared = receive(undeclaredService, ["kind": "no-alert", "original": "ciphertext"])
+wait(undeclared)
+expect(outcome(undeclared) == "suppression-undeclared", "undeclared no-alert outcome")
+expect(undeclared.snapshot.content?.title == "Safe title" && undeclared.snapshot.content?.body == "Safe body", "undeclared no-alert keeps the safe alert")
+expect(undeclared.snapshot.content?.userInfo["original"] as? String == "ciphertext", "undeclared no-alert keeps the sender payload")
+
 let expired = receive(service, ["sleep": 300])
 service.serviceExtensionTimeWillExpire()
 service.serviceExtensionTimeWillExpire()

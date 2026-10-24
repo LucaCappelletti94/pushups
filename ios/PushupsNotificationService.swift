@@ -32,6 +32,11 @@ private final class PushupsCompletion {
         data: String?,
         navigate: String?
     ) {
+        // Apple's filtering contract is a fresh content with no alert fields, so no marker rides on it.
+        if outcome == 6 {
+            handler(UNNotificationContent())
+            return
+        }
         if outcome == 0, let title {
             content.title = title
             content.body = body ?? ""
@@ -85,7 +90,7 @@ private func pushupsFinish(
 }
 
 @_silgen_name("__pushups_notification_service_create")
-private func pushupsCreate() -> UnsafeMutableRawPointer
+private func pushupsCreate(_ filteringDeclared: Bool) -> UnsafeMutableRawPointer
 
 @_silgen_name("__pushups_notification_service_receive")
 private func pushupsReceive(
@@ -105,7 +110,17 @@ private func pushupsDeallocated(_ service: UnsafeMutableRawPointer)
 
 /// Transforms an alert through the Rust `notification_service` callback.
 public final class PushupsNotificationService: UNNotificationServiceExtension {
-    private let service = pushupsCreate()
+    private let service: UnsafeMutableRawPointer
+
+    /// Reads the extension's `PushupsNotificationFiltering` declaration from its `Info.plist`.
+    public override convenience init() {
+        self.init(filteringDeclared: Bundle.main.object(forInfoDictionaryKey: "PushupsNotificationFiltering") as? Bool ?? false)
+    }
+
+    init(filteringDeclared: Bool) {
+        service = pushupsCreate(filteringDeclared)
+        super.init()
+    }
 
     public override func didReceive(
         _ request: UNNotificationRequest,

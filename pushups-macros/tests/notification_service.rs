@@ -30,8 +30,8 @@ fn notification_service_expands_under_a_renamed_dependency() {
         consumer.path().join("src/lib.rs"),
         "#[notifications::notification_service]\n\
          fn on_render(\n    _context: notifications::RenderingContext,\n\
-         message: notifications::Message,\n) -> Result<notifications::Notification, notifications::Error> {\n\
-         Ok(notifications::Notification::new(\"Rendered\").body(message.payload.len().to_string()))\n}\n",
+         message: notifications::Message,\n) -> Result<notifications::Rendering, notifications::Error> {\n\
+         Ok(notifications::Notification::new(\"Rendered\").body(message.payload.len().to_string()).into())\n}\n",
     )
     .expect("the consumer's source");
     let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
