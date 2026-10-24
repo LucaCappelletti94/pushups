@@ -1,0 +1,31 @@
+---
+name: echoes-post
+
+"on":
+  workflow_run:
+    workflows: [echoes]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  review:
+    name: Review the duplicates a pull request adds
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      pull-requests: write
+    # This job holds a write token, so it checks out nothing and treats the payload as data.
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: echoes-payload
+          path: ${{ runner.temp }}/echoes-payload
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - uses: LucaCappelletti94/cargo-echoes@fe825077e5322a8bd3fa82c8c5a55f2d49cbe016  # v1.10.2
+        with:
+          mode: post
+          payload: ${{ runner.temp }}/echoes-payload
