@@ -16,8 +16,12 @@ object Pushes {
     /** Covers the host's own retries of a push service's transient answers. */
     private const val ANSWER_MS = 90_000L
 
-    /** Sends [message], an FCM HTTP v1 `message` object, and fails unless FCM accepted it. */
-    fun send(context: Context, id: String, message: JSONObject) = request(context, id, message)
+    /** Sends [message], an FCM HTTP v1 `message` object, at high priority, since FCM holds a normal-priority one to a background app for minutes, and fails unless FCM accepted it. */
+    fun send(context: Context, id: String, message: JSONObject) {
+        val android = message.optJSONObject("android") ?: JSONObject().also { message.put("android", it) }
+        android.put("priority", "high")
+        request(context, id, message)
+    }
 
     /** Sends [payload] to [subscription] as a Web Push, and fails unless the push service accepted it. */
     fun sendWebPush(context: Context, id: String, subscription: WebPushSubscription, payload: String) {
