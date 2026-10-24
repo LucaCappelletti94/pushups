@@ -1,0 +1,18 @@
+[package]
+name = "pushups-android-compile-contract"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Type-checked only by check.sh, so it stays out of the crate's workspace.
+[workspace]
+
+[dependencies]
+jni = "0.21"
+pushups = { path = "../../.." }
+
+# Each feature adds one consumer that must fail to compile.
+[features]
+keep-context = []
+send-context = []
+return-local = []

@@ -84,7 +84,7 @@ pub fn firebase_config(input: TokenStream) -> TokenStream {
 
 /// Mark a free function as the background handler.
 ///
-/// The function must take `pushups::Context` and `pushups::Message`, be synchronous, be
+/// The function must take `pushups::Context<'_>` and `pushups::Message`, be synchronous, be
 /// non-generic and have no `self`. The function is kept unchanged. On every target the expansion
 /// type-checks the signature, so a wrong one fails with a clear type error. A second handler in
 /// one binary is a duplicate symbol at link time.
@@ -104,7 +104,7 @@ pub fn firebase_config(input: TokenStream) -> TokenStream {
 /// use pushups::{Context, Message};
 ///
 /// #[pushups::background_handler]
-/// fn on_push(context: Context, message: Message) {
+/// fn on_push(context: Context<'_>, message: Message) {
 ///     // deliver the message
 /// }
 /// ```

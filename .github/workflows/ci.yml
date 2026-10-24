@@ -54,6 +54,9 @@ jobs:
         run: cargo +stable clippy --workspace --target ${{ matrix.target }} --all-targets -- -D warnings
       - name: All features
         run: cargo +stable clippy --workspace --target ${{ matrix.target }} --all-targets --all-features -- -D warnings
+      - name: An Android app forbidding unsafe code compiles, and misuse of its Context does not
+        if: matrix.target == 'aarch64-linux-android'
+        run: ci/android/compile-contract/check.sh ${{ matrix.target }}
 
   test:
     name: Test

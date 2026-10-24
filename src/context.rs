@@ -1,15 +1,16 @@
-#[cfg(target_os = "android")]
-use std::ffi::c_void;
+#[cfg(not(target_os = "android"))]
+use std::marker::PhantomData;
 
-/// What a [`background_handler`](crate::background_handler) runs with, on every platform.
-///
-/// On Android it carries the raw `JavaVM` and `Context`, in the shape `ndk_context::AndroidContext` uses, so the handler can hand them to `jni::JavaVM::from_raw` or to `ndk_context::initialize_android_context`. They are valid only until the handler returns, and the `Context` is a local reference of the calling thread. Elsewhere it carries nothing yet, and `Context::default()` builds one, so a test can call a handler directly.
+#[cfg(target_os = "android")]
+use jni::{JNIEnv, objects::JObject};
+
+/// What a [`background_handler`](crate::background_handler) runs with, borrowed for that one call on its thread.
 ///
 /// ```
 /// # #[cfg(not(target_os = "android"))] {
 /// use pushups::{Context, Message};
 ///
-/// fn on_push(_context: Context, message: Message) -> usize {
+/// fn on_push(_context: Context<'_>, message: Message) -> usize {
 ///     message.payload.len()
 /// }
 ///
@@ -19,27 +20,32 @@ use std::ffi::c_void;
 /// ```
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(not(target_os = "android"), derive(Default))]
-pub struct Context {
+pub struct Context<'a> {
     #[cfg(target_os = "android")]
-    pub(crate) vm: *mut c_void,
+    env: &'a JNIEnv<'a>,
     #[cfg(target_os = "android")]
-    pub(crate) context: *mut c_void,
+    context: &'a JObject<'a>,
     #[cfg(not(target_os = "android"))]
-    pub(crate) _private: (),
+    _callback: PhantomData<(&'a (), *const ())>,
+}
+
+#[cfg(target_os = "android")]
+impl<'a> Context<'a> {
+    pub(crate) fn new(env: &'a JNIEnv<'a>, context: &'a JObject<'a>) -> Self {
+        Self { env, context }
+    }
 }
 
 #[cfg(target_os = "android")]
 #[cfg_attr(docsrs, doc(cfg(target_os = "android")))]
-impl Context {
-    /// The process's `JavaVM*`.
-    #[must_use]
-    pub fn android_vm(&self) -> *mut c_void {
-        self.vm
-    }
-
-    /// The `android.content.Context` the push arrived on, a JNI `jobject`.
-    #[must_use]
-    pub fn android_context(&self) -> *mut c_void {
-        self.context
+impl Context<'_> {
+    /// Runs `body` with the callback's JNI environment and the `android.content.Context` the push arrived on.
+    pub fn with_jni<T>(
+        &self,
+        body: impl for<'local> FnOnce(&mut JNIEnv<'local>, &JObject<'local>) -> T,
+    ) -> T {
+        // SAFETY: the clone stays on the callback's thread inside its frame, and `body` cannot return its local references.
+        let mut env = unsafe { self.env.unsafe_clone() };
+        body(&mut env, self.context)
     }
 }
