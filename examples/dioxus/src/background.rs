@@ -25,9 +25,8 @@ fn on_push(_context: Context, message: Message) {
     let fetched = catch_up();
     let fetch_ms = started.elapsed().as_millis();
     log(&format!(
-        "handler started_app={} entered_at_ms={entered} {} fetch_ms={fetch_ms} fetch={fetched}",
-        message.started_app,
-        support::timing(&message, entered),
+        "{} fetch_ms={fetch_ms} fetch={fetched}",
+        support::handled(&message, entered)
     ));
 }
 

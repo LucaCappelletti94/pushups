@@ -5,7 +5,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use dioxus::prelude::*;
 use futures_util::StreamExt;
-use pushups::{Event, Permission};
 use pushups_example_support as support;
 
 use super::log;
@@ -22,7 +21,7 @@ pub fn App() -> Element {
             lines.write().push(format!("register failed: {error}"));
         }
         while let Some(event) = events.next().await {
-            log(&describe(&event));
+            log(&support::describe(&event));
             lines.write().push(support::shown(&event));
             if let Err(error) = support::register_again(&event) {
                 lines.write().push(format!("register failed: {error}"));
@@ -40,12 +39,7 @@ pub fn App() -> Element {
             div { class: "actions",
                 button {
                     onclick: move |_| async move {
-                        let answer = match pushups::request_permission().await {
-                            Ok(Permission::Granted) => "granted".to_owned(),
-                            Ok(Permission::Denied) => "denied".to_owned(),
-                            Ok(other) => format!("{other:?}"),
-                            Err(error) => format!("failed: {error}"),
-                        };
+                        let answer = support::permission(pushups::request_permission().await);
                         log(&format!("permission {answer}"));
                         permission.set(Some(answer));
                     },
@@ -112,17 +106,3 @@ fn copy_text(text: &str) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn copy_text(_text: &str) {}
-
-fn describe(event: &Event) -> String {
-    let at = support::now_ms();
-    match event {
-        Event::Token(token) => format!("ui token at_ms={at} {}", support::token(token)),
-        Event::RegistrationFailed(error) => format!("ui registration failed at_ms={at} {error}"),
-        Event::Message(message) => format!(
-            "ui message at_ms={at} started_app={} {}",
-            message.started_app,
-            support::timing(message, at)
-        ),
-        Event::MessagesDropped => format!("ui messages dropped at_ms={at}"),
-    }
-}

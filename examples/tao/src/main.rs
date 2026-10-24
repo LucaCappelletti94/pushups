@@ -61,7 +61,7 @@ fn main() {
                 log(&format!("ui ready at_ms={}", support::now_ms()));
             }
             TaoEvent::UserEvent(Update::Push(event)) => {
-                log(&describe(&event));
+                log(&support::describe(&event));
                 if let Some(screen) = &mut screen {
                     screen.push(support::shown(&event));
                 }
@@ -114,39 +114,18 @@ fn main() {
             let proxy = proxy.clone();
             // A thread of its own, outside any async runtime, so blocking on the prompt is safe.
             std::thread::spawn(move || {
-                let answer = match futures_executor::block_on(pushups::request_permission()) {
-                    Ok(permission) => format!("{permission:?}"),
-                    Err(error) => format!("failed: {error}"),
-                };
+                let answer =
+                    support::permission(futures_executor::block_on(pushups::request_permission()));
                 let _ = proxy.send_event(Update::Permission(answer));
             });
         }
     });
 }
 
-fn describe(event: &Event) -> String {
-    let at = support::now_ms();
-    match event {
-        Event::Token(token) => format!("ui token at_ms={at} {}", support::token(token)),
-        Event::RegistrationFailed(error) => format!("ui registration failed at_ms={at} {error}"),
-        Event::Message(message) => format!(
-            "ui message at_ms={at} started_app={} payload={}",
-            message.started_app,
-            String::from_utf8_lossy(&message.payload)
-        ),
-        Event::MessagesDropped => format!("ui messages dropped at_ms={at}"),
-    }
-}
-
 /// Runs off the main thread for every push the system delivers.
 #[pushups::background_handler]
 fn on_push(_context: Context, message: Message) {
-    log(&format!(
-        "handler started_app={} entered_at_ms={} payload={}",
-        message.started_app,
-        support::now_ms(),
-        String::from_utf8_lossy(&message.payload)
-    ));
+    support::handle_push(&message, log);
 }
 
 fn log(line: &str) {

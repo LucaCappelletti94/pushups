@@ -1066,10 +1066,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pushups-probe-support"
+version = "0.0.0"
+dependencies = [
+ "pushups",
+]
+
+[[package]]
 name = "pushups-w0-probe"
 version = "0.0.0"
 dependencies = [
  "pushups",
+ "pushups-probe-support",
 ]
 
 [[package]]

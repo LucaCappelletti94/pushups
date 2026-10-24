@@ -9,10 +9,7 @@
 mod app;
 mod background;
 
-use pushups::{
-    Config, LinuxConfig, Message, Notification, UnifiedPushConfig, VapidPublicKey, WebPushConfig,
-    WnsConfig,
-};
+use pushups::{Config, Message, Notification};
 use pushups_example_support as support;
 
 pushups::firebase_config!("google-services.json");
@@ -32,42 +29,16 @@ fn main() {
 }
 
 fn config() -> Config {
-    // The bundle identifier, which also names the app on the Linux session bus.
-    let mut config = Config::new().linux(
-        LinuxConfig::new("rs.pushups.example")
-            .app_notifications("pushups example", support::app_icon()),
-    );
-    if let Some(remote_id) = option_env!("PUSHUPS_WNS_REMOTE_ID") {
-        config = config.windows(
-            WnsConfig::new(remote_id).app_notifications("pushups example", support::app_icon()),
-        );
+    let config = support::desktop_config();
+    match support::web_push(None) {
+        Some(web) => config.web(web),
+        None => config,
     }
-    let Some(key) = option_env!("PUSHUPS_VAPID_PUBLIC_KEY") else {
-        return config;
-    };
-    let key = VapidPublicKey::from_base64url(key).expect("PUSHUPS_VAPID_PUBLIC_KEY is a VAPID key");
-    let web = WebPushConfig::new(key);
-    config
-        .unified_push(UnifiedPushConfig::new(key))
-        .web(match option_env!("PUSHUPS_WEB_WORKER") {
-            Some("static") => web,
-            _ => web.rust_handler(),
-        })
 }
 
 /// Runs in the service worker for every push, and decides what the user sees.
 async fn notification_for(message: Message) -> Notification {
-    let at = support::now_ms();
-    let line = support::timing(&message, at);
-    log(&format!("worker push at_ms={at} {line}"));
-    Notification::new(
-        support::field(&message, "title").unwrap_or_else(|| "pushups from Rust".to_owned()),
-    )
-    .body(
-        support::field(&message, "body")
-            .unwrap_or_else(|| format!("built in the service worker, {line}")),
-    )
-    .navigate("/")
+    support::worker_notification(&message, log)
 }
 
 fn log(line: &str) {

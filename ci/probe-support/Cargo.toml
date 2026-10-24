@@ -1,0 +1,11 @@
+[package]
+name = "pushups-probe-support"
+description = "The file and message helpers the Linux and Windows probes share"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+pushups = { path = "../.." }
+
+[workspace]
