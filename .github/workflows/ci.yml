@@ -96,10 +96,10 @@ jobs:
       # Every feature but `dioxus`, which needs the Rust version Dioxus 0.7 apps already need. A
       # check needs no linker, so the Windows target runs here too.
       - run: cargo +1.88 check --workspace --features stream,serde
-      - run: cargo +1.88 check --workspace --features stream,serde --target aarch64-linux-android
-      - run: cargo +1.88 check --workspace --features stream,serde --target aarch64-apple-ios
-      - run: cargo +1.88 check --workspace --features stream,serde --target aarch64-apple-darwin
-      - run: cargo +1.88 check --workspace --features stream,serde --target x86_64-pc-windows-msvc
+      - run: cargo +1.88 check --workspace --features stream,serde,encryption --target aarch64-linux-android
+      - run: cargo +1.88 check --workspace --features stream,serde,encryption --target aarch64-apple-ios
+      - run: cargo +1.88 check --workspace --features stream,serde,encryption --target aarch64-apple-darwin
+      - run: cargo +1.88 check --workspace --features stream,serde,encryption --target x86_64-pc-windows-msvc
 
   tauri-plugin:
     name: tauri-plugin-pushups

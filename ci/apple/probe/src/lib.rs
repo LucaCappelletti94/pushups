@@ -2,7 +2,7 @@
 
 use pushups::{Error, Message, Notification, Rendering, RenderingContext};
 
-#[pushups::notification_service]
+#[pushups::rendering_handler]
 fn render(_context: RenderingContext, message: Message) -> Result<Rendering, Error> {
     let payload: serde_json::Value = serde_json::from_slice(&message.payload)
         .map_err(|error| Error::Platform(error.to_string()))?;

@@ -26,7 +26,7 @@ pushups::set_handler(|event| match event {
 let _ = pushups::register();
 ```
 
-The handler runs on the platform's delivery thread, so waking the toolkit is its job. The `stream` feature adds `pushups::events()`, the same events as a stream.
+The handler runs on the platform's delivery thread, so waking the toolkit is its job. The `stream` feature adds `pushups::events()`, the same events as a stream. The `encryption` feature makes the pushes end-to-end encrypted, the device's keys in the platform key store, and `pushups::rotate_keys()` replaces the keys and registers again.
 
 ## Support
 
@@ -70,7 +70,7 @@ fn on_push(context: Context<'_>, message: Message) {
 
 ## iOS and macOS
 
-The crate adds its push methods to whatever app delegate the toolkit installs, while closed-app iOS alert transformation uses a separate [`notification_service`] Rust callback and [Swift extension adapter](https://github.com/LucaCappelletti94/pushups/blob/main/docs/mobile-notifications.md). The bundle needs the push entitlement and, on iOS, the `remote-notification` background mode, which a `dx` app sets in `Dioxus.toml`. A Tauri app gets the iOS entitlement and the background mode from `tauri-plugin-pushups` and names a macOS entitlements file in `tauri.conf.json`, as [`examples/tauri`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/tauri) does.
+The crate adds its push methods to whatever app delegate the toolkit installs, while closed-app iOS alert transformation uses a separate [`rendering_handler`] Rust callback and [Swift extension adapter](https://github.com/LucaCappelletti94/pushups/blob/main/docs/mobile-notifications.md). The bundle needs the push entitlement and, on iOS, the `remote-notification` background mode, which a `dx` app sets in `Dioxus.toml`. A Tauri app gets the iOS entitlement and the background mode from `tauri-plugin-pushups` and names a macOS entitlements file in `tauri.conf.json`, as [`examples/tauri`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/tauri) does.
 
 ```toml
 [ios.entitlements]
@@ -102,7 +102,7 @@ let config = Config::new().web(WebPushConfig::new(key));
 
 ## Linux
 
-The crate speaks UnifiedPush over D-Bus to the user's distributor, such as KDE's, and a push to a closed app starts it through D-Bus activation for the background handler. The desktop shows nothing for a push by itself, so the app calls `Notification::show`, and a tap on a notification with `data` reaches the app as a message. Through the desktop portal, 1.19.4 or later, a tap on a closed app opens it. Without that portal a tap reaches the app only while the process that showed the notification runs. `LinuxConfig::app_notifications` names the app and its icon on the notifications, otherwise they carry the app id.
+The crate speaks UnifiedPush over D-Bus to the user's distributor, such as KDE's, and a push to a closed app starts it through D-Bus activation for the background handler. The desktop shows nothing for a push by itself, so the app's `rendering_handler` calls `Notification::show` with the notification it returns, and a tap on a notification with `data` reaches the app as a message. Through the desktop portal, 1.19.4 or later, a tap on a closed app opens it. Without that portal a tap reaches the app only while the process that showed the notification runs. `LinuxConfig::app_notifications` names the app and its icon on the notifications, otherwise they carry the app id.
 
 ```rust
 use pushups::{Config, LinuxConfig, UnifiedPushConfig, VapidPublicKey};

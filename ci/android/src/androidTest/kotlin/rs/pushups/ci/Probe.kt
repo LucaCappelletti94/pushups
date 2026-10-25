@@ -51,6 +51,10 @@ object Probe {
     @JvmStatic
     external fun handled(): String
 
+    /** Every push the rendering handler received, one per line. */
+    @JvmStatic
+    external fun rendered(): String
+
     /** Writes the Rust coverage profile to [path]. */
     @JvmStatic
     external fun writeCoverage(path: String): Boolean

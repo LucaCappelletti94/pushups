@@ -13,13 +13,20 @@ use super::log;
 /// `adb reverse tcp:8787 tcp:8787`.
 const CATCH_UP: &str = "127.0.0.1:8787";
 
+/// Shows the push as a desktop notification on Linux and Windows, where the push arrives in the
+/// process this module's background handler runs in.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[pushups::rendering_handler]
+fn render(
+    _context: pushups::RenderingContext,
+    message: Message,
+) -> Result<pushups::Rendering, pushups::Error> {
+    Ok(support::rendered(&message).into())
+}
+
 /// Runs in the process the push woke, before any UI exists.
 #[pushups::background_handler]
 fn on_push(_context: Context, message: Message) {
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
-    if let Err(error) = support::popup(&message) {
-        log(&format!("popup failed: {error}"));
-    }
     let entered = support::now_ms();
     let started = Instant::now();
     let fetched = catch_up();

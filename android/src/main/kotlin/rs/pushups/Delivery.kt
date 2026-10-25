@@ -4,8 +4,8 @@ import android.content.Context
 import android.util.Log
 
 /**
- * Hands one push to Rust, which persists or emits it, then runs the app's background handler
- * when one exists. FCM and UnifiedPush both deliver through here.
+ * Hands one push to Rust, which persists or emits it, then runs the app's rendering handler
+ * and background handler when they exist. FCM and UnifiedPush both deliver through here.
  */
 internal fun deliverPush(context: Context, payload: ByteArray) {
     if (!ProcessState.loaded) {
@@ -14,6 +14,13 @@ internal fun deliverPush(context: Context, payload: ByteArray) {
     }
     val startedApp = ProcessState.pushStartedApp()
     invokeNative("onMessage") { Native.onMessage(payload, startedApp) }
+    try {
+        RenderingHandler.render(context, payload, startedApp)
+    } catch (e: UnsatisfiedLinkError) {
+        Log.i(TAG, "no rendering handler")
+    } catch (e: RuntimeException) {
+        Log.e(TAG, "rendering handler", e)
+    }
     try {
         BackgroundHandler.handle(context, payload, startedApp)
     } catch (e: UnsatisfiedLinkError) {

@@ -205,6 +205,7 @@ fn deliver(
             started_app,
         };
         DISPATCHER.emit(Event::Message(message.clone()));
+        crate::__private::run_rendering_handler(&message);
         crate::__private::run_background_handler(message);
     });
     // The deferral keeps the task alive while the handler runs, so it completes last.

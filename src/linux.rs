@@ -397,6 +397,7 @@ impl Connector {
             message
         };
         DISPATCHER.flush();
+        crate::__private::run_rendering_handler(&message);
         crate::__private::run_background_handler(message);
         Ok(reply)
     }

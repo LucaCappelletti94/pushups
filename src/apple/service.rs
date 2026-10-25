@@ -1,14 +1,16 @@
-//! The Apple entries the `#[pushups::notification_service]` expansion exports, which drive the
+//! The Apple entries the `#[pushups::rendering_handler]` expansion exports, which drive the
 //! rendering service of one native service instance with the adapter's completion thunk.
 
 use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
 use crate::__private::ios::Finish;
-use crate::rendering::{CompletionCallback, RenderingOutcome, RenderingService};
+use crate::rendering::{
+    CompletionCallback, RenderingOutcome, RenderingService, Settled, mapped_fields,
+};
 use crate::{Error, Message, Rendering, RenderingContext, Suppression};
 
-/// How long a transform may run before the alert is left as sent, inside Apple's 30 seconds.
+/// How long a render may run before the alert is left as sent, inside Apple's 30 seconds.
 const RENDERING_BOUND: Duration = Duration::from_secs(25);
 
 /// Nanoseconds per second, for capping the adapter's measured budget.
@@ -30,7 +32,7 @@ pub(crate) fn create(filtering_declared: bool) -> *mut c_void {
 }
 
 /// Starts the request for the alert the adapter received, superseding a pending one, and
-/// runs the transform within the budget the adapter measured from the alert's entry.
+/// runs the render within the budget the adapter measured from the alert's entry.
 ///
 /// # Safety
 ///
@@ -57,7 +59,11 @@ pub(crate) unsafe fn receive(
             deadline,
             finish_callback(finish, SendToken(token)),
             handler,
-            user_info.to_vec(),
+            mapped_fields,
+            Message {
+                payload: user_info.to_vec(),
+                started_app: false,
+            },
         );
     }
 }
@@ -102,16 +108,16 @@ impl SendToken {
 
 /// The completion callback that hands the settled result to the adapter's thunk.
 fn finish_callback(finish: Finish, token: SendToken) -> CompletionCallback {
-    Box::new(move |outcome, fields, _context| {
-        let (title, body, tag, data, navigate) = match &fields {
-            Some(fields) => (
+    Box::new(move |outcome, content, _context| {
+        let (title, body, tag, data, navigate) = match &content {
+            Some(Settled::Fields(fields)) => (
                 Some(fields.title.as_str()),
                 fields.body.as_deref(),
                 fields.tag.as_deref(),
                 fields.data.as_deref(),
                 fields.navigate.as_deref(),
             ),
-            None => (None, None, None, None, None),
+            _ => (None, None, None, None, None),
         };
         // SAFETY: the machine settles the request exactly once, and this is its one call, with
         // the strings alive for the call and `finish` the adapter's thunk.

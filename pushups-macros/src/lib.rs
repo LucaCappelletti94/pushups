@@ -183,9 +183,39 @@ pub fn background_handler(args: TokenStream, item: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Exports a synchronous `fn(RenderingContext, Message) -> Result<Rendering, Error>` for the [iOS service extension](https://github.com/LucaCappelletti94/pushups/blob/main/docs/mobile-notifications.md).
+/// Mark a free function as the rendering handler.
+///
+/// The function must take `pushups::RenderingContext` and `pushups::Message`, return
+/// `pushups::Rendering` as a `Result`, be synchronous, be non-generic and have no `self`.
+/// The function is kept unchanged. On every target the expansion type-checks the signature,
+/// so a wrong one fails with a clear type error. A second handler in one binary is a
+/// duplicate symbol at link time.
+///
+/// On Android the expansion additionally exports `Java_rs_pushups_RenderingHandler_render`,
+/// which the `pushups` module's push delivery calls before the background handler for
+/// every push that reaches a process, and the crate shows the rendered `Notification`
+/// through the module's presentation. On iOS and macOS it exports the
+/// `__pushups_notification_service` symbols the [iOS service extension](https://github.com/LucaCappelletti94/pushups/blob/main/docs/mobile-notifications.md)
+/// calls, which run the render within Apple's 30 seconds. On Linux and Windows it adds the
+/// function to a `linkme` slice the crate reads, since an executable there exports no symbol
+/// the crate could look up, and the crate runs the render for every push before the
+/// background handler, showing the rendered `Notification` for `Show` and nothing for
+/// `NoAlert`.
+///
+/// Android native calls preserve a pending Java exception and translate JNI errors or unwinding panics into Java exceptions.
+///
+/// # Example
+///
+/// ```ignore
+/// use pushups::{Error, Message, Notification, Rendering, RenderingContext};
+///
+/// #[pushups::rendering_handler]
+/// fn render(_context: RenderingContext, message: Message) -> Result<Rendering, Error> {
+///     Ok(Notification::new(message.payload.len().to_string()).into())
+/// }
+/// ```
 #[proc_macro_attribute]
-pub fn notification_service(args: TokenStream, item: TokenStream) -> TokenStream {
+pub fn rendering_handler(args: TokenStream, item: TokenStream) -> TokenStream {
     let item: TokenStream2 = item.into();
     let input: syn::ItemFn = match syn::parse2(item.clone()) {
         Ok(input) => input,
@@ -196,13 +226,14 @@ pub fn notification_service(args: TokenStream, item: TokenStream) -> TokenStream
             .into_iter()
             .next()
             .map_or_else(|| input.sig.ident.span(), |token| token.span().into());
-        return error("notification_service", span, "takes no arguments");
+        return error("rendering_handler", span, "takes no arguments");
     }
     if let Some(message) = validate(&input) {
-        return error("notification_service", input.sig.ident.span(), message);
+        return error("rendering_handler", input.sig.ident.span(), message);
     }
     let name = &input.sig.ident;
     let pushups = pushups_path();
+    let apple = apple_exports(name, &pushups);
     quote! {
         #item
         const _: fn(
@@ -210,6 +241,47 @@ pub fn notification_service(args: TokenStream, item: TokenStream) -> TokenStream
             #pushups::Message,
         ) -> core::result::Result<#pushups::Rendering, #pushups::Error> = #name;
 
+        #[cfg(target_os = "android")]
+        #pushups::__private::android::exports! {
+            fn Java_rs_pushups_RenderingHandler_render<'local>(
+                env: #pushups::__private::android::jni::JNIEnv<'local>,
+                _class: #pushups::__private::android::jni::objects::JClass<'local>,
+                _context: #pushups::__private::android::jni::objects::JObject<'local>,
+                payload: #pushups::__private::android::jni::objects::JByteArray<'local>,
+                started_app: #pushups::__private::android::jni::sys::jboolean,
+            ) -> () {
+                #pushups::__private::android::run_rendering_handler(
+                    env,
+                    &payload,
+                    started_app != #pushups::__private::android::jni::sys::JNI_FALSE,
+                    #name,
+                )
+            }
+        }
+
+        #apple
+
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        #[#pushups::__private::linkme::distributed_slice(#pushups::__private::RENDERING_HANDLERS)]
+        #[linkme(crate = #pushups::__private::linkme)]
+        static __PUSHUPS_RENDERING_HANDLER: fn(
+            #pushups::RenderingContext,
+            #pushups::Message,
+        ) -> core::result::Result<#pushups::Rendering, #pushups::Error> = #name;
+
+        // Makes a second handler a duplicate symbol at link time, as on the other targets.
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        #[unsafe(no_mangle)]
+        #[used]
+        static __PUSHUPS_ONE_RENDERING_HANDLER: u8 = 0;
+    }
+    .into()
+}
+
+/// The iOS and macOS exports the `rendering_handler` expansion names, with the static that
+/// keeps them through the linker's dead-strip, since only the extension adapter names them.
+fn apple_exports(name: &syn::Ident, pushups: &TokenStream2) -> TokenStream2 {
+    quote! {
         #[cfg(any(target_os = "ios", target_os = "macos"))]
         #[unsafe(no_mangle)]
         pub extern "C" fn __pushups_notification_service_create(
@@ -295,7 +367,6 @@ pub fn notification_service(args: TokenStream, item: TokenStream) -> TokenStream
             __pushups_notification_service_deallocated,
         );
     }
-    .into()
 }
 
 /// The rules a background handler function must satisfy.

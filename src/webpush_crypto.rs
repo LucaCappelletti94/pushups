@@ -48,6 +48,18 @@ impl core::fmt::Debug for Keys {
 /// A failure to decrypt a Web Push message body.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum DecryptError {
+    #[cfg_attr(
+        all(
+            not(test),
+            any(
+                target_os = "android",
+                target_os = "ios",
+                target_os = "macos",
+                target_os = "windows"
+            )
+        ),
+        expect(dead_code, reason = "constructed by `Keys::generate`")
+    )]
     /// The randomness source failed, so no fresh key pair could be built.
     #[error("could not read random bytes")]
     Randomness,
@@ -89,13 +101,33 @@ impl Keys {
         }
     }
 
+    #[cfg_attr(
+        all(
+            not(test),
+            any(
+                target_os = "android",
+                target_os = "ios",
+                target_os = "macos",
+                target_os = "windows"
+            )
+        ),
+        expect(dead_code, reason = "the key store's `store_new` calls this")
+    )]
     /// Generate a fresh P-256 secret key and authentication secret.
+    ///
+    /// The secret scalar is drawn again while it is not below the group order, rejection
+    /// sampling.
     pub(crate) fn generate() -> Result<Self, DecryptError> {
         let mut secret = [0u8; 32];
         let mut auth = [0u8; AUTH_LEN];
         getrandom::fill(&mut secret).map_err(|_| DecryptError::Randomness)?;
         getrandom::fill(&mut auth).map_err(|_| DecryptError::Randomness)?;
-        let secret = SecretKey::from_bytes(&secret.into()).map_err(|_| DecryptError::Randomness)?;
+        let secret = loop {
+            if let Ok(key) = SecretKey::from_bytes(&secret.into()) {
+                break key;
+            }
+            getrandom::fill(&mut secret).map_err(|_| DecryptError::Randomness)?;
+        };
         Ok(Self::new(secret, auth))
     }
 
@@ -112,6 +144,18 @@ impl Keys {
         Some(Self::new(secret, auth))
     }
 
+    #[cfg_attr(
+        all(
+            not(test),
+            any(
+                target_os = "android",
+                target_os = "ios",
+                target_os = "macos",
+                target_os = "windows"
+            )
+        ),
+        expect(dead_code, reason = "the key store's `store_new` calls this")
+    )]
     /// Serialize the key pair as the 32-byte secret scalar and the 16-byte authentication
     /// secret.
     pub(crate) fn to_bytes(&self) -> [u8; KEY_LEN] {

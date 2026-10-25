@@ -116,6 +116,7 @@ run_variant jni-boundary "config-real" default NativeBoundaryTest
 run_variant full "config-real background-handler" default PushupsTest
 run_variant fallback-name config-real fallback-name FallbackNameTest
 run_variant no-background-handler config-real default NoBackgroundHandlerTest
+run_variant rendering "config-real rendering-handler" default RenderingHandlerTest
 run_variant unconfigured "" default RegistrationFailsTest expect "FCM is not configured"
 run_variant mismatched config-mismatched default RegistrationFailsTest expect "FCM is not configured"
 run_variant rejected config-fixture default RegistrationFailsTest expect "Please set a valid API key"

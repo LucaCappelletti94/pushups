@@ -60,7 +60,7 @@ pub mod ios {
     use crate::{Error, Message, Rendering, RenderingContext};
 
     /// The adapter's completion thunk. The machine settles the request exactly once, with
-    /// the settled outcome and, for a rendered alert, the transform's fields.
+    /// the settled outcome and, for a rendered alert, the render's fields.
     ///
     /// `token` is the adapter's retained completion box, which the thunk releases after its
     /// one call. Each string pointer is null or `*_len` readable UTF-8 bytes, alive for the
@@ -89,7 +89,7 @@ pub mod ios {
     }
 
     /// Starts the rendering request for the alert the adapter received, superseding a pending
-    /// one, under the remaining budget the adapter measured, and runs the app's transform.
+    /// one, under the remaining budget the adapter measured, and runs the app's render.
     ///
     /// # Safety
     ///
@@ -145,11 +145,19 @@ pub mod android {
     pub use crate::android_boundary::boundary;
     pub use jni;
 
+    use std::time::{Duration, Instant};
+
     use jni::objects::{JByteArray, JObject, JString};
     use jni::{JNIEnv, sys::jobjectArray};
 
     pub use super::FirebaseClient;
-    use crate::{Context, Message};
+    use crate::rendering::{RenderingService, Settled, Suppression, presentable};
+    use crate::{Context, Error, Message, Rendering, RenderingContext, RenderingOutcome};
+
+    /// The bound of one rendering request, inside FCM's `onMessageReceived` processing,
+    /// which gives the process a few seconds to render a notification at once, and leaves
+    /// the presentation call room inside that window.
+    const RENDERING_BOUND: Duration = Duration::from_secs(5);
 
     /// Returns the selected client's values as a Java-owned array in the caller's native frame.
     ///
@@ -202,6 +210,49 @@ pub mod android {
         );
         Ok(())
     }
+
+    /// Runs the app's rendering handler for one push through the rendering service, waiting
+    /// for it to settle, and shows the settled notification through the module's
+    /// presentation.
+    ///
+    /// # Errors
+    ///
+    /// Returns JNI conversion errors, and the presentation's refusal of the settled
+    /// notification as a pending Java exception.
+    pub fn run_rendering_handler(
+        env: &mut JNIEnv<'_>,
+        payload: &JByteArray<'_>,
+        started_app: bool,
+        handler: fn(RenderingContext, Message) -> Result<Rendering, Error>,
+    ) -> jni::errors::Result<()> {
+        static SERVICE: RenderingService = RenderingService::new(Suppression::Declared);
+        let payload = env.convert_byte_array(payload)?;
+        let deadline = Instant::now() + RENDERING_BOUND;
+        let (settled, wait) = std::sync::mpsc::channel();
+        SERVICE.begin(
+            deadline,
+            Box::new(move |outcome, content, _context| {
+                let _ = settled.send((outcome, content));
+            }),
+            handler,
+            presentable,
+            Message {
+                payload,
+                started_app,
+            },
+        );
+        let (outcome, content) = wait
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap_or((RenderingOutcome::Expired, None));
+        if outcome == RenderingOutcome::Rendered
+            && let Some(Settled::Notification(notification)) = content
+            && let Err(error) = crate::android::show(&notification)
+        {
+            env.throw_new("java/lang/RuntimeException", error.to_string())?;
+            return Err(jni::errors::Error::JavaException);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -219,6 +270,65 @@ pub static BACKGROUND_HANDLERS: [fn(crate::Context, crate::Message)];
 pub(crate) fn run_background_handler(message: crate::Message) {
     if let Some(handler) = BACKGROUND_HANDLERS.first() {
         let _ = std::panic::catch_unwind(|| handler(crate::Context::default(), message));
+    }
+}
+
+/// The app's rendering handler, which `#[rendering_handler]` adds on Linux and Windows.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[linkme::distributed_slice]
+pub static RENDERING_HANDLERS: [fn(
+    crate::RenderingContext,
+    crate::Message,
+) -> core::result::Result<crate::Rendering, crate::Error>];
+
+/// The bound of one rendering request on Linux, inside the D-Bus call the push arrived on,
+/// which holds the process's idle counter, so a headless process stays alive for the render
+/// and its show inside its 10-second idle exit, and matches the crate's own notification
+/// service bound.
+#[cfg(target_os = "linux")]
+const RENDERING_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The bound of one rendering request on Windows, inside the push's deferral, which keeps
+/// the task alive for the render and its show, and matches the crate's own `Show` bound.
+#[cfg(target_os = "windows")]
+const RENDERING_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Runs the app's rendering handler for one push on Linux and Windows, if it has one, so the
+/// settled notification shows before the background handler runs. A failed, panicking or
+/// expired render shows nothing, and a show the platform refuses is left to the background
+/// handler's own presentation of the same push.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub(crate) fn run_rendering_handler(message: &crate::Message) {
+    static SERVICE: crate::rendering::RenderingService =
+        crate::rendering::RenderingService::new(crate::Suppression::Declared);
+    let Some(handler) = RENDERING_HANDLERS.first() else {
+        return;
+    };
+    let deadline = std::time::Instant::now() + RENDERING_BOUND;
+    let (settled, wait) = std::sync::mpsc::channel();
+    SERVICE.begin(
+        deadline,
+        Box::new(move |outcome, content, _context| {
+            let _ = settled.send((outcome, content));
+        }),
+        *handler,
+        crate::rendering::whole,
+        message.clone(),
+    );
+    let (outcome, content) = wait
+        .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+        .unwrap_or((crate::RenderingOutcome::Expired, None));
+    if outcome == crate::RenderingOutcome::Rendered
+        && let Some(crate::rendering::Settled::Notification(notification)) = content
+    {
+        #[cfg(target_os = "linux")]
+        {
+            let _ = crate::linux::show(&notification);
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let _ = crate::windows::show(&notification);
+        }
     }
 }
 

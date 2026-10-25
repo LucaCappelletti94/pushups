@@ -108,7 +108,7 @@ private func pushupsExpired(_ service: UnsafeMutableRawPointer)
 @_silgen_name("__pushups_notification_service_deallocated")
 private func pushupsDeallocated(_ service: UnsafeMutableRawPointer)
 
-/// Transforms an alert through the Rust `notification_service` callback.
+/// Transforms an alert through the Rust `rendering_handler` callback.
 public final class PushupsNotificationService: UNNotificationServiceExtension {
     private let service: UnsafeMutableRawPointer
 
