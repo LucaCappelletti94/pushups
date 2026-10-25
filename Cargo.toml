@@ -2,7 +2,7 @@
 name = "pushups"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Receive push notifications in a Rust app: APNs on iOS and macOS, FCM on Android, WNS on Windows, UnifiedPush on Linux, Web Push in the browser, under any toolkit"
 repository = "https://github.com/LucaCappelletti94/pushups"
 license = "MIT"
@@ -17,11 +17,12 @@ links = "pushups"
 stream = ["dep:futures-channel", "dep:futures-core"]
 # Lets `dx` bundle the Android module and the static service worker from this crate.
 dioxus = ["dep:manganis"]
-# `Serialize` on `WebPushSubscription`, in the shape of the browser's `PushSubscription.toJSON()`.
-serde = ["dep:serde"]
+# `Serialize` and `Deserialize` on `Token`, and `Serialize` on `WebPushSubscription` in the shape of
+# the browser's `PushSubscription.toJSON()`.
+serde = ["pushups-token/serde"]
 
 [workspace]
-members = ["pushups-macros"]
+members = ["pushups-macros", "pushups-sender", "pushups-token"]
 # Built in its own workspace, since `tauri` needs GTK on Linux, Rust 1.90 and no wasm32.
 exclude = ["tauri-plugin-pushups"]
 
@@ -30,7 +31,7 @@ futures-channel = { version = "0.3", optional = true, default-features = false, 
 futures-core = { version = "0.3", optional = true, default-features = false }
 parking_lot = "0.12"
 pushups-macros = { version = "0.1.0", path = "pushups-macros" }
-serde = { version = "1", optional = true, features = ["derive"] }
+pushups-token = { version = "0.1.0", path = "pushups-token" }
 thiserror = "2"
 
 [target.'cfg(target_os = "android")'.dependencies]
@@ -71,7 +72,7 @@ zbus = "5"
 linkme = "0.3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# The newest 0.6x line that builds on Rust 1.85, since the 0.100 line of `windows-core` needs 1.95.
+# The newest 0.6x line that builds on Rust 1.88, since the 0.100 line of `windows-core` needs 1.95.
 # The `IMap` that `AppNotificationActivatedEventArgs` returns for `Arguments` and `UserInput`.
 windows = { version = "0.62", default-features = false, features = ["Foundation", "Foundation_Collections", "ApplicationModel_Background", "ApplicationModel_Core"] }
 windows-collections = "0.3"

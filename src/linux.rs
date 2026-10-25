@@ -273,14 +273,14 @@ fn take_name(runtime: &Runtime, headless: bool) -> Result<(), Error> {
 
 /// Serves the calls a push brought, then exits once idle or replaced by a UI process.
 fn serve_headless(runtime: &'static Runtime) -> ! {
-    if let Ok(proxy) = DBusProxy::new(&runtime.connection) {
-        if let Ok(lost) = proxy.receive_name_lost() {
-            thread::spawn(move || {
-                if lost.into_iter().next().is_some() {
-                    runtime.activity.lock().replaced = true;
-                }
-            });
-        }
+    if let Ok(proxy) = DBusProxy::new(&runtime.connection)
+        && let Ok(lost) = proxy.receive_name_lost()
+    {
+        thread::spawn(move || {
+            if lost.into_iter().next().is_some() {
+                runtime.activity.lock().replaced = true;
+            }
+        });
     }
     loop {
         {
@@ -519,10 +519,10 @@ fn load_keys(path: &Path) -> io::Result<Keys> {
 
 /// The stored registration token, or a new one stored in place of a missing one.
 fn load_token(path: &Path) -> io::Result<String> {
-    if let Ok(token) = fs::read_to_string(path) {
-        if !token.is_empty() {
-            return Ok(token);
-        }
+    if let Ok(token) = fs::read_to_string(path)
+        && !token.is_empty()
+    {
+        return Ok(token);
     }
     let mut bytes = [0; 16];
     getrandom::fill(&mut bytes).map_err(io::Error::other)?;

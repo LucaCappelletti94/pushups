@@ -60,7 +60,7 @@ impl Entry {
     pub(crate) fn into_event(self) -> Event {
         match self {
             Self::Message(message) => Event::Message(message),
-            Self::FcmToken(token) => Event::Token(Token::Fcm(token)),
+            Self::FcmToken(token) => Event::Token(Token::Fcm { token, keys: None }),
             Self::MessagesDropped => Event::MessagesDropped,
             Self::WebPushToken {
                 endpoint,
@@ -487,7 +487,10 @@ mod tests {
     fn entries_become_the_matching_events() {
         assert_eq!(
             Entry::FcmToken("t".to_owned()).into_event(),
-            Event::Token(Token::Fcm("t".to_owned()))
+            Event::Token(Token::Fcm {
+                token: "t".to_owned(),
+                keys: None
+            })
         );
         assert_eq!(
             message(b"p", true).into_event(),

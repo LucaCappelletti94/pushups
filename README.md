@@ -6,7 +6,7 @@
 [![codecov](https://codecov.io/gh/LucaCappelletti94/pushups/graph/badge.svg)](https://codecov.io/gh/LucaCappelletti94/pushups)
 [![docs.rs](https://docs.rs/pushups/badge.svg)](https://docs.rs/pushups)
 [![crates.io](https://img.shields.io/crates/v/pushups.svg)](https://crates.io/crates/pushups)
-[![MSRV](https://img.shields.io/badge/MSRV-1.85-blue)](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/)
+[![MSRV](https://img.shields.io/badge/MSRV-1.88-blue)](https://blog.rust-lang.org/2025/06/26/Rust-1.88.0/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/LucaCappelletti94/pushups/blob/main/LICENSE)
 
 Push notifications for Rust apps through each platform's own service, [APNs](https://developer.apple.com/documentation/usernotifications/registering-your-app-with-apns) on iOS and macOS, [FCM](https://firebase.google.com/docs/cloud-messaging) or [UnifiedPush](https://unifiedpush.org/) on Android, [WNS](https://learn.microsoft.com/en-us/windows/apps/develop/notifications/push-notifications/) on Windows, UnifiedPush on Linux and [Web Push](https://developer.mozilla.org/en-US/docs/Web/API/Push_API) in the browser. The app calls `install` in `main` before its toolkit starts, sets one handler and calls `register`. The handler gets the token for the app's server and every push, including the one that started the app.

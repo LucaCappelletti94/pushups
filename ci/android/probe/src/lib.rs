@@ -119,7 +119,7 @@ fn files_dir(
 
 fn describe(event: &Event) -> String {
     match event {
-        Event::Token(Token::Fcm(token)) => format!("token {token}"),
+        Event::Token(Token::Fcm { token, .. }) => format!("token {token}"),
         Event::Token(token) => match token.web_push_subscription() {
             Some(subscription) => format!(
                 "webpush {} {} {}",
@@ -230,7 +230,7 @@ pushups::__private::android::exports! {
                     &event,
                     Event::RegistrationFailed(pushups::Error::Unregistered)
                 ),
-                "registered" => matches!(&event, Event::Token(Token::Fcm(_))),
+                "registered" => matches!(&event, Event::Token(Token::Fcm { .. })),
                 "session" => matches!(&event, Event::Message(_)),
                 _ => false,
             };

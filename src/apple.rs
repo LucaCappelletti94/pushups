@@ -218,7 +218,10 @@ fn became_active() {
 }
 
 fn token(token: Vec<u8>) {
-    DISPATCHER.emit(Event::Token(Token::Apns(token)));
+    DISPATCHER.emit(Event::Token(Token::Apns {
+        device_token: token,
+        keys: None,
+    }));
 }
 
 fn registration_failed(error: String) {

@@ -327,7 +327,7 @@ crate::__pushups_android_exports! {
             Event::registration_failed(reason)
         } else {
             let token: String = env.get_string(&token)?.into();
-            Event::Token(Token::Fcm(token))
+            Event::Token(Token::Fcm { token, keys: None })
         };
         DISPATCHER.emit(event);
         Ok(())

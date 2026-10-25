@@ -119,7 +119,7 @@ const DATA_KEY: &str = "pushups-data";
 /// The value the builder's `AddArgument` takes for a notification's `data`, base64url so the
 /// builder's own encoding is a no-op.
 fn launch_argument(data: &str) -> String {
-    crate::token::base64url(data.as_bytes())
+    pushups_token::base64url::encode(data.as_bytes())
 }
 
 /// The `data` bytes a launch attribute carries, or none when it lacks the key or its value is
@@ -127,7 +127,7 @@ fn launch_argument(data: &str) -> String {
 fn launch_argument_data(argument: &str) -> Option<Vec<u8>> {
     for (key, value) in argument.split(';').filter_map(|pair| pair.split_once('=')) {
         if key == DATA_KEY {
-            return crate::token::base64url_decode(value);
+            return pushups_token::base64url::decode(value);
         }
     }
     None
@@ -568,6 +568,7 @@ fn create_channel(remote_id: windows_core::GUID) -> Result<Token, Error> {
     Ok(Token::Wns {
         channel_uri,
         expires,
+        keys: None,
     })
 }
 

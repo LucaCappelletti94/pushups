@@ -91,15 +91,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: |
-          rustup toolchain install 1.85 --profile minimal
-          rustup target add --toolchain 1.85 aarch64-linux-android aarch64-apple-ios aarch64-apple-darwin x86_64-pc-windows-msvc
+          rustup toolchain install 1.88 --profile minimal
+          rustup target add --toolchain 1.88 aarch64-linux-android aarch64-apple-ios aarch64-apple-darwin x86_64-pc-windows-msvc
       # Every feature but `dioxus`, which needs the Rust version Dioxus 0.7 apps already need. A
       # check needs no linker, so the Windows target runs here too.
-      - run: cargo +1.85 check --workspace --features stream,serde
-      - run: cargo +1.85 check --workspace --features stream,serde --target aarch64-linux-android
-      - run: cargo +1.85 check --workspace --features stream,serde --target aarch64-apple-ios
-      - run: cargo +1.85 check --workspace --features stream,serde --target aarch64-apple-darwin
-      - run: cargo +1.85 check --workspace --features stream,serde --target x86_64-pc-windows-msvc
+      - run: cargo +1.88 check --workspace --features stream,serde
+      - run: cargo +1.88 check --workspace --features stream,serde --target aarch64-linux-android
+      - run: cargo +1.88 check --workspace --features stream,serde --target aarch64-apple-ios
+      - run: cargo +1.88 check --workspace --features stream,serde --target aarch64-apple-darwin
+      - run: cargo +1.88 check --workspace --features stream,serde --target x86_64-pc-windows-msvc
 
   tauri-plugin:
     name: tauri-plugin-pushups

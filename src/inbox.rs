@@ -131,7 +131,10 @@ mod tests {
         session_changed(&inbox, true);
         assert_eq!(
             *seen.lock(),
-            vec![Event::Token(crate::Token::Fcm("queued".to_owned()))]
+            vec![Event::Token(crate::Token::Fcm {
+                token: "queued".to_owned(),
+                keys: None
+            })]
         );
     }
 }

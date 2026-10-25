@@ -1169,7 +1169,7 @@ dependencies = [
  "p256",
  "parking_lot",
  "pushups-macros",
- "serde",
+ "pushups-token",
  "serde_json",
  "sha2",
  "tempfile",
@@ -1195,6 +1195,28 @@ dependencies = [
  "serde_json",
  "syn 3.0.6",
  "tempfile",
+]
+
+[[package]]
+name = "pushups-sender"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "getrandom",
+ "hkdf",
+ "p256",
+ "pushups-token",
+ "sha2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pushups-token"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

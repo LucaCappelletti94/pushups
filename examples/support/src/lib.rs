@@ -79,7 +79,7 @@ pub fn token(token: &Token) -> String {
         return format!("apns={hex}");
     }
     match token {
-        Token::Fcm(token) => format!("fcm={token}"),
+        Token::Fcm { token, .. } => format!("fcm={token}"),
         Token::Wns { channel_uri, .. } => format!("wns={channel_uri}"),
         _ => format!("{token:?}"),
     }

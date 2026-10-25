@@ -66,7 +66,6 @@ mod rendering;
 mod session;
 #[cfg(any(target_os = "ios", target_os = "macos", test))]
 mod started;
-mod token;
 #[cfg(any(
     not(any(
         target_os = "android",
@@ -122,8 +121,8 @@ pub use event::{Event, Message};
 pub use notification::Notification;
 pub use permission::Permission;
 pub use pushups_macros::{background_handler, firebase_config, notification_service};
+pub use pushups_token::{EncryptionKeys, Token, WebPushKeys, WebPushSubscription};
 pub use rendering::{Rendering, RenderingContext, RenderingOutcome, Suppression};
-pub use token::{Token, WebPushKeys, WebPushSubscription};
 pub use worker_file::write_service_worker;
 
 /// Connects the app to the platform's push service, before the toolkit's event loop starts.
