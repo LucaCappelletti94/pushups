@@ -24,7 +24,17 @@ class PushupsMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         Log.d(TAG, "message ${message.messageId} received, priority ${message.priority}")
-        deliverPush(applicationContext, JSONObject(message.data).toString().toByteArray(StandardCharsets.UTF_8))
+        val sealed = if (Envelope.enabled) message.data[Envelope.ENCRYPTED_FIELD] else null
+        if (sealed != null) {
+            // The Rust side logs the open failure and throws, so a null drops the push.
+            val plaintext = invokeNative("openEnvelope") { Native.openEnvelope(sealed) } ?: return
+            deliverPush(applicationContext, plaintext)
+            return
+        }
+        deliverPush(
+            applicationContext,
+            JSONObject(message.data).toString().toByteArray(StandardCharsets.UTF_8)
+        )
     }
 
     override fun onDeletedMessages() {

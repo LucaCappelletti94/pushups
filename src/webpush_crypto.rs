@@ -48,18 +48,6 @@ impl core::fmt::Debug for Keys {
 /// A failure to decrypt a Web Push message body.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum DecryptError {
-    #[cfg_attr(
-        all(
-            not(test),
-            any(
-                target_os = "android",
-                target_os = "ios",
-                target_os = "macos",
-                target_os = "windows"
-            )
-        ),
-        expect(dead_code, reason = "constructed by `Keys::generate`")
-    )]
     /// The randomness source failed, so no fresh key pair could be built.
     #[error("could not read random bytes")]
     Randomness,
@@ -101,18 +89,6 @@ impl Keys {
         }
     }
 
-    #[cfg_attr(
-        all(
-            not(test),
-            any(
-                target_os = "android",
-                target_os = "ios",
-                target_os = "macos",
-                target_os = "windows"
-            )
-        ),
-        expect(dead_code, reason = "the key store's `store_new` calls this")
-    )]
     /// Generate a fresh P-256 secret key and authentication secret.
     ///
     /// The secret scalar is drawn again while it is not below the group order, rejection
@@ -144,18 +120,6 @@ impl Keys {
         Some(Self::new(secret, auth))
     }
 
-    #[cfg_attr(
-        all(
-            not(test),
-            any(
-                target_os = "android",
-                target_os = "ios",
-                target_os = "macos",
-                target_os = "windows"
-            )
-        ),
-        expect(dead_code, reason = "the key store's `store_new` calls this")
-    )]
     /// Serialize the key pair as the 32-byte secret scalar and the 16-byte authentication
     /// secret.
     pub(crate) fn to_bytes(&self) -> [u8; KEY_LEN] {

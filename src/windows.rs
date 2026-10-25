@@ -74,6 +74,10 @@ use crate::config::AppNotifications;
 use crate::delivered::Delivered;
 #[cfg(target_os = "windows")]
 use crate::dispatch::DISPATCHER;
+#[cfg(feature = "encryption")]
+use crate::envelope;
+#[cfg(feature = "encryption")]
+use crate::key_store;
 #[cfg(target_os = "windows")]
 use crate::{Config, Error, Event, Message, Notification, Token};
 
@@ -194,10 +198,15 @@ fn deliver(
 ) -> Result<(), Error> {
     let deferral = push.GetDeferral().ok();
     let payload = push.Payload().map_err(Error::platform).map(|payload| {
-        let payload: Vec<u8> = payload.to_vec();
-        let first = delivered().first_delivery(&payload);
+        let body: Vec<u8> = payload.to_vec();
+        #[cfg(feature = "encryption")]
+        let Some(payload) = wns_payload(key_store::installed(), &body) else {
+            return;
+        };
+        #[cfg(not(feature = "encryption"))]
+        let payload = body;
         // A delivered set that cannot be read or written lets the push through, since a repeat beats a loss.
-        if !first.unwrap_or(true) {
+        if !delivered().first_delivery(&payload).unwrap_or(true) {
             return;
         }
         let message = Message {
@@ -213,6 +222,27 @@ fn deliver(
         let _ = deferral.Complete();
     }
     payload
+}
+
+/// The payload one WNS push body carries for the app's callbacks, the plaintext the body's
+/// envelope opened to or the body itself when it carries no envelope, or none when the
+/// envelope failed to open, which the caller drops with a log line.
+#[cfg(feature = "encryption")]
+fn wns_payload(store: Option<&key_store::KeyStore>, body: &[u8]) -> Option<Vec<u8>> {
+    let Some(sealed) = envelope::wns_sealed(body) else {
+        return Some(body.to_vec());
+    };
+    let Some(store) = store else {
+        eprintln!("pushups dropped a push it cannot decrypt, the key store is not installed");
+        return None;
+    };
+    match envelope::open(store, sealed) {
+        Ok(plaintext) => Some(plaintext),
+        Err(error) => {
+            eprintln!("pushups dropped a push it cannot decrypt: {error}");
+            None
+        }
+    }
 }
 
 /// The `PushReceived` handler, from the `WinRT` thread the push arrives on.
@@ -253,6 +283,16 @@ fn delivered_path(remote_id: &str) -> Result<PathBuf, Error> {
         .join("delivered"))
 }
 
+/// The service name the device's keys are stored under, the remote id in its canonical form.
+#[cfg(all(target_os = "windows", feature = "encryption"))]
+fn key_store_service(remote_id: &windows_core::GUID) -> String {
+    let [b0, b1, b2, b3, b4, b5, b6, b7] = remote_id.data4;
+    format!(
+        "rs.pushups/{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        remote_id.data1, remote_id.data2, remote_id.data3, b0, b1, b2, b3, b4, b5, b6, b7
+    )
+}
+
 /// Delivers one tap on a notification, from `NotificationInvoked` or from a tap activation.
 ///
 /// A tap on a notification without `data` emits no event, the Apple local-notification
@@ -274,6 +314,36 @@ fn deliver_tap(
         payload,
         started_app,
     }));
+    Ok(())
+}
+
+/// The push or tap the session bus started this process for, delivered once the runtime is up.
+#[cfg(target_os = "windows")]
+fn activate_from_args() -> Result<(), Error> {
+    let args = bindings::AppInstance::GetCurrent()
+        .map_err(Error::platform)?
+        .GetActivatedEventArgs()
+        .map_err(Error::platform)?;
+    match args.Kind().map_err(Error::platform)? {
+        bindings::ExtendedActivationKind::Push => {
+            let push = args
+                .Data()
+                .map_err(Error::platform)?
+                .cast::<bindings::PushNotificationReceivedEventArgs>()
+                .map_err(Error::platform)?;
+            deliver(&push, true)?;
+        }
+        // The tap that started the process carries its notification's `data`.
+        bindings::ExtendedActivationKind::AppNotification => {
+            let tap = args
+                .Data()
+                .map_err(Error::platform)?
+                .cast::<bindings::AppNotificationActivatedEventArgs>()
+                .map_err(Error::platform)?;
+            deliver_tap(&tap, true)?;
+        }
+        _ => {}
+    }
     Ok(())
 }
 
@@ -406,6 +476,13 @@ impl Backend for Windows {
                 wns.remote_id
             ))
         })?;
+        #[cfg(feature = "encryption")]
+        {
+            let store = windows_native_keyring_store::Store::new().map_err(|error| {
+                Error::Platform(format!("the key store could not be opened: {error}"))
+            })?;
+            key_store::install(store, key_store_service(&remote_id));
+        }
         // No COM apartment here, as tao's drag and drop needs this thread single-threaded and `windows-core` joins the implicit multithreaded one itself.
         let initialize = bootstrapper()?;
         // SAFETY: The 2.5 channel, null tag, zeroed minimum version and NOOP flag are the documented caller values.
@@ -471,30 +548,7 @@ impl Backend for Windows {
             delivered: Delivered::new(delivered_path),
         });
         drop(guard);
-        let args = bindings::AppInstance::GetCurrent()
-            .map_err(Error::platform)?
-            .GetActivatedEventArgs()
-            .map_err(Error::platform)?;
-        match args.Kind().map_err(Error::platform)? {
-            bindings::ExtendedActivationKind::Push => {
-                let push = args
-                    .Data()
-                    .map_err(Error::platform)?
-                    .cast::<bindings::PushNotificationReceivedEventArgs>()
-                    .map_err(Error::platform)?;
-                deliver(&push, true)?;
-            }
-            // The tap that started the process carries its notification's `data`.
-            bindings::ExtendedActivationKind::AppNotification => {
-                let tap = args
-                    .Data()
-                    .map_err(Error::platform)?
-                    .cast::<bindings::AppNotificationActivatedEventArgs>()
-                    .map_err(Error::platform)?;
-                deliver_tap(&tap, true)?;
-            }
-            _ => {}
-        }
+        activate_from_args()?;
         Ok(())
     }
 
@@ -538,11 +592,32 @@ impl Backend for Windows {
             None => Err(Error::NotConfigured),
         })
     }
+
+    /// Replaces the stored keys with fresh ones and registers again, so the new keys arrive as
+    /// an [`Event::Token`](crate::Event::Token).
+    #[cfg(feature = "encryption")]
+    fn rotate_keys() -> Result<(), Error> {
+        if RUNTIME.get().is_none() {
+            return Err(Error::NotConfigured);
+        }
+        let Some(store) = key_store::installed() else {
+            return Err(Error::NotConfigured);
+        };
+        store.rotate()?;
+        Self::register()
+    }
 }
 
 /// Creates the fresh channel, waiting for WNS's answer.
 #[cfg(target_os = "windows")]
 fn create_channel(remote_id: windows_core::GUID) -> Result<Token, Error> {
+    #[cfg(feature = "encryption")]
+    let keys = match key_store::installed() {
+        Some(store) => Some(envelope::token_keys(&store.load_or_create()?)),
+        None => return Err(Error::Platform("the key store is not installed".to_owned())),
+    };
+    #[cfg(not(feature = "encryption"))]
+    let keys = None;
     let create = bindings::PushNotificationManager::Default()
         .and_then(|manager| manager.CreateChannelAsync(remote_id))
         .and_then(|operation| operation.join())
@@ -569,13 +644,14 @@ fn create_channel(remote_id: windows_core::GUID) -> Result<Token, Error> {
     Ok(Token::Wns {
         channel_uri,
         expires,
-        keys: None,
+        keys,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use keyring_core::api::CredentialStoreApi;
 
     #[test]
     fn an_icon_path_becomes_a_file_uri_with_three_slashes() {
@@ -679,5 +755,101 @@ mod tests {
     fn a_ticks_value_farther_than_a_duration_cannot_hold_is_rejected() {
         assert_eq!(channel_expiry(i64::MAX), None);
         assert_eq!(channel_expiry(i64::MIN), None);
+    }
+
+    /// The service name `install` installs the key store under, for the tests' store.
+    const SERVICE: &str = "rs.pushups/6f9619ff-8b86-d011-b42d-00c04fc964ff";
+
+    /// A key store holding `keys` under the tests' service, or an empty one.
+    #[cfg(feature = "encryption")]
+    fn store_with(keys: Option<&crate::webpush_crypto::Keys>) -> crate::key_store::KeyStore {
+        let store = keyring_core::mock::Store::new().expect("the mock store starts");
+        if let Some(keys) = keys {
+            store
+                .build(SERVICE, "keys", None)
+                .expect("the entry builds")
+                .set_secret(&keys.to_bytes())
+                .expect("the secret stores");
+        }
+        crate::key_store::KeyStore::new(store, SERVICE)
+    }
+
+    /// One RFC 8291 body sealed for `keys` as the WNS envelope, the exact body WNS would carry.
+    #[cfg(feature = "encryption")]
+    fn sealed(keys: &crate::webpush_crypto::Keys, plaintext: &[u8]) -> String {
+        let token = crate::Token::WebPush {
+            endpoint: "https://push.example/app".to_owned(),
+            p256dh: keys.public_key(),
+            auth: keys.auth(),
+            expires: None,
+        };
+        pushups_sender::encrypt(&token, plaintext)
+            .expect("the seal encrypts")
+            .wns_body()
+    }
+
+    #[test]
+    #[cfg(feature = "encryption")]
+    fn an_envelope_body_opens_to_its_plaintext() {
+        let keys = crate::webpush_crypto::Keys::generate().expect("fresh keys");
+        let store = store_with(Some(&keys));
+        let body = sealed(&keys, b"the plaintext");
+        assert_eq!(
+            wns_payload(Some(&store), body.as_bytes()),
+            Some(b"the plaintext".to_vec())
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "encryption")]
+    fn an_envelope_body_the_keys_cannot_open_is_dropped() {
+        let keys = crate::webpush_crypto::Keys::generate().expect("fresh keys");
+        let other = crate::webpush_crypto::Keys::generate().expect("fresh keys");
+        let store = store_with(Some(&other));
+        let body = sealed(&keys, b"the plaintext");
+        assert_eq!(wns_payload(Some(&store), body.as_bytes()), None);
+    }
+
+    #[test]
+    #[cfg(feature = "encryption")]
+    fn an_envelope_body_without_stored_keys_is_dropped() {
+        let keys = crate::webpush_crypto::Keys::generate().expect("fresh keys");
+        let store = store_with(None);
+        let body = sealed(&keys, b"the plaintext");
+        assert_eq!(wns_payload(Some(&store), body.as_bytes()), None);
+    }
+
+    #[test]
+    #[cfg(feature = "encryption")]
+    fn an_envelope_body_without_a_key_store_is_dropped() {
+        let keys = crate::webpush_crypto::Keys::generate().expect("fresh keys");
+        let body = sealed(&keys, b"the plaintext");
+        assert_eq!(wns_payload(None, body.as_bytes()), None);
+    }
+
+    #[test]
+    #[cfg(feature = "encryption")]
+    fn a_body_without_the_envelope_delivers_as_is() {
+        for body in [
+            b"plain".to_vec(),
+            b"{}".to_vec(),
+            b"{\"pushups\":\"not base64url!!\"}".to_vec(),
+            b"{\"pushups\": \"x\"}".to_vec(),
+        ] {
+            assert_eq!(
+                wns_payload(None, &body),
+                Some(body.clone()),
+                "body {body:?}"
+            );
+        }
+    }
+
+    /// The key store service names the remote id in its canonical form.
+    #[test]
+    #[cfg(all(target_os = "windows", feature = "encryption"))]
+    fn the_key_store_service_names_the_remote_id() {
+        let remote_id = windows_core::GUID::try_from("6f9619ff-8b86-d011-b42d-00c04fc964ff")
+            .expect("the id is a guid");
+        assert_eq!(key_store_service(&remote_id), SERVICE);
     }
 }

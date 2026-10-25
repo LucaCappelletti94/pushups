@@ -24,6 +24,12 @@ xcrun --sdk macosx swiftc \
     "$BUILD/rust/debug/$LIB" \
     -framework Foundation -framework UserNotifications -framework AppKit \
     -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$CI/harness/Info.plist"
+# The protected keychain refuses a process without the entitlement for the access group the harness declares.
+HARNESS_ENTITLEMENTS="$BUILD/harness.entitlements"
+plutil -create xml1 "$HARNESS_ENTITLEMENTS"
+/usr/libexec/PlistBuddy -c 'Add :keychain-access-groups array' "$HARNESS_ENTITLEMENTS"
+/usr/libexec/PlistBuddy -c 'Add :keychain-access-groups:0 string rs.pushups.ci.harness' "$HARNESS_ENTITLEMENTS"
+codesign --force --sign - --entitlements "$HARNESS_ENTITLEMENTS" "$BUILD/harness"
 "$BUILD/harness"
 
 build_extension() {

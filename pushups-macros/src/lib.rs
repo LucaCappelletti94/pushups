@@ -299,6 +299,8 @@ fn apple_exports(name: &syn::Ident, pushups: &TokenStream2) -> TokenStream2 {
             service: *const ::core::ffi::c_void,
             user_info: *const u8,
             user_info_len: usize,
+            pushups: *const u8,
+            pushups_len: usize,
             budget_nanos: u64,
             finish: #pushups::__private::ios::Finish,
             token: *mut ::core::ffi::c_void,
@@ -307,8 +309,14 @@ fn apple_exports(name: &syn::Ident, pushups: &TokenStream2) -> TokenStream2 {
             unsafe {
                 #pushups::__private::ios::receive(
                     service,
-                    user_info,
-                    user_info_len,
+                    &#pushups::__private::ios::Field {
+                        pointer: user_info,
+                        length: user_info_len,
+                    },
+                    &#pushups::__private::ios::Field {
+                        pointer: pushups,
+                        length: pushups_len,
+                    },
                     budget_nanos,
                     finish,
                     token,
@@ -352,6 +360,8 @@ fn apple_exports(name: &syn::Ident, pushups: &TokenStream2) -> TokenStream2 {
             extern "C" fn(bool) -> *mut ::core::ffi::c_void,
             unsafe extern "C" fn(
                 *const ::core::ffi::c_void,
+                *const u8,
+                usize,
                 *const u8,
                 usize,
                 u64,

@@ -19,6 +19,7 @@ use objc2_user_notifications::{UNNotificationPresentationOptions, UNUserNotifica
 #[cfg(target_os = "ios")]
 use parking_lot::Mutex;
 
+use crate::Error;
 use crate::started::Arrival;
 
 /// Starts the name of every class the crate creates, so the crate recognises an object it already extended.
@@ -343,6 +344,44 @@ fn json(object: &AnyObject) -> Option<Vec<u8>> {
     data.ok().map(|data| data.to_vec())
 }
 
+/// The push's `pushups` field, opened with the device's keys.
+///
+/// `None` when the feature is off or the field is absent, the opening's answer otherwise.
+fn open_field(info: &AnyObject) -> Option<Result<Vec<u8>, Error>> {
+    #[cfg(feature = "encryption")]
+    {
+        // SAFETY: `objectForKey:` accepts any object as a key and returns nil for an absent one.
+        let key = NSString::from_str(pushups_token::ENCRYPTED_FIELD);
+        let value: Option<Retained<AnyObject>> = unsafe { msg_send![info, objectForKey: &*key] };
+        let string = value
+            .and_then(|value| value.downcast::<NSString>().ok())
+            .map(|string| string.to_string())?;
+        let open = match crate::key_store::installed() {
+            Some(store) => crate::envelope::open(store, &string),
+            None => Err(crate::envelope::OpenError::NoKeys),
+        };
+        Some(open.map_err(|error| Error::Platform(error.to_string())))
+    }
+    #[cfg(not(feature = "encryption"))]
+    {
+        let _ = info;
+        None
+    }
+}
+
+/// The push's payload from `info`, the envelope's plaintext when it opens, the `userInfo` JSON
+/// otherwise, and nothing when the envelope's field could not be opened.
+fn push_payload(info: &AnyObject) -> Option<Vec<u8>> {
+    match open_field(info) {
+        Some(Ok(payload)) => Some(payload),
+        Some(Err(error)) => {
+            eprintln!("pushups: the push envelope could not be opened: {error}");
+            None
+        }
+        None => json(info),
+    }
+}
+
 unsafe extern "C-unwind" fn did_register(
     this: &AnyObject,
     cmd: Sel,
@@ -446,7 +485,7 @@ unsafe extern "C-unwind" fn did_receive_remote_notification(
         }
     }
     // SAFETY: the system passes an `NSDictionary` or null, valid for this call.
-    let payload = unsafe { info.as_ref() }.and_then(|info| json(info));
+    let payload = unsafe { info.as_ref() }.and_then(|info| push_payload(info));
     let message = payload.and_then(|payload| super::receive(payload, Arrival::Push));
     let Some(mtm) = MainThreadMarker::new() else {
         gate.done(FETCH_NO_DATA);
@@ -474,7 +513,7 @@ unsafe extern "C-unwind" fn did_receive_remote_notification(
         }
     }
     // SAFETY: the system passes an `NSDictionary` or null, valid for this call.
-    let payload = unsafe { info.as_ref() }.and_then(|info| json(info));
+    let payload = unsafe { info.as_ref() }.and_then(|info| push_payload(info));
     let message = payload.and_then(|payload| super::receive(payload, Arrival::Push));
     if let Some(mtm) = MainThreadMarker::new() {
         super::finish_after_background_work(mtm, message, Box::new(|| {}));
@@ -495,9 +534,9 @@ unsafe extern "C-unwind" fn did_receive_response(
         let notification: Retained<AnyObject> = unsafe { msg_send![response, notification] };
         if let Some(info) = remote_info(&notification) {
             #[cfg(target_os = "ios")]
-            let payload = tap_payload(&info).or_else(|| json(&info));
+            let payload = tap_payload(&info).or_else(|| push_payload(&info));
             #[cfg(target_os = "macos")]
-            let payload = json(&info);
+            let payload = push_payload(&info);
             if let Some(payload) = payload {
                 let _ = super::receive(payload, Arrival::Tap);
             }
@@ -525,9 +564,9 @@ fn tap_payload(info: &AnyObject) -> Option<Vec<u8>> {
     }
 }
 
-/// The `userInfo` of a remote `UNNotification` as JSON, or `None` for a local one.
+/// The push's payload of a remote `UNNotification`, or `None` for a local one.
 fn remote_payload(notification: &AnyObject) -> Option<Vec<u8>> {
-    remote_info(notification).and_then(|info| json(&info))
+    remote_info(notification).and_then(|info| push_payload(&info))
 }
 
 /// Returns user info only for a remote notification.

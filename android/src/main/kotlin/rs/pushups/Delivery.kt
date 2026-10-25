@@ -44,3 +44,13 @@ internal object Transport {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY, transport).apply()
     }
 }
+
+/**
+ * The sealed field of an encrypted push, which the module looks up when the crate's
+ * `encryption` feature was on at build time, asked of Rust once the library loads.
+ */
+internal object Envelope {
+    const val ENCRYPTED_FIELD = "pushups"
+
+    val enabled: Boolean by lazy { invokeNative("encrypts") { Native.encrypts() } ?: false }
+}

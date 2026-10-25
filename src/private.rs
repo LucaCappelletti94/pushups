@@ -88,28 +88,38 @@ pub mod ios {
         crate::apple::service::create(filtering_declared)
     }
 
+    /// One of the byte fields the adapter passed beside the `userInfo` JSON, the field's
+    /// pointer and length.
+    pub struct Field {
+        /// The field's bytes, or null when `length` is zero.
+        pub pointer: *const u8,
+        /// The field's length in bytes.
+        pub length: usize,
+    }
+
     /// Starts the rendering request for the alert the adapter received, superseding a pending
-    /// one, under the remaining budget the adapter measured, and runs the app's render.
+    /// one, under the remaining budget the adapter measured, and runs the app's render with the
+    /// envelope's plaintext when the adapter carried a `pushups` field and it opens.
     ///
     /// # Safety
     ///
-    /// `service` is a live, aligned handle from `create` that cannot be destroyed during this call. `user_info` points to `user_info_len` readable bytes. `finish` may run on any thread and owns the retained `token` until its single call.
+    /// `service` is a live, aligned handle from `create` that cannot be destroyed during this call. `user_info` and `pushups` point to readable fields of their declared lengths, the `pushups` pointer null when its length is zero. `finish` may run on any thread and owns the retained `token` until its single call.
     pub unsafe fn receive(
         service: *const c_void,
-        user_info: *const u8,
-        user_info_len: usize,
+        user_info: &Field,
+        pushups: &Field,
         budget_nanos: u64,
         finish: Finish,
         token: *mut c_void,
         handler: fn(RenderingContext, Message) -> Result<Rendering, Error>,
     ) {
-        // SAFETY: the caller passed a live handle, a live thunk and a payload of
-        // `user_info_len` bytes.
+        // SAFETY: the caller passed a live handle, live fields of their declared lengths and
+        // a live thunk.
         unsafe {
             crate::apple::service::receive(
                 service,
                 user_info,
-                user_info_len,
+                pushups,
                 budget_nanos,
                 finish,
                 token,

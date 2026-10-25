@@ -22,6 +22,10 @@ object Probe {
     @JvmStatic
     external fun register(): String?
 
+    /** `null`, or the error of `pushups::rotate_keys`. */
+    @JvmStatic
+    external fun rotateKeys(): String?
+
     /** Starts `pushups::request_permission` on a thread of its own. */
     @JvmStatic
     external fun startPermission()

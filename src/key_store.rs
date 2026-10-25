@@ -46,21 +46,6 @@ impl KeyStore {
     /// # Errors
     ///
     /// [`Error::Platform`] when the key store fails.
-    #[cfg_attr(
-        all(
-            not(test),
-            any(
-                target_os = "android",
-                target_os = "ios",
-                target_os = "macos",
-                target_os = "windows"
-            )
-        ),
-        expect(
-            dead_code,
-            reason = "the platform ingress calls this through `envelope::open`"
-        )
-    )]
     pub(crate) fn load(&self) -> Result<Option<Keys>, Error> {
         let entry = self.entry()?;
         match entry.get_secret() {
@@ -70,18 +55,6 @@ impl KeyStore {
         }
     }
 
-    #[cfg_attr(
-        all(
-            not(test),
-            any(
-                target_os = "android",
-                target_os = "ios",
-                target_os = "macos",
-                target_os = "windows"
-            )
-        ),
-        expect(dead_code, reason = "the platform `register` calls this")
-    )]
     /// The stored keys, creating and storing fresh ones when there is no entry or it does not
     /// hold a valid key pair.
     ///
@@ -95,18 +68,6 @@ impl KeyStore {
         }
     }
 
-    #[cfg_attr(
-        all(
-            not(test),
-            any(
-                target_os = "android",
-                target_os = "ios",
-                target_os = "macos",
-                target_os = "windows"
-            )
-        ),
-        expect(dead_code, reason = "the platform `rotate_keys` calls this")
-    )]
     /// Fresh keys, replacing whatever the entry held.
     ///
     /// # Errors
@@ -127,18 +88,6 @@ impl KeyStore {
             .map_err(|error| store_error(&error))
     }
 
-    #[cfg_attr(
-        all(
-            not(test),
-            any(
-                target_os = "android",
-                target_os = "ios",
-                target_os = "macos",
-                target_os = "windows"
-            )
-        ),
-        expect(dead_code, reason = "used by `load_or_create` and `rotate`")
-    )]
     /// Fresh keys, stored in the entry.
     ///
     /// # Errors
@@ -154,38 +103,11 @@ impl KeyStore {
 }
 
 /// Installs the process-wide key store. The first install wins.
-#[cfg_attr(
-    all(
-        not(test),
-        any(
-            target_os = "android",
-            target_os = "ios",
-            target_os = "macos",
-            target_os = "windows"
-        )
-    ),
-    expect(dead_code, reason = "the platform `install` calls this")
-)]
 pub(crate) fn install(store: Arc<CredentialStore>, service: impl Into<String>) {
     let _ = KEY_STORE.set(KeyStore::new(store, service));
 }
 
 /// The installed key store, or none when no platform installed one.
-#[cfg_attr(
-    all(
-        not(test),
-        any(
-            target_os = "android",
-            target_os = "ios",
-            target_os = "macos",
-            target_os = "windows"
-        )
-    ),
-    expect(
-        dead_code,
-        reason = "the platform `register` and `rotate_keys` call this"
-    )
-)]
 pub(crate) fn installed() -> Option<&'static KeyStore> {
     KEY_STORE.get()
 }
@@ -195,18 +117,6 @@ fn store_error(error: &StoreError) -> Error {
     Error::Platform(format!("the key store failed: {error}"))
 }
 
-#[cfg_attr(
-    all(
-        not(test),
-        any(
-            target_os = "android",
-            target_os = "ios",
-            target_os = "macos",
-            target_os = "windows"
-        )
-    ),
-    expect(dead_code, reason = "used by `store_new`")
-)]
 /// A failed randomness source while creating fresh keys.
 fn randomness_error() -> Error {
     Error::Platform("could not read random bytes for the key pair".to_owned())

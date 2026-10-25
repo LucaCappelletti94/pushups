@@ -1557,7 +1557,7 @@ dependencies = [
  "p256",
  "parking_lot",
  "pushups-macros",
- "serde",
+ "pushups-token",
  "sha2",
  "thiserror 2.0.21",
  "wasm-bindgen",
@@ -1591,6 +1591,13 @@ dependencies = [
  "quote",
  "serde_json",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "pushups-token"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

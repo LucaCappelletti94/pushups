@@ -58,6 +58,15 @@ struct Runtime {
     vapid: Option<String>,
     /// The session bus started this process for a push or a tap, so it has no UI.
     headless: bool,
+    /// The file the device's keys are stored in, which `rotate_keys` replaces.
+    #[cfg_attr(
+        not(feature = "encryption"),
+        expect(
+            dead_code,
+            reason = "rotate_keys is the only reader and it needs the feature"
+        )
+    )]
+    keys_path: PathBuf,
     state: Mutex<State>,
     activity: Mutex<Activity>,
     notifier: Mutex<notification::Notifier>,
@@ -72,6 +81,9 @@ struct State {
     inbox: Inbox,
     keys: Keys,
     token: String,
+    /// The endpoint the app's server sends to, set by the distributor's `new_endpoint`.
+    /// `rotate_keys` re-emits the token with it, or the next `new_endpoint` carries the new keys.
+    endpoint: Option<String>,
     /// The payloads already delivered, so a tap on a push the app received, or a second tap,
     /// delivers nothing.
     delivered: Delivered,
@@ -144,6 +156,37 @@ impl Backend for Linux {
             .map_err(Error::platform)
     }
 
+    /// Replaces the stored keys with fresh ones and reports the token again with them, so the
+    /// new keys arrive as an [`Event::Token`](crate::Event::Token).
+    #[cfg(feature = "encryption")]
+    fn rotate_keys() -> Result<(), Error> {
+        let runtime = RUNTIME
+            .get()
+            .filter(|runtime| runtime.owns_name.load(Ordering::Acquire))
+            .ok_or(Error::NotConfigured)?;
+        let keys = Keys::generate().map_err(|_| {
+            Error::Platform("could not read random bytes for the key pair".to_owned())
+        })?;
+        // A write failure leaves the old keys in place, in the file and in memory.
+        write_private(&runtime.keys_path, &keys.to_bytes())
+            .map_err(|error| Error::Platform(format!("the keys could not be written: {error}")))?;
+        let endpoint = {
+            let mut state = runtime.state.lock();
+            state.keys = keys;
+            state.endpoint.clone()
+        };
+        if let Some(endpoint) = endpoint {
+            let state = runtime.state.lock();
+            state.inbox.receive(Entry::WebPushToken {
+                endpoint,
+                p256dh: state.keys.public_key(),
+                auth: state.keys.auth(),
+            });
+        }
+        DISPATCHER.flush();
+        Ok(())
+    }
+
     fn request_permission() -> impl Future<Output = Result<Permission, Error>> {
         let permission = match Connection::session() {
             Ok(connection) if find_distributor(&connection).is_ok() => Permission::Granted,
@@ -201,7 +244,8 @@ impl Runtime {
             .mode(0o700)
             .create(&dir)
             .map_err(Error::platform)?;
-        let keys = load_keys(&dir.join("keys")).map_err(Error::platform)?;
+        let keys_path = dir.join("keys");
+        let keys = load_keys(&keys_path).map_err(Error::platform)?;
         let token = load_token(&dir.join("token")).map_err(Error::platform)?;
         write_activation_file(app_id).map_err(Error::platform)?;
         // A desktop entry that cannot be written leaves the portal refusing the app id, so
@@ -228,10 +272,12 @@ impl Runtime {
             notifications,
             vapid: unified_push.map(|unified_push| unified_push.vapid_public_key.as_base64url()),
             headless,
+            keys_path,
             state: Mutex::new(State {
                 inbox,
                 keys,
                 token,
+                endpoint: None,
                 delivered: Delivered::new(dir.join("delivered")),
                 started_app: headless,
             }),
@@ -413,8 +459,9 @@ impl Connector {
             .and_then(|endpoint| String::try_from(endpoint).ok())
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs("no endpoint".to_owned()))?;
         {
-            let state = call.0.state.lock();
+            let mut state = call.0.state.lock();
             if known_token(&state, &args) {
+                state.endpoint = Some(endpoint.clone());
                 let entry = Entry::WebPushToken {
                     endpoint,
                     p256dh: state.keys.public_key(),

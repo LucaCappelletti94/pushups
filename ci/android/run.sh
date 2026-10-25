@@ -44,7 +44,7 @@ fi
 # The app server's side of Web Push: a fresh VAPID key pair and the `web-push` crate's sender.
 vapid_generate "$out"
 vapid_b64url=$(vapid_public_b64url "$out/vapid.pem")
-(cd "$root/ci/linux/probe" && cargo build --quiet --bin send)
+(cd "$root/ci/linux/probe" && cargo build --quiet --bin send --bin seal)
 
 # The screen stays on and unlocked while the tests run, since install checks, the prompt and the
 # shade show on it. A variant's build takes minutes, so each one wakes the device again.
@@ -66,7 +66,7 @@ adb shell input keyevent KEYCODE_HOME
 
 # Request files a previous run left on the device would be sent ahead of this run's, so they go.
 adb uninstall "$package" >/dev/null 2>&1 || true
-python3 "$ci/send.py" "$key" --webpush-sender "$root/ci/linux/probe/target/debug/send" --vapid "$out/vapid.pem" &
+python3 "$ci/send.py" "$key" --webpush-sender "$root/ci/linux/probe/target/debug/send" --vapid "$out/vapid.pem" --fcm-sealer "$root/ci/linux/probe/target/debug/seal" &
 sender=$!
 trap 'kill $sender 2>/dev/null || true; adb shell pm enable io.heckel.ntfy >/dev/null 2>&1 || true; adb shell svc power stayon false || true' EXIT
 
@@ -117,6 +117,8 @@ run_variant full "config-real background-handler" default PushupsTest
 run_variant fallback-name config-real fallback-name FallbackNameTest
 run_variant no-background-handler config-real default NoBackgroundHandlerTest
 run_variant rendering "config-real rendering-handler" default RenderingHandlerTest
+# The crate's `encryption` feature: the token reports its keys and encrypted pushes arrive as the plaintext.
+run_variant encryption "config-real encryption background-handler rendering-handler" default EncryptedPushesTest
 run_variant unconfigured "" default RegistrationFailsTest expect "FCM is not configured"
 run_variant mismatched config-mismatched default RegistrationFailsTest expect "FCM is not configured"
 run_variant rejected config-fixture default RegistrationFailsTest expect "Please set a valid API key"

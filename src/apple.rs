@@ -2,6 +2,8 @@
 //!
 //! `install` runs on the main thread before the toolkit's loop. It takes over the notification center's delegate at once, since Apple requires it before launch finishes, and the app delegate when `didFinishLaunching` posts, since a toolkit may create it only inside `UIApplicationMain`.
 
+#[cfg(feature = "encryption")]
+mod keychain;
 mod runtime;
 pub(crate) mod service;
 
@@ -69,6 +71,8 @@ impl Backend for Apple {
         if STATE.set(Mutex::new(state)).is_err() {
             return Ok(());
         }
+        #[cfg(feature = "encryption")]
+        keychain::install();
         runtime::take_over_notification_delegate(mtm);
         runtime::observe_launch(mtm);
         Ok(())
@@ -161,6 +165,15 @@ impl Backend for Apple {
             DISPATCHER.flush();
         }
     }
+
+    /// Replaces the stored keys with fresh ones and registers again.
+    #[cfg(feature = "encryption")]
+    fn rotate_keys() -> Result<(), Error> {
+        let store = crate::key_store::installed()
+            .ok_or_else(|| Error::Platform("the key store is not installed".to_owned()))?;
+        store.rotate()?;
+        Self::register()
+    }
 }
 
 /// The Application Support directory of this app, where the queue and the delivered set live.
@@ -218,6 +231,21 @@ fn became_active() {
 }
 
 fn token(token: Vec<u8>) {
+    #[cfg(feature = "encryption")]
+    {
+        let keys = match crate::key_store::installed() {
+            Some(store) => store.load_or_create(),
+            None => Err(Error::Platform("the key store is not installed".to_owned())),
+        };
+        match keys {
+            Ok(keys) => DISPATCHER.emit(Event::Token(Token::Apns {
+                device_token: token,
+                keys: Some(crate::envelope::token_keys(&keys)),
+            })),
+            Err(error) => DISPATCHER.emit(Event::registration_failed(error.to_string())),
+        }
+    }
+    #[cfg(not(feature = "encryption"))]
     DISPATCHER.emit(Event::Token(Token::Apns {
         device_token: token,
         keys: None,

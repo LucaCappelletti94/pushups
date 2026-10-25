@@ -135,6 +135,10 @@ object Pushups {
         return Presentation.present(appContext, title, body, navigate, tag, icon, data)
     }
 
+    /** Reports the transport this app's pushes come through, which Rust's key rotation reads. */
+    @JvmStatic
+    fun transport(): String = context?.let { Transport.get(it) } ?: Transport.FCM
+
     private fun enabled(context: Context): Boolean =
         NotificationManagerCompat.from(context).areNotificationsEnabled()
 

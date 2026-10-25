@@ -55,7 +55,7 @@ The `.appex` belongs in the application's `PlugIns` directory. Its property list
 
 Device builds require a distinct extension bundle identifier and matching provisioning profile. Sign the extension before its containing application with compatible identities and entitlements. The extension does not inherit the application's entitlements or its container.
 
-Shared files require the same App Group entitlement on both targets. Shared keys require an explicitly shared keychain access group and a key accessibility policy that permits locked-device notification processing. A biometric-protected replica key remains outside the extension's rendering path.
+Shared files require the same App Group entitlement on both targets. Shared keys require the same keychain access group entitlement on both targets, named to the crate by the `PushupsKeychainAccessGroup` string key of each `Info.plist`, and a key accessibility policy that permits locked-device notification processing. A biometric-protected replica key remains outside the extension's rendering path.
 
 [Dioxus app-extension tooling](https://github.com/DioxusLabs/dioxus/pull/5896) supplies `[[ios.app_extensions]]`, `rust_crate`, `frameworks`, module-qualified principal classes and nested signing. Point `source` at the Swift extension sources, `rust_crate` at the consumer's static-library crate, `extension_point` at `com.apple.usernotifications.service`, and `principal_class` at `PushupsNotificationService`. This capability depends on that tooling contribution, rather than released `dx` support being assumed.
 

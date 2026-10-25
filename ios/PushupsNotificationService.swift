@@ -97,6 +97,8 @@ private func pushupsReceive(
     _ service: UnsafeMutableRawPointer,
     _ userInfo: UnsafePointer<UInt8>,
     _ userInfoLength: Int,
+    _ pushups: UnsafePointer<UInt8>?,
+    _ pushupsLength: Int,
     _ budgetNanoseconds: UInt64,
     _ finish: PushupsFinish,
     _ token: UnsafeMutableRawPointer
@@ -136,12 +138,28 @@ public final class PushupsNotificationService: UNNotificationServiceExtension {
             return
         }
         let completion = PushupsCompletion(content: content, handler: handler)
+        let sealed = request.content.userInfo["pushups"] as? String
         json.withUnsafeBytes { buffer in
             let pointer = buffer.baseAddress!.assumingMemoryBound(to: UInt8.self)
             let token = Unmanaged.passRetained(completion).toOpaque()
             let elapsed = DispatchTime.now().uptimeNanoseconds - started
             let remaining = elapsed < limit ? limit - elapsed : 0
-            pushupsReceive(service, pointer, buffer.count, remaining, pushupsFinish, token)
+            if let sealed {
+                Data(sealed.utf8).withUnsafeBytes { pushupsBuffer in
+                    pushupsReceive(
+                        service,
+                        pointer,
+                        buffer.count,
+                        pushupsBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        pushupsBuffer.count,
+                        remaining,
+                        pushupsFinish,
+                        token
+                    )
+                }
+            } else {
+                pushupsReceive(service, pointer, buffer.count, nil, 0, remaining, pushupsFinish, token)
+            }
         }
     }
 

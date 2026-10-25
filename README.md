@@ -26,7 +26,7 @@ pushups::set_handler(|event| match event {
 let _ = pushups::register();
 ```
 
-The handler runs on the platform's delivery thread, so waking the toolkit is its job. The `stream` feature adds `pushups::events()`, the same events as a stream. The `encryption` feature makes the pushes end-to-end encrypted, the device's keys in the platform key store, and `pushups::rotate_keys()` replaces the keys and registers again.
+The handler runs on the platform's delivery thread, so waking the toolkit is its job. The `stream` feature adds `pushups::events()`, the same events as a stream. The `encryption` feature makes the pushes [end-to-end encrypted](https://github.com/LucaCappelletti94/pushups/blob/main/docs/encryption.md), with the device's keys in the platform key store.
 
 ## Support
 
@@ -70,7 +70,7 @@ fn on_push(context: Context<'_>, message: Message) {
 
 ## iOS and macOS
 
-The crate adds its push methods to whatever app delegate the toolkit installs, while closed-app iOS alert transformation uses a separate [`rendering_handler`] Rust callback and [Swift extension adapter](https://github.com/LucaCappelletti94/pushups/blob/main/docs/mobile-notifications.md). The bundle needs the push entitlement and, on iOS, the `remote-notification` background mode, which a `dx` app sets in `Dioxus.toml`. A Tauri app gets the iOS entitlement and the background mode from `tauri-plugin-pushups` and names a macOS entitlements file in `tauri.conf.json`, as [`examples/tauri`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/tauri) does.
+The crate adds its push methods to whatever app delegate the toolkit installs, while closed-app iOS alert transformation uses a separate [`rendering_handler`] Rust callback and [Swift extension adapter](https://github.com/LucaCappelletti94/pushups/blob/main/docs/mobile-notifications.md). The bundle needs the push entitlement and, on iOS, the `remote-notification` background mode, which a `dx` app sets in `Dioxus.toml`. A Tauri app gets the iOS entitlement and the background mode from `tauri-plugin-pushups` and names a macOS entitlements file in `tauri.conf.json`, as [`examples/tauri`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/tauri) does. With the `encryption` feature the app and the extension share the keychain access group both targets carry in the `keychain-access-groups` entitlement, which each `Info.plist` names to the crate with the `PushupsKeychainAccessGroup` string key.
 
 ```toml
 [ios.entitlements]

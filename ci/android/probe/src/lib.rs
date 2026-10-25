@@ -143,6 +143,15 @@ fn files_dir(
 
 fn describe(event: &Event) -> String {
     match event {
+        #[cfg(feature = "encryption")]
+        Event::Token(Token::Fcm {
+            token,
+            keys: Some(keys),
+        }) => format!(
+            "token {token} p256dh={} auth={}",
+            pushups_token::base64url::encode(&keys.p256dh),
+            pushups_token::base64url::encode(&keys.auth)
+        ),
         Event::Token(Token::Fcm { token, .. }) => format!("token {token}"),
         Event::Token(token) => match token.web_push_subscription() {
             Some(subscription) => format!(
@@ -272,6 +281,18 @@ pushups::__private::android::exports! {
         java_string(
             env,
             pushups::register().err().map(|error| error.to_string()),
+        )
+    }
+
+    /// `Probe.rotateKeys()`: `null`, or the error of `pushups::rotate_keys`.
+    #[cfg(feature = "encryption")]
+    fn Java_rs_pushups_ci_Probe_rotateKeys<'local>(
+        env: JNIEnv<'local>,
+        _class: JClass<'local>,
+    ) -> jstring {
+        java_string(
+            env,
+            pushups::rotate_keys().err().map(|error| error.to_string()),
         )
     }
 

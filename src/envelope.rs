@@ -1,7 +1,9 @@
 //! The encrypted push envelope the transports carry, and its opening with the device's keys.
 
+#[cfg(any(target_os = "windows", test))]
+use pushups_token::ENCRYPTED_FIELD;
+use pushups_token::EncryptionKeys;
 use pushups_token::base64url;
-use pushups_token::{ENCRYPTED_FIELD, EncryptionKeys};
 
 use crate::error::Error;
 use crate::key_store::KeyStore;
@@ -33,18 +35,6 @@ pub(crate) enum OpenError {
 /// [`OpenError::NotBase64url`] when `sealed` is not unpadded base64url, [`OpenError::NoKeys`]
 /// when the store holds no keys, [`OpenError::Store`] when the key store fails, and
 /// [`OpenError::Decrypt`] when the body fails to decrypt.
-#[cfg_attr(
-    all(
-        not(test),
-        any(
-            target_os = "android",
-            target_os = "ios",
-            target_os = "macos",
-            target_os = "windows"
-        )
-    ),
-    expect(dead_code, reason = "the platform ingress calls this")
-)]
 pub(crate) fn open(store: &KeyStore, sealed: &str) -> Result<Vec<u8>, OpenError> {
     let body = base64url::decode(sealed).ok_or(OpenError::NotBase64url)?;
     let keys = store.load().map_err(OpenError::Store)?;
@@ -57,18 +47,7 @@ pub(crate) fn open(store: &KeyStore, sealed: &str) -> Result<Vec<u8>, OpenError>
 /// The value of the `pushups` field when `body` is exactly the WNS envelope,
 /// `{"pushups":"<base64url>"}` with no whitespace, or none for anything else.
 #[must_use]
-#[cfg_attr(
-    all(
-        not(test),
-        any(
-            target_os = "android",
-            target_os = "ios",
-            target_os = "macos",
-            target_os = "windows"
-        )
-    ),
-    expect(dead_code, reason = "the Windows `deliver` calls this")
-)]
+#[cfg(any(target_os = "windows", test))]
 pub(crate) fn wns_sealed(body: &[u8]) -> Option<&str> {
     let prefix = format!("{{\"{ENCRYPTED_FIELD}\":\"");
     let prefix = prefix.as_bytes();
@@ -91,18 +70,6 @@ pub(crate) fn wns_sealed(body: &[u8]) -> Option<&str> {
 
 /// The public keys `keys` decrypts its pushes with, the token's `keys`.
 #[must_use]
-#[cfg_attr(
-    all(
-        not(test),
-        any(
-            target_os = "android",
-            target_os = "ios",
-            target_os = "macos",
-            target_os = "windows"
-        )
-    ),
-    expect(dead_code, reason = "the platform `register` calls this")
-)]
 pub(crate) fn token_keys(keys: &Keys) -> EncryptionKeys {
     EncryptionKeys {
         p256dh: keys.public_key(),

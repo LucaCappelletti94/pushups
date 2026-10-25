@@ -1,6 +1,22 @@
 import Foundation
 import UserNotifications
 
+@_silgen_name("__pushups_probe_install")
+private func pushupsProbeInstall()
+
+@_silgen_name("__pushups_probe_rotate")
+private func pushupsProbeRotate() -> Int32
+
+@_silgen_name("__pushups_probe_seal")
+private func pushupsProbeSeal(
+    _ plaintext: UnsafePointer<UInt8>,
+    _ length: Int,
+    _ accessGroup: UnsafePointer<CChar>
+) -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("__pushups_probe_free")
+private func pushupsProbeFree(_ sealed: UnsafeMutablePointer<CChar>?)
+
 final class Settlement: @unchecked Sendable {
     private let lock = NSLock()
     private var calls = 0
@@ -78,6 +94,38 @@ if let content = rendered.snapshot.content {
     expect(content.userInfo["unrelated"] as? Int == 42, "unrelated payload preserved")
     expect(content.badge == 7 && content.categoryIdentifier == "kept-category", "original presentation metadata preserved")
     expect(content.subtitle == "Kept subtitle" && content.sound == UNNotificationSound.default, "original subtitle and sound preserved")
+}
+
+// The probe installs the crate, rotates the key in the protected keychain and seals a push the way a sender would.
+pushupsProbeInstall()
+expect(pushupsProbeRotate() == 0, "key rotation registers")
+guard let accessGroup = Bundle.main.object(forInfoDictionaryKey: "PushupsKeychainAccessGroup") as? String else {
+    failures.append("the harness Info.plist declares no keychain access group")
+    print("\(failures.count) failures")
+    exit(1)
+}
+let sealedPlaintext = Data(#"{"kind":"render","original":"sealed-plaintext"}"#.utf8)
+let sealedPointer: UnsafeMutablePointer<CChar>? = sealedPlaintext.withUnsafeBytes { bytes in
+    accessGroup.withCString { group in
+        pushupsProbeSeal(bytes.baseAddress!, bytes.count, group)
+    }
+}
+expect(sealedPointer != nil, "the sender sealed the plaintext")
+if let sealedPointer {
+    let sealedText = String(cString: sealedPointer)
+    pushupsProbeFree(sealedPointer)
+    let opened = receive(service, ["pushups": sealedText, "original": "ciphertext"])
+    wait(opened)
+    expect(outcome(opened) == "rendered", "the encrypted push renders the plaintext")
+    expect(opened.snapshot.content?.title == "Rendered title" && opened.snapshot.content?.body == "Decrypted body", "the rendered alert is the plaintext's")
+    expect(opened.snapshot.content?.userInfo["pushups.notification-data"] as? String == "sealed-plaintext", "the decrypted tap payload")
+    var corrupted = Array(sealedText)
+    corrupted[0] = corrupted[0] == "A" ? "B" : "A"
+    let corruptedPush = receive(service, ["pushups": String(corrupted), "original": "ciphertext"])
+    wait(corruptedPush)
+    expect(outcome(corruptedPush) == "failed", "the corrupted envelope settles failed")
+    expect(corruptedPush.snapshot.content?.title == "Safe title" && corruptedPush.snapshot.content?.body == "Safe body", "the corrupted envelope keeps the safe alert")
+    expect(corruptedPush.snapshot.content?.userInfo["original"] as? String == "ciphertext", "the corrupted envelope keeps the sender payload")
 }
 
 let cleared = receive(service, ["kind": "clear"])

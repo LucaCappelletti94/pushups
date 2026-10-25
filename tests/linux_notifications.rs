@@ -52,7 +52,6 @@ fn on_background(_context: pushups::Context, message: pushups::Message) {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use base64::Engine;
     use p256::elliptic_curve::point::AffineCoordinates;
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader};
@@ -701,14 +700,12 @@ mod linux {
         {
             *slot = *coordinate;
         }
-        let token: pushups::Token = serde_json::from_value(serde_json::json!({
-            "transport": "web_push",
-            "endpoint": "https://push.example/app",
-            "p256dh": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(p256dh),
-            "auth": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(auth),
-            "expires": serde_json::Value::Null,
-        }))
-        .expect("the token parses");
+        let token = pushups::Token::WebPush {
+            endpoint: "https://push.example/app".to_owned(),
+            p256dh,
+            auth,
+            expires: None,
+        };
         let sender = connect(address)
             .build()
             .expect("a connection for the pushes");

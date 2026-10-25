@@ -48,3 +48,11 @@ fn install_without_the_bootstrapper_names_it_and_the_app_still_runs() {
     // Nothing was set up, so a registration is refused rather than sent.
     assert_eq!(pushups::register(), Err(Error::NotConfigured));
 }
+
+/// Without a successful `install`, `rotate_keys` is refused rather than run, since there is no
+/// key store to rotate and no channel to register.
+#[cfg(feature = "encryption")]
+#[test]
+fn rotate_keys_before_a_successful_install_is_not_configured() {
+    assert_eq!(pushups::rotate_keys(), Err(Error::NotConfigured));
+}

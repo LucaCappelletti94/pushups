@@ -1,9 +1,10 @@
 //! The FCM and UnifiedPush backend, driven by the Kotlin module in `android/`.
 //!
 //! `PushupsProvider` loads the app's library at process start and calls `Native.init`, which
-//! hands Rust the `JavaVM` and the module's `Pushups` class. Kotlin reports every push and
-//! every UI session change through the other `Native` methods, and Rust routes each event as
-//! the plan's Android delivery table says.
+//! hands Rust the `JavaVM` and the module's `Pushups` class, and builds the key store the
+//! `encryption` feature keeps the device's keys in. Kotlin reports every push and every UI
+//! session change through the other `Native` methods, and Rust routes each event as the plan's
+//! Android delivery table says.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -22,6 +23,8 @@ use crate::dispatch::DISPATCHER;
 use crate::inbox::{self, Inbox};
 use crate::queue::Entry;
 use crate::{Config, Error, Event, Message, Notification, Permission, Token};
+#[cfg(feature = "encryption")]
+use crate::{EncryptionKeys, envelope, key_store};
 
 /// What `Native.init` hands over, once per process.
 struct Runtime {
@@ -133,6 +136,27 @@ impl Backend for Android {
             DISPATCHER.flush();
         }
     }
+
+    /// Replaces the stored keys and registers again, so the new keys arrive with the token.
+    /// The UnifiedPush distributor owns the keys, so it keeps the trait's refusal.
+    #[cfg(feature = "encryption")]
+    fn rotate_keys() -> Result<(), Error> {
+        let runtime = runtime()?;
+        let transport = with_attached(&runtime.vm, |env| -> jni::errors::Result<String> {
+            let value = env
+                .call_static_method(&runtime.pushups, "transport", "()Ljava/lang/String;", &[])?
+                .l()?;
+            Ok(env.get_string(&JString::from(value))?.into())
+        })
+        .map_err(Error::platform)?;
+        if transport != "fcm" {
+            return Err(Error::Unsupported);
+        }
+        let store = key_store::installed()
+            .ok_or_else(|| Error::Platform("the key store was not installed".to_owned()))?;
+        store.rotate()?;
+        Self::register()
+    }
 }
 
 /// Shows `notification` through the module's presentation, without opening an Activity.
@@ -190,6 +214,50 @@ fn receive(entry: Entry) {
     DISPATCHER.flush();
 }
 
+/// Builds and installs the key store the `encryption` feature keeps the device's keys in, and
+/// leaves none on a failure, so registration fails and the envelopes drop as a store failure.
+#[cfg(feature = "encryption")]
+fn install_key_store(env: &mut JNIEnv<'_>, context: &JObject<'_>) {
+    let android_context = android_native_keyring_store::AndroidContext::new(env, context);
+    let store = match android_context {
+        Ok(android_context) => android_native_keyring_store::Store::new_with_context(
+            android_context,
+            android_native_keyring_store::by_store::store::StoreConfig::default(),
+        ),
+        Err(error) => {
+            eprintln!("the pushups key store could not be built: {error}");
+            return;
+        }
+    };
+    match store {
+        Ok(store) => key_store::install(store, "rs.pushups"),
+        Err(error) => eprintln!("the pushups key store could not be built: {error}"),
+    }
+}
+
+/// The keys a FCM token reports, from the installed key store, creating and storing fresh keys
+/// when the entry is missing, as after an reinstall or a cleared store.
+///
+/// # Errors
+///
+/// [`Error::Platform`] when the key store was not installed or the keys could not be read or
+/// created.
+#[cfg(feature = "encryption")]
+fn fcm_keys() -> Result<EncryptionKeys, Error> {
+    let store = key_store::installed()
+        .ok_or_else(|| Error::Platform("the key store was not installed".to_owned()))?;
+    let keys = store.load_or_create()?;
+    Ok(envelope::token_keys(&keys))
+}
+
+/// The pending `RuntimeException` naming why an envelope could not be opened, which the module
+/// logs and drops the push with.
+#[cfg(feature = "encryption")]
+fn open_failed(env: &mut JNIEnv<'_>, reason: &str) -> jni::errors::Result<jni::sys::jbyteArray> {
+    env.throw_new("java/lang/RuntimeException", reason)?;
+    Err(jni::errors::Error::JavaException)
+}
+
 crate::__pushups_android_exports! {
     /// `Native.handshake(moduleVersion)`, from `PushupsProvider.onCreate` before any other export.
     /// Whether the Kotlin module is this crate's version. Its signature never changes, so a module
@@ -227,6 +295,8 @@ crate::__pushups_android_exports! {
             pushups,
             inbox: Mutex::new(Inbox::headless(files_dir.join(QUEUE_FILE))),
         });
+        #[cfg(feature = "encryption")]
+        install_key_store(env, &_context);
         Ok(())
     }
 
@@ -249,7 +319,23 @@ crate::__pushups_android_exports! {
         token: JString<'local>,
     ) -> () {
         let token: String = env.get_string(&token)?.into();
-        receive(Entry::FcmToken(token));
+        #[cfg(feature = "encryption")]
+        let entry = match fcm_keys() {
+            Ok(keys) => Entry::FcmToken {
+                token,
+                keys: Some(keys),
+            },
+            Err(error) => Entry::RegistrationFailed(match error {
+                Error::Platform(reason) => reason,
+                error => error.to_string(),
+            }),
+        };
+        #[cfg(not(feature = "encryption"))]
+        let entry = Entry::FcmToken {
+            token,
+            keys: None,
+        };
+        receive(entry);
         Ok(())
     }
 
@@ -327,6 +413,17 @@ crate::__pushups_android_exports! {
             Event::registration_failed(reason)
         } else {
             let token: String = env.get_string(&token)?.into();
+            #[cfg(feature = "encryption")]
+            {
+                match fcm_keys() {
+                    Ok(keys) => Event::Token(Token::Fcm {
+                        token,
+                        keys: Some(keys),
+                    }),
+                    Err(error) => Event::RegistrationFailed(error),
+                }
+            }
+            #[cfg(not(feature = "encryption"))]
             Event::Token(Token::Fcm { token, keys: None })
         };
         DISPATCHER.emit(event);
@@ -345,6 +442,37 @@ crate::__pushups_android_exports! {
             let _ = sender.send(granted != JNI_FALSE);
         }
         Ok(())
+    }
+
+    /// `Native.encrypts()`, whether the `encryption` feature was on for this build, which the
+    /// module asks once when the first push arrives.
+    fn Java_rs_pushups_Native_encrypts<'local>(
+        _env: JNIEnv<'local>,
+        _class: JClass<'local>,
+    ) -> jboolean {
+        #[cfg(feature = "encryption")]
+        let encrypts = JNI_TRUE;
+        #[cfg(not(feature = "encryption"))]
+        let encrypts = JNI_FALSE;
+        Ok(encrypts)
+    }
+
+    /// `Native.openEnvelope(sealed)`: the plaintext of the sealed `pushups` field, or a
+    /// `RuntimeException` naming the failure.
+    #[cfg(feature = "encryption")]
+    fn Java_rs_pushups_Native_openEnvelope<'local>(
+        env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        sealed: JString<'local>,
+    ) -> jni::sys::jbyteArray {
+        let sealed: String = env.get_string(&sealed)?.into();
+        let Some(store) = key_store::installed() else {
+            return open_failed(env, "the device has no stored keys");
+        };
+        match envelope::open(store, &sealed) {
+            Ok(plaintext) => Ok(env.byte_array_from_slice(&plaintext)?.as_raw()),
+            Err(error) => open_failed(env, &error.to_string()),
+        }
     }
 }
 

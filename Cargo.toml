@@ -149,7 +149,3 @@ missing_errors_doc = "warn"
 missing_panics_doc = "warn"
 allow_attributes = "deny"
 allow_attributes_without_reason = "deny"
-
-# The native key stores are referenced only by the platform `install` wiring.
-[lints.cargo]
-unused_dependencies = "allow"
