@@ -56,7 +56,10 @@ pub fn draw<'line>(
     let left = frame.insets.left + 2 * glyph;
     let top = frame.insets.top + 2 * glyph;
     let bottom = frame.height.saturating_sub(frame.insets.bottom + 2 * glyph);
-    let columns = frame.width.saturating_sub(left + frame.insets.right + 2 * glyph) / glyph;
+    let columns = frame
+        .width
+        .saturating_sub(left + frame.insets.right + 2 * glyph)
+        / glyph;
     if columns == 0 {
         return;
     }
