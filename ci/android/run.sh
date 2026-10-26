@@ -81,6 +81,27 @@ python3 "$ci/send.py" "$key" --webpush-sender "$root/ci/linux/probe/target/debug
 sender=$!
 trap 'kill $sender 2>/dev/null || true; adb shell pm enable io.heckel.ntfy >/dev/null 2>&1 || true; adb shell svc power stayon false || true' EXIT
 
+# What the device shows when a step gives no answer, the focused window naming a dialog that
+# waits on a tap, and the system's last lines.
+diagnose() {
+  adb shell dumpsys window | grep -E 'mCurrentFocus|mFocusedApp' || true
+  adb logcat -d -v time | tail -80 || true
+}
+
+# Runs a step under a bound, so a device waiting on a dialog fails the run at once with what it
+# shows, rather than at the job's own limit with nothing.
+bounded() {
+  local seconds=$1
+  shift
+  local status=0
+  timeout "$seconds" "$@" || status=$?
+  if [ "$status" -eq 124 ]; then
+    echo "no answer from '$*' within $seconds s"
+    diagnose
+  fi
+  return "$status"
+}
+
 # One app configuration: the probe built with <features>, the test manifest <manifest>, the test
 # class <class>, and instrumentation arguments as key and value pairs. Each runs in a fresh
 # install, so the notification permission starts ungranted, and leaves its profiles in $out.
@@ -102,20 +123,20 @@ run_variant() {
   mkdir -p "$build/jniLibs/$abi"
   cp "$ci/probe/target/$target/debug/libpushups_probe.so" "$build/jniLibs/$abi/"
   cp "$ci/probe/target/$target/debug/libpushups_probe.so" "$out/$variant.so"
-  (cd "$ci" && ./gradlew --no-daemon --quiet -Ppushups.manifest="$manifest" assembleDebugAndroidTest)
+  (cd "$ci" && bounded 900 ./gradlew --no-daemon --quiet -Ppushups.manifest="$manifest" assembleDebugAndroidTest)
 
   wake
-  adb uninstall "$package" >/dev/null 2>&1 || true
-  adb install -t "$build/pushups/outputs/apk/androidTest/debug/pushups-debug-androidTest.apk" >/dev/null
-  adb logcat -c
+  bounded 120 adb uninstall "$package" >/dev/null 2>&1 || true
+  bounded 300 adb install -t "$build/pushups/outputs/apk/androidTest/debug/pushups-debug-androidTest.apk" >/dev/null
+  bounded 60 adb logcat -c
   timeout 900 adb shell am instrument -w -e class "rs.pushups.ci.$class" "${arguments[@]}" \
     -e coverage true -e coverageFile "$files/jacoco.ec" "$package/androidx.test.runner.AndroidJUnitRunner" \
     | tee "$out/$variant.txt" || true
   # The device's side of a failure, which the runner's report does not show, by tag, since system lines naming the package and UiDevice's polls for a title would fill the tail.
   grep -q '^OK (' "$out/$variant.txt" || adb logcat -d -v time -s pushups:V FirebaseMessaging:V FirebaseApp:V \
     NotificationService:V ActivityManager:V ActivityTaskManager:V AndroidRuntime:V TestRunner:V | tail -300
-  adb exec-out run-as "$package" cat files/pushups.profraw > "$out/$variant.profraw"
-  adb exec-out run-as "$package" cat files/jacoco.ec > "$out/$variant.ec"
+  bounded 120 adb exec-out run-as "$package" cat files/pushups.profraw > "$out/$variant.profraw"
+  bounded 120 adb exec-out run-as "$package" cat files/jacoco.ec > "$out/$variant.ec"
 }
 
 run_variant jni-registered "" default PanicBoundaryTest panicCase registered
