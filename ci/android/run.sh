@@ -62,10 +62,6 @@ wake() {
   adb shell wm dismiss-keyguard
 }
 adb shell svc power stayon true
-# Google Play's check of apps installed over adb can stop an install on a dialog, which no one
-# answers, so the emulator skips it.
-adb shell settings put global verifier_verify_adb_installs 0
-adb shell settings put global package_verifier_enable 0
 
 if $unified_push; then
   # A distributor never opened stays in Android's stopped state, which drops the app's registration
@@ -85,12 +81,16 @@ python3 "$ci/send.py" "$key" --webpush-sender "$root/ci/linux/probe/target/debug
 sender=$!
 trap 'kill $sender 2>/dev/null || true; adb shell pm enable io.heckel.ntfy >/dev/null 2>&1 || true; adb shell svc power stayon false || true' EXIT
 
-# What the device shows when a step gives no answer, the focused window naming a dialog that
-# waits on a tap, and the system's last lines, on standard error so a step's own redirect keeps
-# them.
+# What the device shows when a step gives no answer: the focused window naming a dialog that
+# waits on a tap, the busiest processes, any install or compile still running, and the package
+# manager's and installer's lines since the variant began, on standard error so a step's own
+# redirect keeps them.
 diagnose() {
   adb shell dumpsys window | grep -E 'mCurrentFocus|mFocusedApp' >&2 || true
-  adb logcat -d -v time | tail -80 >&2 || true
+  adb shell dumpsys cpuinfo | head -15 >&2 || true
+  adb shell ps | grep -E 'dex2oat|installd|dexopt| pm$|vending|packageinstaller' >&2 || true
+  adb logcat -d -v time | grep -iE 'PackageManager|PackageInstaller|installd|dex2oat|dexopt|Finsky|BackgroundDexOpt|ActivityManager: (Start|Kill)' \
+    | tail -120 >&2 || true
 }
 
 # Runs a step under a bound, so a device waiting on a dialog fails the run at once with what it
@@ -131,9 +131,9 @@ run_variant() {
   (cd "$ci" && bounded 900 ./gradlew --no-daemon --quiet -Ppushups.manifest="$manifest" assembleDebugAndroidTest)
 
   wake
+  bounded 60 adb logcat -c
   bounded 120 adb uninstall "$package" >/dev/null || true
   bounded 300 adb install -t "$build/pushups/outputs/apk/androidTest/debug/pushups-debug-androidTest.apk" >/dev/null
-  bounded 60 adb logcat -c
   timeout 900 adb shell am instrument -w -e class "rs.pushups.ci.$class" "${arguments[@]}" \
     -e coverage true -e coverageFile "$files/jacoco.ec" "$package/androidx.test.runner.AndroidJUnitRunner" \
     | tee "$out/$variant.txt" || true
