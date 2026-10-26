@@ -19,7 +19,20 @@ use futures_channel::oneshot;
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::Bool;
-use objc2_foundation::{NSError, NSFileManager, NSSearchPathDirectory, NSSearchPathDomainMask};
+#[cfg(target_os = "macos")]
+use objc2_app_kit::NSWorkspace;
+#[cfg(target_os = "ios")]
+use objc2_foundation::NSDictionary;
+#[cfg(target_os = "macos")]
+use objc2_foundation::{NSBundle, NSString};
+use objc2_foundation::{
+    NSError, NSFileManager, NSProcessInfo, NSSearchPathDirectory, NSSearchPathDomainMask, NSURL,
+};
+#[cfg(target_os = "ios")]
+use objc2_ui_kit::{
+    UIApplication, UIApplicationOpenNotificationSettingsURLString,
+    UIApplicationOpenSettingsURLString,
+};
 use objc2_user_notifications::{
     UNAuthorizationOptions, UNAuthorizationStatus, UNNotificationSettings, UNUserNotificationCenter,
 };
@@ -156,6 +169,69 @@ impl Backend for Apple {
         reply
             .await
             .unwrap_or_else(|oneshot::Canceled| Err(Error::permission_unanswered()))
+    }
+
+    fn open_notification_settings() -> Result<(), Error> {
+        if STATE.get().is_none() {
+            return Err(Error::NotConfigured);
+        }
+        #[cfg(target_os = "ios")]
+        {
+            DispatchQueue::main().exec_async(|| {
+                let Some(mtm) = MainThreadMarker::new() else {
+                    return;
+                };
+                let major = NSProcessInfo::processInfo()
+                    .operatingSystemVersion()
+                    .majorVersion;
+                // SAFETY: the constant is a valid `NSString` the system always provides, held
+                // only as a shared reference for the program's life.
+                let settings = unsafe {
+                    if major >= 16 {
+                        UIApplicationOpenNotificationSettingsURLString
+                    } else {
+                        UIApplicationOpenSettingsURLString
+                    }
+                };
+                let Some(url) = NSURL::URLWithString(settings) else {
+                    return;
+                };
+                let app = UIApplication::sharedApplication(mtm);
+                // SAFETY: `url` is a valid `NSURL`, `options` an empty dictionary of the
+                // expected type, and `completion` is `None`, each valid for this call.
+                unsafe {
+                    app.openURL_options_completionHandler(&url, &NSDictionary::new(), None);
+                }
+            });
+            Ok(())
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let major = NSProcessInfo::processInfo()
+                .operatingSystemVersion()
+                .majorVersion;
+            let bundle = NSBundle::mainBundle()
+                .bundleIdentifier()
+                .map_or_else(|| "pushups".to_owned(), |id| id.to_string());
+            let scheme = if major >= 13 {
+                format!(
+                    "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id={bundle}"
+                )
+            } else {
+                "x-apple.systempreferences:com.apple.preference.notifications".to_owned()
+            };
+            let settings = NSString::from_str(&scheme);
+            let Some(url) = NSURL::URLWithString(&settings) else {
+                return Err(Error::platform("no URL for the notification setting"));
+            };
+            if NSWorkspace::sharedWorkspace().openURL(&url) {
+                Ok(())
+            } else {
+                Err(Error::platform(
+                    "the system refused to open the notification setting",
+                ))
+            }
+        }
     }
 
     /// Binds the process to the handler just set, and hands it the queue.

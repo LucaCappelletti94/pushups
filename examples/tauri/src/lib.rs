@@ -13,6 +13,15 @@ use tauri::webview::PageLoadEvent;
 #[cfg(target_os = "android")]
 pushups::firebase_config!("google-services.json");
 
+/// The platform offers the notification settings the example opens when the permission is
+/// denied.
+const OPEN_SETTINGS: bool = cfg!(any(
+    target_os = "ios",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "windows"
+));
+
 /// Installs `pushups`, sets its handler and registers, then runs the Tauri app.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -22,7 +31,7 @@ pub fn run() {
     }
     pushups::set_handler(|event| {
         log(&support::describe(&event));
-        page_show(support::shown(&event));
+        page_show(support::page::page_event(&event, support::now_ms()));
         if let Err(error) = support::register_again(&event) {
             log(&format!("register failed: {error}"));
         }
@@ -32,7 +41,7 @@ pub fn run() {
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_pushups::init())
-        .invoke_handler(tauri::generate_handler![allow, status])
+        .invoke_handler(tauri::generate_handler![allow, status, open_settings])
         .on_page_load(|webview, payload| {
             if payload.event() == PageLoadEvent::Finished {
                 page_loaded(webview.clone());
@@ -66,40 +75,62 @@ async fn status() -> support::PermissionUi {
     support::permission_ui(status)
 }
 
-/// The lines the page shows, and the page once it has loaded.
+/// Opens the notification settings, fire and forget, which the page's button calls while the
+/// platform refuses the permission.
+#[tauri::command]
+fn open_settings() -> Result<(), PageError> {
+    pushups::open_notification_settings().map_err(|error| PageError(error.to_string()))
+}
+
+/// The error a page command reports, its description as the page shows.
+#[derive(Debug, thiserror::Error, serde::Serialize)]
+#[serde(transparent)]
+#[error("{0}")]
+struct PageError(String);
+
+/// The page's events so far, and the page once it has loaded.
 static PAGE: Mutex<Page> = Mutex::new(Page {
-    lines: Vec::new(),
+    events: Vec::new(),
     webview: None,
 });
 
 struct Page {
-    lines: Vec<String>,
+    events: Vec<support::page::PageEvent>,
     webview: Option<Webview>,
 }
 
-/// Adds the line to the page, now if it has loaded, else when it does.
-fn page_show(line: String) {
+/// Adds the event to the page, now if it has loaded, else when it does.
+fn page_show(event: support::page::PageEvent) {
     let mut page = PAGE.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(webview) = &page.webview {
-        show_in(webview, &line);
+        show_in(webview, &json(&event));
     }
-    page.lines.push(line);
+    page.events.push(event);
 }
 
-/// Shows every line so far in the page that just loaded, and the later ones as they come.
+/// Applies the brand's assets to the page that just loaded, shows every event so far, and the
+/// later ones as they come.
 fn page_loaded(webview: Webview) {
     let mut page = PAGE.lock().unwrap_or_else(PoisonError::into_inner);
-    for line in &page.lines {
-        show_in(&webview, line);
+    let assets = support::page::assets(OPEN_SETTINGS);
+    if let Err(error) = webview.eval(format!("pushupsInit({assets});")) {
+        log(&format!("page update failed: {error}"));
+    }
+    for event in &page.events {
+        show_in(&webview, &json(event));
     }
     page.webview = Some(webview);
 }
 
-fn show_in(webview: &Webview, line: &str) {
-    let text = serde_json::to_string(line).expect("a string serialises");
-    if let Err(error) = webview.eval(format!("pushupsShow({text})")) {
+/// Evaluates the page's event function with the event's JSON.
+fn show_in(webview: &Webview, json: &str) {
+    if let Err(error) = webview.eval(format!("pushupsEvent({json})")) {
         log(&format!("page update failed: {error}"));
     }
+}
+
+fn json(event: &support::page::PageEvent) -> String {
+    serde_json::to_string(event).expect("the page's fields serialise")
 }
 
 /// The app's configuration from build-time keys, `PUSHUPS_VAPID_PUBLIC_KEY` (base64url) for UnifiedPush on Linux and Android and `PUSHUPS_WNS_REMOTE_ID` for Windows.

@@ -46,6 +46,10 @@ mod tests {
             futures_executor::block_on(Unsupported::permission_status()),
             Err(Error::Unsupported)
         );
+        assert_eq!(
+            Unsupported::open_notification_settings(),
+            Err(Error::Unsupported)
+        );
         Unsupported::handler_set();
         assert!(!Unsupported::in_service_worker());
         assert_eq!(

@@ -17,6 +17,8 @@ const KEPT: usize = 32;
 pub(crate) struct Screen {
     /// The permission state, the hint while asking is offered, drawn above the lines.
     state: Option<String>,
+    /// The transport and shortened token drawn above the state, for the registered push.
+    registration: Option<(String, String)>,
     lines: VecDeque<String>,
     surface: Option<Surface<Rc<dyn Window>, Rc<dyn Window>>>,
 }
@@ -25,6 +27,7 @@ impl Screen {
     pub(crate) fn new() -> Self {
         Self {
             state: None,
+            registration: None,
             lines: VecDeque::new(),
             surface: None,
         }
@@ -56,7 +59,14 @@ impl Screen {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Sets the transport and shortened token drawn above the state and asks for a redraw.
+    pub(crate) fn set_registration(&mut self, transport: &str, token: &str) {
+        self.registration = Some((transport.to_owned(), token.to_owned()));
+        if let Some(surface) = &self.surface {
+            surface.window().request_redraw();
+        }
+    }
+
     /// Sets the permission state drawn above the lines and asks for a redraw.
     pub(crate) fn set_state(&mut self, state: String) {
         self.state = Some(state);
@@ -94,9 +104,11 @@ impl Screen {
             insets: insets(window.as_ref()),
         };
         let lines = self
-            .state
+            .registration
             .iter()
-            .map(String::as_str)
+            .map(|(transport, _)| transport.as_str())
+            .chain(self.state.iter().map(String::as_str))
+            .chain(self.registration.iter().map(|(_, token)| token.as_str()))
             .chain(self.lines.iter().map(String::as_str));
         text::draw(&mut buffer, &frame, TITLE_TEXT, lines);
         let _ = buffer.present();

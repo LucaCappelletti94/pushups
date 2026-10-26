@@ -128,6 +128,27 @@ impl Backend for Android {
         std::future::ready(result)
     }
 
+    fn open_notification_settings() -> Result<(), Error> {
+        let runtime = runtime()?;
+        let refused = with_attached(&runtime.vm, |env| -> jni::errors::Result<Option<String>> {
+            let message = env
+                .call_static_method(
+                    &runtime.pushups,
+                    "openNotificationSettings",
+                    "()Ljava/lang/String;",
+                    &[],
+                )?
+                .l()?;
+            if message.as_raw().is_null() {
+                Ok(None)
+            } else {
+                Ok(Some(env.get_string(&JString::from(message))?.into()))
+            }
+        })
+        .map_err(Error::platform)?;
+        refused.map_or(Ok(()), |message| Err(Error::platform(message)))
+    }
+
     /// Binds the UI session to the handler just set, and hands it the queue if the session was
     /// waiting for one.
     fn handler_set() {

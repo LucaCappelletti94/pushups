@@ -130,6 +130,8 @@ run_variant unifiedpush-fallback "config-real background-handler" default Unifie
 adb shell pm enable io.heckel.ntfy >/dev/null
 # A tap into a running singleTop Activity, plain and androidx.
 run_variant single-top "config-real background-handler" single-top SingleTopTapTest
+# Opens the app's notification setting through `open_notification_settings` and lands in the settings app.
+run_variant open-settings "" default NotificationSettingsTest
 # A Kotlin module of another version than the crate, which the handshake stops before any other export.
 run_variant module-mismatch config-real module-mismatch ModuleMismatchTest crate "$("$ci/../crate-version.sh")"
 # A library without the handshake, as one built with a crate older than the module.

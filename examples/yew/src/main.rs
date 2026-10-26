@@ -38,15 +38,39 @@ async fn notification_for(message: Message) -> Notification {
 
 /// The page's log, newest last.
 #[derive(Default, PartialEq)]
-struct Lines(Vec<String>);
+struct Lines(Vec<support::Line>);
 
 impl Reducible for Lines {
-    type Action = String;
+    type Action = support::Line;
 
-    fn reduce(self: Rc<Self>, line: String) -> Rc<Self> {
+    fn reduce(self: Rc<Self>, entry: support::Line) -> Rc<Self> {
         let mut lines = self.0.clone();
-        lines.push(line);
+        lines.push(entry);
         Rc::new(Self(lines))
+    }
+}
+
+/// The line of the list the page shows, a push card or a compact event.
+fn entry_view(entry: &support::Line) -> Html {
+    match entry {
+        support::Line::Push(push) => html! {
+            <div class="card">
+                <p class="title">{ push.title.clone() }</p>
+                <p class="body">{ push.body.clone() }</p>
+                <div class="meta">
+                    <span>{ push.time.clone() }</span>
+                    if push.started_app {
+                        <span class="badge">{ "started the app" }</span>
+                    }
+                    if let Some(delay) = push.delay_ms {
+                        <span>{ format!("+{delay} ms") }</span>
+                    }
+                </div>
+            </div>
+        },
+        support::Line::Text(text) => html! {
+            <p class="line">{ text.clone() }</p>
+        },
     }
 }
 
@@ -54,9 +78,11 @@ impl Reducible for Lines {
 fn App() -> Html {
     let lines = use_reducer(Lines::default);
     let permission = use_state(|| None::<support::PermissionUi>);
+    let registration = use_state(|| None::<pushups::Token>);
     {
         let add = lines.dispatcher();
         let permission = permission.clone();
+        let registration = registration.clone();
         use_effect_with((), move |()| {
             wasm_bindgen_futures::spawn_local(async move {
                 log(&format!("ui mounted at_ms={}", support::now_ms()));
@@ -69,11 +95,14 @@ fn App() -> Html {
                 permission.set(Some(support::permission_ui(status)));
                 let mut events = pushups::events();
                 if let Err(error) = pushups::register() {
-                    add.dispatch(format!("register failed: {error}"));
+                    add.dispatch(support::Line::Text(format!("register failed: {error}")));
                 }
                 while let Some(event) = events.next().await {
                     log(&support::describe(&event));
-                    add.dispatch(support::shown(&event));
+                    if let pushups::Event::Token(token) = &event {
+                        registration.set(Some(token.clone()));
+                    }
+                    add.dispatch(support::line(&event, support::now_ms()));
                 }
             });
         });
@@ -121,21 +150,59 @@ fn App() -> Html {
             });
         })
     };
+    // The token's copy button copies the full token line, the page shows its short form.
+    let copy = {
+        #[cfg(target_arch = "wasm32")]
+        let registration = registration.clone();
+        Callback::from(move |_| {
+            // The clipboard lives in the browser, so the host build keeps an empty body.
+            #[cfg(target_arch = "wasm32")]
+            {
+                let Some(token) = &*registration else {
+                    return;
+                };
+                support::page::copy(&support::token(token));
+            }
+        })
+    };
     // The ask button exists only while asking is offered, and the state shows on its own line.
     let asks = permission.as_ref().is_some_and(|ui| ui.asks);
     let label = permission
         .as_ref()
         .map(|ui| ui.label.clone())
         .unwrap_or_default();
+    let entries: Vec<Html> = lines.0.iter().rev().map(entry_view).collect();
     html! {
-        <div style="font-family: system-ui, sans-serif; color: #f5f7fa; padding: 20px 16px;">
-            <h2>{ "pushups Yew example" }</h2>
-            if asks {
-                <button onclick={allow}>{ "Allow notifications" }</button>
-            }
-            <p>{ label }</p>
-            { for lines.0.iter().map(|line| html! { <p style="font-family: monospace; font-size: 12px;">{ line }</p> }) }
-        </div>
+        <>
+            <style>{ support::page::CSS }</style>
+            <div class="app">
+                <div class="header">
+                    <div class="mark">
+                        { Html::from_html_unchecked(AttrValue::from(support::page::MARK)) }
+                    </div>
+                    <h2>{ "pushups Yew example" }</h2>
+                </div>
+                <div class="status">
+                    <div class="row">
+                        <span class="label">{ "Transport" }</span>
+                        <span class="muted">{ registration.as_ref().map_or("—", support::transport) }</span>
+                    </div>
+                    <div class="row">
+                        <span class="muted">{ label }</span>
+                        if asks {
+                            <button onclick={allow}>{ "Allow notifications" }</button>
+                        }
+                    </div>
+                    if registration.is_some() {
+                        <div class="row">
+                            <span class="token">{ registration.as_ref().map_or_default(support::shortened) }</span>
+                            <button class="copy" onclick={copy}>{ "Copy" }</button>
+                        </div>
+                    }
+                </div>
+                { entries }
+            </div>
+        </>
     }
 }
 

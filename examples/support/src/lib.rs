@@ -11,6 +11,7 @@ use pushups::{
     VapidPublicKey, WebPushConfig, WnsConfig,
 };
 
+pub mod page;
 pub mod text;
 
 /// Registers again when the UnifiedPush distributor dropped the app's registration, as the
@@ -48,6 +49,37 @@ pub fn shown(event: &Event) -> String {
     }
 }
 
+/// A line of the example's list, a push shown as a card or everything else the handler saw.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum Line {
+    /// A push the platform delivered, shown as a card.
+    Push(Push),
+    /// Everything else the handler saw, shown as a compact line.
+    Text(String),
+}
+
+/// The list line for `event`, received at `at`, a push card or a compact event.
+#[must_use]
+pub fn line(event: &Event, at: u128) -> Line {
+    match event {
+        Event::Message(message) => Line::Push(push_view(message, at)),
+        _ => Line::Text(shown(event)),
+    }
+}
+
+/// The list as one log, each line as its compact text, oldest first.
+#[must_use]
+pub fn log_text(lines: &[Line]) -> String {
+    lines
+        .iter()
+        .map(|line| match line {
+            Line::Push(push) => push.line(),
+            Line::Text(text) => text.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The push's `seq` and its latency from the sender's `sent_at_ms` to `at`.
 #[must_use]
 pub fn timing(message: &Message, at: u128) -> String {
@@ -62,6 +94,73 @@ pub fn timing(message: &Message, at: u128) -> String {
             || "-".to_owned(),
             |sent| at.saturating_sub(sent).to_string()
         ),
+    )
+}
+
+/// A push as the example's list shows it, its `title` and `body` from the payload's fields and
+/// its arrival at `at`.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Push {
+    /// The payload's `title`, or the payload as text.
+    pub title: String,
+    /// The payload's `body`, or the payload as text.
+    pub body: String,
+    /// The arrival as local `HH:MM:SS`.
+    pub time: String,
+    /// Whether the platform started the app for the push.
+    pub started_app: bool,
+    /// The milliseconds from the payload's `sent_at_ms` to the arrival.
+    pub delay_ms: Option<u128>,
+}
+
+impl Push {
+    /// The compact line the drawn windows show, `HH:MM:SS title, body, +N ms`.
+    #[must_use]
+    pub fn line(&self) -> String {
+        match self.delay_ms {
+            Some(delay) => format!("{} {}, {}, +{delay} ms", self.time, self.title, self.body),
+            None => format!("{} {}, {}", self.time, self.title, self.body),
+        }
+    }
+}
+
+/// The push `message` the handler received at `at`, for the example's list.
+#[must_use]
+pub fn push_view(message: &Message, at: u128) -> Push {
+    let payload = String::from_utf8_lossy(&message.payload).into_owned();
+    let data: serde_json::Value = serde_json::from_slice(&message.payload).unwrap_or_default();
+    let sent = data
+        .get("sent_at_ms")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|sent| sent.parse::<u128>().ok());
+    Push {
+        title: field(message, "title").unwrap_or_else(|| payload.clone()),
+        body: field(message, "body").unwrap_or(payload),
+        time: clock(at),
+        started_app: message.started_app,
+        delay_ms: sent.map(|sent| at.saturating_sub(sent)),
+    }
+}
+
+/// The wall-clock milliseconds since 1970 as local `HH:MM:SS`, from the system's local offset.
+fn clock(at: u128) -> String {
+    use time::{OffsetDateTime, UtcOffset};
+    let Ok(seconds) = i64::try_from(at / 1000) else {
+        return "--:--:--".to_owned();
+    };
+    let Ok(offset) = UtcOffset::current_local_offset() else {
+        return "--:--:--".to_owned();
+    };
+    let Ok(local) =
+        OffsetDateTime::from_unix_timestamp(seconds).map(|instant| instant.to_offset(offset))
+    else {
+        return "--:--:--".to_owned();
+    };
+    format!(
+        "{:02}:{:02}:{:02}",
+        local.hour(),
+        local.minute(),
+        local.second()
     )
 }
 
@@ -83,6 +182,42 @@ pub fn token(token: &Token) -> String {
         Token::Wns { channel_uri, .. } => format!("wns={channel_uri}"),
         _ => format!("{token:?}"),
     }
+}
+
+/// The transport name for the page's status card, `APNs`, `FCM`, `WNS`, `Web Push` on
+/// `wasm32-unknown-unknown` and `UnifiedPush` for a `WebPush` token elsewhere.
+#[must_use]
+pub fn transport(token: &Token) -> &'static str {
+    match token {
+        Token::Apns { .. } => "APNs",
+        Token::Fcm { .. } => "FCM",
+        Token::Wns { .. } => "WNS",
+        Token::WebPush { .. } => {
+            #[cfg(target_arch = "wasm32")]
+            {
+                "Web Push"
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                "UnifiedPush"
+            }
+        }
+        _ => "Unknown",
+    }
+}
+
+/// The token line cut to the page's width, the first and last 8 characters of [`token`] around
+/// an ellipsis.
+#[must_use]
+pub fn shortened(token: &Token) -> String {
+    let line = self::token(token);
+    let chars = line.chars().count();
+    if chars <= 16 {
+        return line;
+    }
+    let head: String = line.chars().take(8).collect();
+    let tail: String = line.chars().skip(chars - 8).collect();
+    format!("{head}...{tail}")
 }
 
 /// The wall-clock milliseconds since 1970, from the standard clock on the native targets and
@@ -266,6 +401,8 @@ pub struct PermissionUi {
     pub label: String,
     /// Whether a prompt can change the answer, so the example offers asking.
     pub asks: bool,
+    /// Whether the platform denied the permission, so the example offers the system settings.
+    pub denied: bool,
 }
 
 /// Maps the permission the platform holds or the prompt answered to what the example shows.
@@ -275,27 +412,33 @@ pub fn permission_ui(status: Result<Permission, pushups::Error>) -> PermissionUi
         Ok(Permission::NotDetermined) => PermissionUi {
             label: "Notifications are not allowed yet".to_owned(),
             asks: true,
+            denied: false,
         },
         Ok(Permission::Dismissed) => PermissionUi {
             label: "The prompt was dismissed, it can be shown again".to_owned(),
             asks: true,
+            denied: false,
         },
         Ok(Permission::Granted) => PermissionUi {
             label: "Notifications are on".to_owned(),
             asks: false,
+            denied: false,
         },
         Ok(Permission::Denied) => PermissionUi {
             label: "Notifications are off, turn them on in Settings".to_owned(),
             asks: false,
+            denied: true,
         },
         // A platform answer `Permission` has not named yet, which the example cannot ask about.
         Ok(unknown) => PermissionUi {
             label: format!("Notifications: {unknown:?}"),
             asks: false,
+            denied: false,
         },
         Err(error) => PermissionUi {
             label: format!("Notifications are unavailable: {error}"),
             asks: false,
+            denied: false,
         },
     }
 }
@@ -311,4 +454,104 @@ pub fn worker_notification(message: &Message, log: impl Fn(&str)) -> Notificatio
                 .unwrap_or_else(|| format!("built in the service worker, {line}")),
         )
         .navigate("/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pushups::{Event, Message, Permission, Token};
+
+    fn fcm(token: &str) -> Token {
+        Token::Fcm {
+            token: token.to_owned(),
+            keys: None,
+        }
+    }
+
+    #[test]
+    fn transport_names_each_backend() {
+        assert_eq!(transport(&fcm("t")), "FCM");
+        assert_eq!(
+            transport(&Token::Apns {
+                device_token: vec![0],
+                keys: None
+            }),
+            "APNs"
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        assert_eq!(
+            transport(&Token::WebPush {
+                endpoint: "https://example.com".into(),
+                p256dh: [0; 65],
+                auth: [0; 16],
+                expires: None
+            }),
+            "UnifiedPush"
+        );
+    }
+
+    #[test]
+    fn shortened_keeps_head_and_tail_around_an_ellipsis() {
+        let token = fcm(&"a".repeat(40));
+        let line = super::token(&token);
+        let cut = shortened(&token);
+        assert!(cut.starts_with(&line[..8]));
+        assert!(cut.ends_with(&line[line.len() - 8..]));
+        assert!(cut.contains("..."));
+        assert_eq!(cut.chars().count(), 8 + 3 + 8);
+    }
+
+    #[test]
+    fn shortened_leaves_a_short_line_alone() {
+        let token = fcm("short");
+        assert_eq!(shortened(&token), super::token(&token));
+    }
+
+    #[test]
+    fn push_view_reads_the_payload_fields_and_the_delay() {
+        let payload = br#"{"title":"t","body":"b","sent_at_ms":"1000"}"#;
+        let message = Message {
+            payload: payload.to_vec(),
+            started_app: true,
+        };
+        let view = push_view(&message, 1500);
+        assert_eq!(view.title, "t");
+        assert_eq!(view.body, "b");
+        assert!(view.started_app);
+        assert_eq!(view.delay_ms, Some(500));
+        assert_eq!(view.time.chars().count(), 8);
+    }
+
+    #[test]
+    fn push_view_falls_back_to_the_payload_text() {
+        let message = Message {
+            payload: b"plain text".to_vec(),
+            started_app: false,
+        };
+        let view = push_view(&message, 0);
+        assert_eq!(view.title, "plain text");
+        assert_eq!(view.body, "plain text");
+        assert!(!view.started_app);
+        assert_eq!(view.delay_ms, None);
+    }
+
+    #[test]
+    fn line_maps_a_push_to_a_card_and_the_rest_to_text() {
+        let message = Message {
+            payload: br#"{"body":"b"}"#.to_vec(),
+            started_app: false,
+        };
+        assert!(matches!(line(&Event::Message(message), 0), Line::Push(_)));
+        assert_eq!(
+            line(&Event::MessagesDropped, 0),
+            Line::Text("Some pushes were dropped".to_owned())
+        );
+    }
+
+    #[test]
+    fn permission_ui_marks_only_a_denied_permission() {
+        assert!(permission_ui(Ok(Permission::Denied)).denied);
+        assert!(!permission_ui(Ok(Permission::Granted)).denied);
+        assert!(permission_ui(Ok(Permission::NotDetermined)).asks);
+    }
 }

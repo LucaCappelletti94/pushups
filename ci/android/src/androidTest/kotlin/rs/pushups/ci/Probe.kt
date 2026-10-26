@@ -38,6 +38,10 @@ object Probe {
     @JvmStatic
     external fun permissionStatus(): String
 
+    /** `null`, or the error of `pushups::open_notification_settings`. */
+    @JvmStatic
+    external fun openNotificationSettings(): String?
+
     /** `null`, or the error of `Notification::show` on the notification built from the fields. */
     @JvmStatic
     fun present(title: String, body: String?, navigate: String?, tag: String?, icon: String?, data: String?): String? =

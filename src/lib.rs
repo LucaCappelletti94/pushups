@@ -245,6 +245,26 @@ pub async fn permission_status() -> Result<Permission, Error> {
     Platform::permission_status().await
 }
 
+/// Opens the system setting where the user turns this app's notifications on or off.
+///
+/// On iOS 16 and later it opens the notification setting for this app, and iOS 15 and earlier
+/// open the Settings app. On macOS 13 and later it opens the notification setting for this
+/// app, and earlier macOS open the Notifications pane. On Android it opens the app's
+/// notification setting, and Android 7 and earlier open the app's details page. On Windows it
+/// opens the system notification setting.
+///
+/// It returns once the request reached the system, without waiting for the user to change
+/// anything.
+///
+/// # Errors
+///
+/// [`Error::Unsupported`] on Linux, on the web and on a target without a backend, the errors of
+/// [`install`] where the backend is not set up, and [`Error::Platform`] when the platform
+/// refuses to open the setting.
+pub fn open_notification_settings() -> Result<(), Error> {
+    Platform::open_notification_settings()
+}
+
 // Holds `request_permission` and `permission_status` to their documented `Send` futures on every
 // native target.
 #[cfg(not(target_arch = "wasm32"))]

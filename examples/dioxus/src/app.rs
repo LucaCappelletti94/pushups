@@ -9,22 +9,39 @@ use pushups_example_support as support;
 
 use super::log;
 
+/// The platforms where a denied permission lives in the system settings the example opens.
+const OPEN_SETTINGS: bool = cfg!(any(
+    target_os = "ios",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "windows"
+));
+
 #[component]
 pub fn App() -> Element {
-    let mut lines = use_signal(Vec::<String>::new);
+    let mut lines = use_signal(Vec::<support::Line>::new);
     let mut permission = use_signal(|| None::<support::PermissionUi>);
+    let mut registration = use_signal(|| None::<pushups::Token>);
+    let mut settings_error = use_signal(|| None::<String>);
     let favicon = use_hook(|| format!("data:image/svg+xml;base64,{}", STANDARD.encode(FAVICON)));
     use_future(move || async move {
         log(&format!("ui mounted at_ms={}", support::now_ms()));
         let mut events = pushups::events();
         if let Err(error) = pushups::register() {
-            lines.write().push(format!("register failed: {error}"));
+            lines
+                .write()
+                .push(support::Line::Text(format!("register failed: {error}")));
         }
         while let Some(event) = events.next().await {
             log(&support::describe(&event));
-            lines.write().push(support::shown(&event));
+            if let pushups::Event::Token(token) = &event {
+                registration.write().replace(token.clone());
+            }
+            lines.write().push(support::line(&event, support::now_ms()));
             if let Err(error) = support::register_again(&event) {
-                lines.write().push(format!("register failed: {error}"));
+                lines
+                    .write()
+                    .push(support::Line::Text(format!("register failed: {error}")));
             }
         }
     });
@@ -46,59 +63,99 @@ pub fn App() -> Element {
             }
         }
     });
+    let entries: Vec<Element> = lines.read().iter().rev().map(entry_view).collect();
     rsx! {
-        document::Style { {PAGE} }
+        document::Style { {support::page::CSS} }
         document::Link { rel: "icon", href: favicon }
         div { class: "app",
             div { class: "header",
-                div { class: "mark", dangerous_inner_html: MARK }
+                div { class: "mark", dangerous_inner_html: support::page::MARK }
                 h2 { "pushups example" }
             }
-            div { class: "actions",
-                if permission.read().as_ref().is_some_and(|ui| ui.asks) {
-                    button {
-                        onclick: move |_| async move {
-                            let status = pushups::request_permission().await;
-                            let answer = support::permission(status.clone());
-                            log(&format!("permission {answer}"));
-                            permission.set(Some(support::permission_ui(status)));
-                        },
-                        "Allow notifications"
+            div { class: "status",
+                div { class: "row",
+                    span { class: "label", "Transport" }
+                    span { class: "muted", {registration.read().as_ref().map_or("—", support::transport)} }
+                }
+                div { class: "row",
+                    span { class: "muted", {permission.read().as_ref().map(|ui| ui.label.clone()).unwrap_or_default()} }
+                    if permission.read().as_ref().is_some_and(|ui| ui.asks) {
+                        button {
+                            onclick: move |_| async move {
+                                let status = pushups::request_permission().await;
+                                let answer = support::permission(status.clone());
+                                log(&format!("permission {answer}"));
+                                permission.set(Some(support::permission_ui(status)));
+                            },
+                            "Allow notifications"
+                        }
+                    }
+                    if OPEN_SETTINGS && permission.read().as_ref().is_some_and(|ui| ui.denied) {
+                        button {
+                            class: "secondary",
+                            onclick: move |_| {
+                                match pushups::open_notification_settings() {
+                                    Ok(()) => *settings_error.write() = None,
+                                    Err(error) => {
+                                        *settings_error.write() = Some(format!("{error}"))
+                                    }
+                                }
+                            },
+                            "Open Settings"
+                        }
                     }
                 }
+                if registration.read().is_some() {
+                    div { class: "row",
+                        span { class: "token", {registration.read().as_ref().map_or_default(support::shortened)} }
+                        button {
+                            class: "copy",
+                            onclick: move |_| {
+                                if let Some(token) = registration.read().clone() {
+                                    copy_text(&support::token(&token));
+                                }
+                            },
+                            "Copy"
+                        }
+                    }
+                }
+                if let Some(error) = settings_error.read().clone() {
+                    p { class: "error", {error} }
+                }
+            }
+            div { class: "actions",
                 if cfg!(target_arch = "wasm32") {
                     button { onclick: move |_| reload_page(), "Reload" }
-                    button {
-                        onclick: move |_| copy_text(&lines.read().join("\n")),
-                        "Copy log"
-                    }
+                }
+                button {
+                    onclick: move |_| copy_text(&support::log_text(&lines.read())),
+                    "Copy log"
                 }
             }
-            p {
-                class: "muted",
-                {permission.read().as_ref().map(|ui| ui.label.clone()).unwrap_or_default()}
-            }
-            for line in lines.read().iter() {
-                p { class: "line", {line.clone()} }
-            }
+            {entries.into_iter()}
         }
     }
 }
 
-/// The page's styles in the brand's colours from `assets/brand`, a navy ground and the mark's red-to-orange gradient.
-const PAGE: &str = "
-:root { --navy: #0e1824; --surface: #172436; --text: #f5f7fa; --muted: #9aa6b8; --gradient: linear-gradient(135deg, #fa1e13, #f67017); }
-html, body { margin: 0; min-height: 100%; background: var(--navy); }
-.app { font-family: -apple-system, system-ui, sans-serif; color: var(--text); padding: 20px 16px; max-width: 640px; margin: 0 auto; box-sizing: border-box; }
-.header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-.header h2 { margin: 0; font-size: 26px; font-weight: 700; }
-.mark { width: 56px; flex: none; }
-.mark svg { display: block; width: 100%; height: auto; }
-.actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.actions button { font-size: 16px; font-weight: 600; color: #ffffff; padding: 10px 16px; border: none; border-radius: 10px; background: var(--gradient); }
-.muted { color: var(--muted); }
-.line { font-family: ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; background: var(--surface); padding: 8px 10px; border-radius: 8px; margin: 8px 0; }
-";
+/// The line of the list the page shows, a push card or a compact event.
+fn entry_view(entry: &support::Line) -> Element {
+    match entry {
+        support::Line::Push(push) => rsx! {
+            div { class: "card",
+                p { class: "title", {push.title.clone()} }
+                p { class: "body", {push.body.clone()} }
+                div { class: "meta",
+                    span { {push.time.clone()} }
+                    if push.started_app { span { class: "badge", "started the app" } }
+                    if let Some(delay) = push.delay_ms { span { {format!("+{delay} ms")} } }
+                }
+            }
+        },
+        support::Line::Text(text) => rsx! {
+            p { class: "line", {text.clone()} }
+        },
+    }
+}
 
 /// The page or webview is back in the foreground, so the permission read re-runs.
 const FOREGROUND: &str = "
@@ -107,9 +164,6 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('focus', () => dioxus.send(true));
 ";
-
-/// The brand mark, drawn inline so every platform shows it without an asset pipeline.
-const MARK: &str = include_str!("../../../assets/brand/mark.svg");
 
 /// The browser tab's icon, linked as a `data:` URL since `public_dir` serves only the crate's `js/`.
 const FAVICON: &[u8] = include_bytes!("../../../assets/brand/favicon.svg");
@@ -126,15 +180,9 @@ fn reload_page() {
 #[cfg(not(target_arch = "wasm32"))]
 fn reload_page() {}
 
-/// Puts `text` on the clipboard, so a phone can paste the log into a message.
-#[cfg(target_arch = "wasm32")]
+/// Puts `text` on the clipboard, so a phone can paste the log into a message, through the
+/// webview's clipboard API with a fallback to a hidden field.
 fn copy_text(text: &str) {
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    let clipboard = window.navigator().clipboard();
-    let _ = clipboard.write_text(text);
+    let script = support::page::clipboard_script(text);
+    document::eval(&script);
 }
-
-#[cfg(not(target_arch = "wasm32"))]
-fn copy_text(_text: &str) {}

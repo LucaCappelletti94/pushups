@@ -23,10 +23,22 @@ enum Update {
     Permission(support::PermissionUi),
 }
 
-/// The window's state line for the permission, the hint while asking is offered.
+/// Whether the platform offers the notification settings the example opens when the
+/// permission is denied.
+const OPEN_SETTINGS: bool = cfg!(any(
+    target_os = "ios",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "windows"
+));
+
+/// The window's state line for the permission, the hint while asking is offered and the
+/// hint that opens the settings while the platform refuses the permission and offers them.
 fn state_line(ui: &support::PermissionUi) -> String {
     if ui.asks {
         "Click, tap or press a key to allow notifications".to_owned()
+    } else if ui.denied && OPEN_SETTINGS {
+        "Click, tap or press a key to open Settings".to_owned()
     } else {
         ui.label.clone()
     }
@@ -64,9 +76,12 @@ fn main() {
     let mut asking = false;
     // Asking is offered while the platform's answer is one a prompt can change.
     let mut asks = permission.asks;
+    // The platform refuses the permission, while it offers its settings.
+    let mut denied = permission.denied;
     event_loop.run(move |event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
         let mut ask = false;
+        let mut open = false;
         let mut refresh = false;
         match event {
             TaoEvent::NewEvents(tao::event::StartCause::Init) => {
@@ -88,7 +103,16 @@ fn main() {
             TaoEvent::UserEvent(Update::Push(event)) => {
                 log(&support::describe(&event));
                 if let Some(screen) = &mut screen {
-                    screen.push(support::shown(&event));
+                    match &event {
+                        Event::Token(token) => screen.set_registration(
+                            support::transport(token),
+                            &support::shortened(token),
+                        ),
+                        Event::Message(message) => {
+                            screen.push(support::push_view(message, support::now_ms()).line())
+                        }
+                        _ => screen.push(support::shown(&event)),
+                    }
                 }
                 if let Err(error) = support::register_again(&event) {
                     log(&format!("register failed: {error}"));
@@ -100,6 +124,7 @@ fn main() {
                 }
                 asking = false;
                 asks = ui.asks;
+                denied = ui.denied;
             }
             TaoEvent::RedrawRequested(_) => {
                 if let Some(screen) = &mut screen {
@@ -111,16 +136,24 @@ fn main() {
                 // The window is back in the foreground, where the user may have changed the
                 // permission in Settings.
                 WindowEvent::Resumed | WindowEvent::Focused(true) => refresh = true,
-                // A mouse button, a touch or a key, the user's action the prompt answers.
+                // A mouse button, a touch or a key, the user's action the prompt and the settings
+                // answer.
                 WindowEvent::MouseInput {
                     state: ElementState::Pressed,
                     ..
-                } => ask = asks,
-                WindowEvent::Touch(touch) if touch.phase == TouchPhase::Started => ask = asks,
+                } => {
+                    ask = asks;
+                    open = denied && OPEN_SETTINGS && !asks;
+                }
+                WindowEvent::Touch(touch) if touch.phase == TouchPhase::Started => {
+                    ask = asks;
+                    open = denied && OPEN_SETTINGS && !asks;
+                }
                 WindowEvent::KeyboardInput { event, .. }
                     if event.state == ElementState::Pressed && !event.repeat =>
                 {
                     ask = asks;
+                    open = denied && OPEN_SETTINGS && !asks;
                 }
                 _ => {}
             },
@@ -143,6 +176,19 @@ fn main() {
             // A thread of its own, outside any async runtime, so blocking on the prompt is safe.
             std::thread::spawn(move || {
                 let ui = note(futures_executor::block_on(pushups::request_permission()));
+                let _ = proxy.send_event(Update::Permission(ui));
+            });
+        }
+        if open && !asking {
+            asking = true;
+            let proxy = proxy.clone();
+            // A thread of its own, outside any async runtime, so the platform's answer comes
+            // back to the loop.
+            std::thread::spawn(move || {
+                if let Err(error) = pushups::open_notification_settings() {
+                    log(&format!("open settings failed: {error}"));
+                }
+                let ui = note(futures_executor::block_on(pushups::permission_status()));
                 let _ = proxy.send_event(Update::Permission(ui));
             });
         }

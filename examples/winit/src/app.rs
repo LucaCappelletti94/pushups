@@ -15,20 +15,30 @@ use winit::window::{Window, WindowAttributes, WindowId};
 
 use crate::screen::Screen;
 
+/// Whether the platform offers the notification settings the example opens when the
+/// permission is denied.
+const OPEN_SETTINGS: bool = cfg!(any(
+    target_os = "ios",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "windows"
+));
+
 /// What the event loop wakes for, a push event or the permission the platform holds or the
 /// prompt answered.
 enum Update {
     Push(Event),
-    /// The permission, shown on the window, which the web shows on its page instead.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// The permission, which the window's drawn status block shows.
     Permission(support::PermissionUi),
 }
 
-/// The window's state line for the permission, the hint while asking is offered.
-#[cfg(not(target_arch = "wasm32"))]
+/// The window's state line for the permission, the hint while asking is offered and the
+/// hint that opens the settings while the platform refuses the permission and offers them.
 fn state_line(ui: &support::PermissionUi) -> String {
     if ui.asks {
         "Click, tap or press a key to allow notifications".to_owned()
+    } else if ui.denied && OPEN_SETTINGS {
+        "Click, tap or press a key to open Settings".to_owned()
     } else {
         ui.label.clone()
     }
@@ -80,15 +90,15 @@ pub(crate) fn run(event_loop: EventLoop) -> Result<(), Box<dyn std::error::Error
         log(&format!("register failed: {error}"));
     }
     #[cfg(target_arch = "wasm32")]
-    ask_permission();
+    ask_permission(sender.clone());
     Ok(event_loop.run_app(App::new(updates, sender, proxy))?)
 }
 
 /// Wires the page's button to ask for permission, since the prompt needs the click's gesture,
 /// and shows the permission the platform holds, which the page re-reads when it comes back to
-/// the foreground.
+/// the foreground, on the page's line and on the canvas's drawn status block.
 #[cfg(target_arch = "wasm32")]
-fn ask_permission() {
+fn ask_permission(sender: Sender<Update>) {
     use wasm_bindgen::JsCast;
     let Some(document) = web_sys::window().and_then(|window| window.document()) else {
         return;
@@ -101,15 +111,20 @@ fn ask_permission() {
     };
     let wired = button.clone();
     let wired_line = line.clone();
+    let wired_sender = sender.clone();
     let closure = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(
         move |_: web_sys::Event| {
             let button = wired.clone();
             let line = wired_line.clone();
+            let sender = wired_sender.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let status = pushups::request_permission().await;
                 let answer = support::permission(status.clone());
                 log(&format!("permission {answer}"));
-                show(&button, &line, &support::permission_ui(status));
+                let ui = support::permission_ui(status);
+                show(&button, &line, &ui);
+                // The drawn status block shows the answer, like the native window.
+                let _ = sender.send(Update::Permission(ui));
             });
         },
     );
@@ -131,7 +146,10 @@ fn ask_permission() {
             "permission {}",
             support::permission(status.clone())
         ));
-        show(&visible, &line, &support::permission_ui(status));
+        let ui = support::permission_ui(status);
+        show(&visible, &line, &ui);
+        // The drawn status block shows the state, like the native window.
+        let _ = sender.send(Update::Permission(ui));
         let on_foreground = visible.clone();
         // A clone for the registration, since the closure takes the document by move.
         let listener = document.clone();
@@ -139,11 +157,14 @@ fn ask_permission() {
             if document.visibility_state() == web_sys::VisibilityState::Visible {
                 let on_foreground = on_foreground.clone();
                 let line = line.clone();
+                let sender = sender.clone();
                 wasm_bindgen_futures::spawn_local(async move {
                     let status = pushups::permission_status().await;
                     let answer = support::permission(status.clone());
                     log(&format!("permission {answer}"));
-                    show(&on_foreground, &line, &support::permission_ui(status));
+                    let ui = support::permission_ui(status);
+                    show(&on_foreground, &line, &ui);
+                    let _ = sender.send(Update::Permission(ui));
                 });
             }
         });
@@ -183,17 +204,11 @@ struct App {
     )]
     proxy: EventLoopProxy,
     /// A prompt is open, so another click asks nothing.
-    #[cfg_attr(
-        target_arch = "wasm32",
-        expect(dead_code, reason = "the web asks from its button")
-    )]
     asking: bool,
     /// The window offers a prompt, while the web answers on its button.
-    #[cfg_attr(
-        target_arch = "wasm32",
-        expect(dead_code, reason = "the web answers on its button")
-    )]
     asks: bool,
+    /// The platform refuses the permission, while the platform offers its settings.
+    denied: bool,
 }
 
 impl App {
@@ -202,7 +217,7 @@ impl App {
         let mut screen = Screen::new();
         #[cfg(target_arch = "wasm32")]
         let screen = Screen::new();
-        let asks = {
+        let (asks, denied) = {
             // The web asks from its button, so only a native window explains the click.
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -210,11 +225,11 @@ impl App {
                 // from it.
                 let ui = note(futures_executor::block_on(pushups::permission_status()));
                 screen.set_state(state_line(&ui));
-                ui.asks
+                (ui.asks, ui.denied)
             }
             #[cfg(target_arch = "wasm32")]
             {
-                false
+                (false, false)
             }
         };
         Self {
@@ -225,6 +240,7 @@ impl App {
             proxy,
             asking: false,
             asks,
+            denied,
         }
     }
 
@@ -245,11 +261,49 @@ impl App {
         });
     }
 
-    /// Asks for permission, while the platform's answer is one a prompt can change.
+    /// Opens the notification settings, while the platform refuses the permission and a
+    /// prompt cannot change it.
     #[cfg(not(target_arch = "wasm32"))]
-    fn ask_if_offered(&mut self) {
+    fn open_settings(&mut self) {
+        if self.asking {
+            return;
+        }
+        self.asking = true;
+        let (sender, proxy) = (self.sender.clone(), self.proxy.clone());
+        // A thread of its own, outside any async runtime, so the platform's answer comes back
+        // to the loop.
+        std::thread::spawn(move || {
+            if let Err(error) = pushups::open_notification_settings() {
+                log(&format!("open settings failed: {error}"));
+            }
+            let ui = note(futures_executor::block_on(pushups::permission_status()));
+            let _ = sender.send(Update::Permission(ui));
+            proxy.wake_up();
+        });
+    }
+
+    /// The user's action, the prompt while asking is offered and the settings while the
+    /// platform refuses the permission and offers them.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn click(&mut self) {
         if self.asks {
             self.ask_permission();
+        } else if self.denied && OPEN_SETTINGS {
+            self.open_settings();
+        }
+    }
+
+    /// Adds the event to the window, the token on its status block and a push as a compact
+    /// line.
+    fn push_screen(&mut self, event: &Event) {
+        match event {
+            Event::Token(token) => self
+                .screen
+                .set_registration(support::transport(token), &support::shortened(token)),
+            Event::Message(message) => self
+                .screen
+                .push(support::push_view(message, support::now_ms()).line()),
+            _ => self.screen.push(support::shown(event)),
         }
     }
 
@@ -264,11 +318,12 @@ impl App {
         });
     }
 
-    /// Draws the permission the window shows, the hint while asking is offered.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Draws the permission the window shows, the hint while asking is offered and the
+    /// settings while the platform refuses the permission and offers them.
     fn draw_permission(&mut self, ui: support::PermissionUi) {
         self.screen.set_state(state_line(&ui));
         self.asks = ui.asks;
+        self.denied = ui.denied;
     }
 }
 
@@ -311,12 +366,11 @@ impl ApplicationHandler for App {
             match update {
                 Update::Push(event) => {
                     log(&support::describe(&event));
-                    self.screen.push(support::shown(&event));
+                    self.push_screen(&event);
                     if let Err(error) = support::register_again(&event) {
                         log(&format!("register failed: {error}"));
                     }
                 }
-                #[cfg(not(target_arch = "wasm32"))]
                 Update::Permission(ui) => {
                     self.draw_permission(ui);
                     self.asking = false;
@@ -343,17 +397,18 @@ impl ApplicationHandler for App {
             // permission in Settings.
             #[cfg(not(target_arch = "wasm32"))]
             WindowEvent::Focused(true) => self.refresh_status(),
-            // A mouse button, a touch or a key, the user's action the prompt answers.
+            // A mouse button, a touch or a key, the user's action the prompt and the settings
+            // answer.
             #[cfg(not(target_arch = "wasm32"))]
             WindowEvent::PointerButton {
                 state: ElementState::Pressed,
                 ..
-            } => self.ask_if_offered(),
+            } => self.click(),
             #[cfg(not(target_arch = "wasm32"))]
             WindowEvent::KeyboardInput { event, .. }
                 if event.state == ElementState::Pressed && !event.repeat =>
             {
-                self.ask_if_offered();
+                self.click();
             }
             _ => {}
         }
