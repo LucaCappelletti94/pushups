@@ -15,15 +15,20 @@ fn main() {}
 mod linux {
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader};
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
+    #[cfg(feature = "encryption")]
+    use std::path::PathBuf;
     use std::process::{Child, Command, Stdio};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
+    #[cfg(feature = "encryption")]
     use p256::elliptic_curve::point::AffineCoordinates;
-    use pushups::{Config, Error, Event, LinuxConfig, Permission, Token, UnifiedPushConfig};
+    #[cfg(feature = "encryption")]
+    use pushups::Token;
+    use pushups::{Config, Error, Event, LinuxConfig, Permission, UnifiedPushConfig};
     use zbus::zvariant::{OwnedValue, Value};
 
     const CHILD: &str = "PUSHUPS_TEST_CHILD";
@@ -38,11 +43,15 @@ mod linux {
     const DATA_IS_FILE: &str = "data-is-file";
     const NAME_TAKEN: &str = "name-taken";
     const REREGISTER: &str = "reregister";
+    #[cfg(feature = "encryption")]
     const ROTATE: &str = "rotate";
+    #[cfg(feature = "encryption")]
     const ROTATE_FIRST: &str = "rotate-first";
+    #[cfg(feature = "encryption")]
     const ROTATE_WRITE_FAILED: &str = "rotate-write-failed";
     const APP_ID: &str = "rs.pushups.LinuxTest";
     /// The endpoint the rotation scenarios register with, carried by the token events.
+    #[cfg(feature = "encryption")]
     const ENDPOINT: &str = "https://push.example/rotate";
     /// How long a scenario may wait on the child, generous for a loaded runner.
     const BOUND: Duration = Duration::from_secs(20);
@@ -52,7 +61,7 @@ mod linux {
             child(&scenario);
             return;
         }
-        for scenario in [
+        let scenarios = [
             HOLD,
             REFUSE,
             UNREGISTER,
@@ -60,10 +69,12 @@ mod linux {
             DATA_IS_FILE,
             NAME_TAKEN,
             REREGISTER,
-            ROTATE,
-            ROTATE_FIRST,
-            ROTATE_WRITE_FAILED,
-        ] {
+        ];
+        #[cfg(feature = "encryption")]
+        let scenarios = scenarios
+            .into_iter()
+            .chain([ROTATE, ROTATE_FIRST, ROTATE_WRITE_FAILED]);
+        for scenario in scenarios {
             run(scenario);
             println!("linux scenario {scenario}: ok");
         }
@@ -114,6 +125,7 @@ mod linux {
                         owned("REGISTRATION_SUCCEEDED"),
                     )]);
                 }
+                #[cfg(feature = "encryption")]
                 ROTATE | ROTATE_FIRST | ROTATE_WRITE_FAILED => {
                     return HashMap::from([(
                         "success".to_owned(),
@@ -212,6 +224,7 @@ mod linux {
                 .spawn()
                 .expect("the app process starts"),
         );
+        #[cfg(feature = "encryption")]
         if matches!(scenario, ROTATE | ROTATE_FIRST | ROTATE_WRITE_FAILED) {
             drive_rotation(scenario, &address, data.path());
         }
@@ -261,6 +274,7 @@ mod linux {
             name_taken();
             return;
         }
+        #[cfg(feature = "encryption")]
         if matches!(scenario, ROTATE | ROTATE_FIRST | ROTATE_WRITE_FAILED) {
             rotate_child(scenario);
             return;
@@ -390,11 +404,13 @@ mod linux {
     }
 
     /// The app's state directory under `home`, holding the queue, keys and token.
+    #[cfg(feature = "encryption")]
     fn state_dir(home: &Path) -> PathBuf {
         home.join(APP_ID).join("pushups")
     }
 
     /// The public key the 48-byte `keys` file's scalar signs with, the 65-byte `p256dh` form.
+    #[cfg(feature = "encryption")]
     fn public_key(keys: &[u8]) -> [u8; 65] {
         let scalar: [u8; 32] = keys[..32].try_into().expect("the scalar is 32 bytes");
         let scalar = p256::SecretKey::from_bytes(&scalar.into()).expect("the scalar is in range");
@@ -412,6 +428,7 @@ mod linux {
     }
 
     /// The 16-byte auth secret of the `keys` file contents.
+    #[cfg(feature = "encryption")]
     fn auth_secret(keys: &[u8]) -> [u8; 16] {
         keys[32..48]
             .try_into()
@@ -419,6 +436,7 @@ mod linux {
     }
 
     /// Seals `plaintext` for the `keys` file contents, one RFC 8291 body.
+    #[cfg(feature = "encryption")]
     fn seal(keys: &[u8], plaintext: &[u8]) -> Vec<u8> {
         let token = pushups::Token::WebPush {
             endpoint: ENDPOINT.to_owned(),
@@ -432,6 +450,7 @@ mod linux {
     }
 
     /// Reports the endpoint to the connector, so the app reports the token with its current keys.
+    #[cfg(feature = "encryption")]
     fn new_endpoint_call(connection: &zbus::blocking::Connection, token: &str) {
         let args = HashMap::from([
             ("endpoint", Value::from(ENDPOINT)),
@@ -449,6 +468,7 @@ mod linux {
     }
 
     /// Sends one sealed push to the connector, returning the bus's answer or its refusal.
+    #[cfg(feature = "encryption")]
     fn push_call(
         connection: &zbus::blocking::Connection,
         token: &str,
@@ -473,6 +493,7 @@ mod linux {
     /// Drives a rotation scenario. The parent reports the endpoint, the child rotates the keys,
     /// and the pushes sealed with `pushups-sender` are refused for the old keys and arrive for
     /// the new ones.
+    #[cfg(feature = "encryption")]
     fn drive_rotation(scenario: &str, address: &str, data: &Path) {
         let dir = state_dir(data);
         let marks = data.join("marks");
@@ -548,6 +569,7 @@ mod linux {
     }
 
     /// The app side of the rotation scenarios, run in the child process on the private bus.
+    #[cfg(feature = "encryption")]
     fn rotate_child(scenario: &str) {
         pushups::install(config()).expect("install connects to the private bus");
         let (events, received) = mpsc::channel();
@@ -637,6 +659,7 @@ mod linux {
     }
 
     /// The child's ground truth, the public key and auth secret of the current `keys` file.
+    #[cfg(feature = "encryption")]
     fn stored_keys(dir: &Path) -> ([u8; 65], [u8; 16]) {
         let keys = std::fs::read(dir.join("keys")).expect("the keys file is readable");
         assert_eq!(keys.len(), 48, "the keys file");
@@ -644,6 +667,7 @@ mod linux {
     }
 
     /// Waits for the rotation scenario's delivered push, checks its payload, and marks it.
+    #[cfg(feature = "encryption")]
     fn wait_for_message(
         scenario: &str,
         received: &mpsc::Receiver<pushups::Event>,

@@ -107,7 +107,7 @@ guard let accessGroup = Bundle.main.object(forInfoDictionaryKey: "PushupsKeychai
 let sealedPlaintext = Data(#"{"kind":"render","original":"sealed-plaintext"}"#.utf8)
 let sealedPointer: UnsafeMutablePointer<CChar>? = sealedPlaintext.withUnsafeBytes { bytes in
     accessGroup.withCString { group in
-        pushupsProbeSeal(bytes.baseAddress!, bytes.count, group)
+        pushupsProbeSeal(bytes.bindMemory(to: UInt8.self).baseAddress!, bytes.count, group)
     }
 }
 expect(sealedPointer != nil, "the sender sealed the plaintext")

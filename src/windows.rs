@@ -651,6 +651,7 @@ fn create_channel(remote_id: windows_core::GUID) -> Result<Token, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "encryption")]
     use keyring_core::api::CredentialStoreApi;
 
     #[test]
@@ -758,6 +759,7 @@ mod tests {
     }
 
     /// The service name `install` installs the key store under, for the tests' store.
+    #[cfg(feature = "encryption")]
     const SERVICE: &str = "rs.pushups/6f9619ff-8b86-d011-b42d-00c04fc964ff";
 
     /// A key store holding `keys` under the tests' service, or an empty one.
