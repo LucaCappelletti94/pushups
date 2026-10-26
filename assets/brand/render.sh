@@ -29,4 +29,17 @@ done
 # iOS reads the home screen icon from this link and rounds its corners itself.
 rsvg-convert --width 180 --height 180 "$brand/icon.svg" --output "$public/icons/apple-touch-icon.png"
 
-oxipng --quiet --opt max --strip safe "$brand"/png/*.png "$public"/icons/*.png
+# The winit example's Android launcher icon, the adaptive foreground at 108dp and the square icon
+# at 48dp that Android 7 shows, per density.
+res=$brand/../../examples/winit/android/app/src/main/res
+for density in mdpi:1 hdpi:1.5 xhdpi:2 xxhdpi:3 xxxhdpi:4; do
+  name=${density%%:*}
+  scale=${density#*:}
+  mkdir -p "$res/mipmap-$name"
+  foreground=$(python3 -c "print(round(108 * $scale))")
+  legacy=$(python3 -c "print(round(48 * $scale))")
+  rsvg-convert --width "$foreground" --height "$foreground" "$brand/icon-android-foreground.svg" --output "$res/mipmap-$name/ic_launcher_foreground.png"
+  rsvg-convert --width "$legacy" --height "$legacy" "$brand/icon.svg" --output "$res/mipmap-$name/ic_launcher.png"
+done
+
+oxipng --quiet --opt max --strip safe "$brand"/png/*.png "$public"/icons/*.png "$res"/mipmap-*/*.png

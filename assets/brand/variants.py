@@ -39,6 +39,9 @@ svg("icon.svg", 1024, 1024, f'<rect width="1024" height="1024" fill="{NAVY}"/>\n
 svg("icon-macos.svg", 1024, 1024, f'<rect x="100" y="100" width="824" height="824" rx="185" fill="{NAVY}"/>\n  {placed(1024, 0.48)}')
 # A maskable web icon, full bleed, with the mark inside the 80% circle Android crops to.
 svg("icon-maskable.svg", 1024, 1024, f'<rect width="1024" height="1024" fill="{NAVY}"/>\n  {placed(1024, 0.56)}')
+# The foreground layer of an Android adaptive icon, transparent on a 108dp canvas, with the mark
+# inside the 66dp circle every launcher mask keeps.
+svg("icon-android-foreground.svg", 1024, 1024, placed(1024, 0.46))
 svg("favicon.svg", 64, 64, f'<rect width="64" height="64" rx="14" fill="{NAVY}"/>\n  {placed(64, 0.78)}')
 svg(
     "social.svg",
