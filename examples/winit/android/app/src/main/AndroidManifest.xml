@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <application android:label="pushups winit example">
+    <application android:icon="@mipmap/ic_launcher" android:label="pushups winit example">
         <!-- android-activity runs the Rust `android_main` of `libmain.so` in this Activity. winit
              handles no events while it is paused, so it shows over the lock screen of a test phone. -->
         <activity
