@@ -22,7 +22,7 @@ env:
 jobs:
   fmt:
     name: Format
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -39,7 +39,7 @@ jobs:
 
   clippy:
     name: Clippy ${{ matrix.target }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -66,7 +66,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -86,7 +86,7 @@ jobs:
 
   msrv:
     name: MSRV
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -103,7 +103,7 @@ jobs:
 
   tauri-plugin:
     name: tauri-plugin-pushups
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     defaults:
       run:
@@ -127,7 +127,7 @@ jobs:
 
   docs:
     name: Docs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -138,7 +138,7 @@ jobs:
 
   android-coverage:
     name: Android ${{ matrix.api }} on an emulator
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -194,7 +194,7 @@ jobs:
 
   web-coverage:
     name: Web in Chrome and Firefox
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -226,7 +226,7 @@ jobs:
 
   linux-coverage:
     name: Linux through a UnifiedPush distributor
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     # A fork's pull request gets no secrets, so it pulls anonymously.
     env:
@@ -255,7 +255,7 @@ jobs:
 
   example-linux:
     name: Example apps on Linux through a UnifiedPush distributor
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -283,7 +283,7 @@ jobs:
   coverage:
     name: Coverage
     needs: [android-coverage, linux-coverage, web-coverage]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     # Neither a fork's pull request nor a Dependabot run can read CODECOV_TOKEN.
     if: >-
@@ -309,7 +309,7 @@ jobs:
 
   example-android:
     name: Example APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -333,7 +333,7 @@ jobs:
 
   example-android-emulator:
     name: Example app on an Android emulator
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     # Neither a fork's pull request nor a Dependabot run can read the Firebase secrets.
     if: >-
@@ -367,7 +367,7 @@ jobs:
 
   example-winit-android:
     name: Example winit app through Gradle on an Android emulator
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     # Neither a fork's pull request nor a Dependabot run can read the Firebase secrets.
     if: >-
@@ -411,7 +411,7 @@ jobs:
 
   example-tauri-android:
     name: Example Tauri app through tauri-plugin-pushups on an Android emulator
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     # Neither a fork's pull request nor a Dependabot run can read the Firebase secrets.
     if: >-
@@ -450,7 +450,7 @@ jobs:
 
   example-web:
     name: Example web app in Chrome
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -474,7 +474,7 @@ jobs:
 
   example-trunk:
     name: Example ${{ matrix.name }} app on Trunk in Chrome
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -507,7 +507,7 @@ jobs:
 
   example-leptos:
     name: Example Leptos SSR app in Chrome
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
