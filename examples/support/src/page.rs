@@ -10,7 +10,7 @@ use super::{Push, push_view, shortened, shown, transport};
 pub const CSS: &str = "
 :root { --navy: #0e1824; --surface: #172436; --text: #f5f7fa; --muted: #9aa6b8; --gradient: linear-gradient(135deg, #fa1e13, #f67017); }
 html, body { margin: 0; min-height: 100%; background: var(--navy); }
-.app { font-family: -apple-system, system-ui, sans-serif; color: var(--text); padding: 20px 16px; max-width: 640px; margin: 0 auto; box-sizing: border-box; }
+.app { font-family: -apple-system, system-ui, sans-serif; color: var(--text); padding: calc(20px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px)) calc(20px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px)); max-width: 640px; margin: 0 auto; box-sizing: border-box; }
 .header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .header h2 { margin: 0; font-size: 26px; font-weight: 700; }
 .mark { width: 56px; flex: none; }
