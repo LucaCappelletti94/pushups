@@ -45,6 +45,7 @@ fn on_event(event: Event) {
         Event::Token(Token::Wns {
             channel_uri,
             expires,
+            ..
         }) => {
             let days = expires
                 .duration_since(SystemTime::now())

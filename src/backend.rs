@@ -18,6 +18,13 @@ pub(crate) trait Backend {
         false
     }
 
+    /// Replaces the stored keys with fresh ones and registers again, so the new keys arrive as
+    /// an [`Event::Token`](crate::Event::Token).
+    #[cfg(feature = "encryption")]
+    fn rotate_keys() -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+
     fn serve_service_worker<H, F>(_handler: H) -> Result<(), Error>
     where
         H: Fn(Message) -> F + 'static,

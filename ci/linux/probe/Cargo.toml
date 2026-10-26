@@ -16,6 +16,11 @@ path = "src/main.rs"
 name = "send"
 path = "src/send.rs"
 
+# Seals the Android test's encrypted FCM pushes with the token's keys, the app server's side.
+[[bin]]
+name = "seal"
+path = "src/seal.rs"
+
 # Stands in for a desktop's notification server, which the test bed lacks.
 [[bin]]
 name = "notifier"
@@ -27,4 +32,6 @@ pushups-probe-support = { path = "../../probe-support" }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt", "time"] }
 web-push = "0.11"
+pushups-sender = { path = "../../../pushups-sender" }
+pushups-token = { path = "../../../pushups-token" }
 zbus = "5"

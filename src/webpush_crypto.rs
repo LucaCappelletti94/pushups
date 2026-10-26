@@ -90,12 +90,20 @@ impl Keys {
     }
 
     /// Generate a fresh P-256 secret key and authentication secret.
+    ///
+    /// The secret scalar is drawn again while it is not below the group order, rejection
+    /// sampling.
     pub(crate) fn generate() -> Result<Self, DecryptError> {
         let mut secret = [0u8; 32];
         let mut auth = [0u8; AUTH_LEN];
         getrandom::fill(&mut secret).map_err(|_| DecryptError::Randomness)?;
         getrandom::fill(&mut auth).map_err(|_| DecryptError::Randomness)?;
-        let secret = SecretKey::from_bytes(&secret.into()).map_err(|_| DecryptError::Randomness)?;
+        let secret = loop {
+            if let Ok(key) = SecretKey::from_bytes(&secret.into()) {
+                break key;
+            }
+            getrandom::fill(&mut secret).map_err(|_| DecryptError::Randomness)?;
+        };
         Ok(Self::new(secret, auth))
     }
 

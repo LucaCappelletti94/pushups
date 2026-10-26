@@ -123,7 +123,10 @@ mod tests {
         let sink = Arc::clone(&seen);
         DISPATCHER.set_handler(Arc::new(move |event| sink.lock().push(event)));
         inbox.lock().handler_set();
-        inbox.lock().receive(Entry::FcmToken("queued".to_owned()));
+        inbox.lock().receive(Entry::FcmToken {
+            token: "queued".to_owned(),
+            keys: None,
+        });
         assert!(
             seen.lock().is_empty(),
             "a headless process persists its events"
@@ -131,7 +134,10 @@ mod tests {
         session_changed(&inbox, true);
         assert_eq!(
             *seen.lock(),
-            vec![Event::Token(crate::Token::Fcm("queued".to_owned()))]
+            vec![Event::Token(crate::Token::Fcm {
+                token: "queued".to_owned(),
+                keys: None
+            })]
         );
     }
 }

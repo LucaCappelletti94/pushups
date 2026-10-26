@@ -47,9 +47,12 @@ impl Delivered {
         let Some(body) = bytes.strip_prefix(HEADER.as_slice()) else {
             return Vec::new();
         };
-        body.chunks_exact(8)
-            .map(|chunk| u64::from_le_bytes(chunk.try_into().expect("chunks of 8 bytes")))
-            .collect()
+        let (chunks, _remainder) = body.as_chunks::<8>();
+        let mut remembered = Vec::with_capacity(chunks.len());
+        for chunk in chunks {
+            remembered.push(u64::from_le_bytes(*chunk));
+        }
+        remembered
     }
 }
 

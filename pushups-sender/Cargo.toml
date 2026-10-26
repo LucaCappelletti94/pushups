@@ -1,0 +1,43 @@
+[package]
+name = "pushups-sender"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Encrypt pushes for a pushups token on the app's server, the RFC 8291 aes128gcm body the transports carry"
+repository = "https://github.com/LucaCappelletti94/pushups"
+license = "MIT"
+readme = "README.md"
+keywords = ["push", "notifications", "apns", "fcm", "webpush"]
+categories = ["cryptography", "network-programming"]
+
+[dependencies]
+aes-gcm = "0.11"
+getrandom = "0.4"
+hkdf = "0.13"
+p256 = { version = "0.14", features = ["ecdh"] }
+pushups-token = { version = "0.1.0", path = "../pushups-token", features = ["serde"] }
+sha2 = "0.11"
+thiserror = "2"
+
+# A server running as JavaScript's wasm, such as a Cloudflare Worker, draws its salts and keys
+# from `crypto.getRandomValues`.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }
+
+[dev-dependencies]
+# The base64url the README doctest reads the RFC 8291 section 5 keys with.
+pushups-token = { version = "0.1.0", path = "../pushups-token" }
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"

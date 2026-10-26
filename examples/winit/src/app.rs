@@ -244,6 +244,17 @@ fn on_push(_context: Context, message: Message) {
     support::handle_push(&message, log);
 }
 
+/// Runs in the process the push woke, and shows the push as a desktop notification on Linux and
+/// Windows, before the background handler runs.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[pushups::rendering_handler]
+fn render(
+    _context: pushups::RenderingContext,
+    message: Message,
+) -> Result<pushups::Rendering, pushups::Error> {
+    Ok(support::rendered(&message).into())
+}
+
 /// Runs in the service worker for every push, and decides what the user sees.
 #[cfg(target_arch = "wasm32")]
 pub(crate) async fn notification_for(message: Message) -> pushups::Notification {

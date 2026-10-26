@@ -16,14 +16,18 @@ futures-executor = "0.3"
 jni = "0.21"
 parking_lot = "0.12"
 pushups = { path = "../../.." }
+pushups-token = { path = "../../../pushups-token" }
 
 # What the app compiles in, chosen per run.sh variant: one Firebase configuration or none, and
-# the background handler or not.
+# the background handler or the rendering handler.
 [features]
 background-handler = []
+rendering-handler = []
 # The example's real configuration.
 config-real = []
 # The repository's fixture, whose package matches and whose keys Firebase rejects.
 config-fixture = []
 # Two clients, neither for the test package.
 config-mismatched = []
+# The crate's `encryption` feature, which opens the test's encrypted pushes.
+encryption = ["pushups/encryption"]

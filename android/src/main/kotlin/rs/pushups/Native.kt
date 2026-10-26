@@ -38,23 +38,32 @@ object Native {
 
     @JvmStatic
     external fun onPermissionResult(requestId: Long, granted: Boolean)
+
+    /** Whether the crate's `encryption` feature was on, which the module asks once. */
+    @JvmStatic
+    external fun encrypts(): Boolean
+
+    /** The plaintext of a sealed `pushups` field, or a thrown `RuntimeException` on failure. */
+    @JvmStatic
+    external fun openEnvelope(sealed: String): ByteArray
 }
 
 /** Log tag shared by every pushups line. */
 const val TAG = "pushups"
 
 /**
- * Calls a Rust export only once the provider loaded the cdylib and logs the
- * RuntimeException the Rust side throws instead of taking the app down.
+ * Calls a Rust export only once the provider loaded the cdylib, returns the export's value,
+ * and logs the RuntimeException the Rust side throws instead of taking the app down.
  */
-internal fun invokeNative(op: String, block: () -> Unit) {
+internal fun <T : Any> invokeNative(op: String, block: () -> T): T? {
     if (!ProcessState.loaded) {
         Log.w(TAG, "$op skipped, the native library is not loaded")
-        return
+        return null
     }
-    try {
+    return try {
         block()
     } catch (e: RuntimeException) {
         Log.e(TAG, op, e)
+        null
     }
 }

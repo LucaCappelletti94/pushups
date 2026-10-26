@@ -1,6 +1,6 @@
 //! The app library the Android instrumented tests load in place of a real app's cdylib.
 //!
-//! It holds the Firebase configuration and the background handler, as an app would, and exports
+//! It holds the Firebase configuration and the app's handlers, as an app would, and exports
 //! `rs.pushups.ci.Probe`, through which the Kotlin tests call `pushups`' public API and read
 //! back every event as a line of text. It is built with `-Cinstrument-coverage`, and
 //! `Probe.writeCoverage` writes the profile the CI job turns into LCOV.
@@ -26,6 +26,9 @@ pushups::firebase_config!("mismatched-services.json");
 static EVENTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// Every background push and fixture presentation failure, one line each.
 static HANDLED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// Every rendering push, one line each.
+#[cfg(feature = "rendering-handler")]
+static RENDERED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// The answer to the last `startPermission`, until `permission` takes it.
 static PERMISSION: Mutex<Option<String>> = Mutex::new(None);
 
@@ -54,8 +57,29 @@ fn on_push(context: pushups::Context<'_>, message: Message) {
     }
 }
 
+/// The rendering push the fixture carries, as `{"rendered":"<id>"}` with a unique `id`.
+#[cfg(feature = "rendering-handler")]
+#[pushups::rendering_handler]
+fn on_render(
+    _context: pushups::RenderingContext,
+    message: Message,
+) -> Result<pushups::Rendering, pushups::Error> {
+    RENDERED.lock().push(describe_message(&message));
+    Ok(rendering_notification(&message.payload).into())
+}
+
+/// The notification a rendering test push shows, keyed as `{"rendered":"<id>"}`.
+#[cfg(feature = "rendering-handler")]
+fn rendering_notification(payload: &[u8]) -> Notification {
+    let id = fixture_id(payload, "rendered").unwrap_or("unknown");
+    Notification::new(format!("pushups {id}"))
+        .body("shown by the rendering handler")
+        .tag(id)
+        .data(String::from_utf8_lossy(payload).into_owned())
+}
+
 /// The unique `id` a fixture push carries as `{"<key>":"<id>"}`.
-#[cfg(feature = "background-handler")]
+#[cfg(any(feature = "background-handler", feature = "rendering-handler"))]
 fn fixture_id<'a>(payload: &'a [u8], key: &str) -> Option<&'a str> {
     let text = std::str::from_utf8(payload).ok()?;
     let id = text
@@ -119,7 +143,16 @@ fn files_dir(
 
 fn describe(event: &Event) -> String {
     match event {
-        Event::Token(Token::Fcm(token)) => format!("token {token}"),
+        #[cfg(feature = "encryption")]
+        Event::Token(Token::Fcm {
+            token,
+            keys: Some(keys),
+        }) => format!(
+            "token {token} p256dh={} auth={}",
+            pushups_token::base64url::encode(&keys.p256dh),
+            pushups_token::base64url::encode(&keys.auth)
+        ),
+        Event::Token(Token::Fcm { token, .. }) => format!("token {token}"),
         Event::Token(token) => match token.web_push_subscription() {
             Some(subscription) => format!(
                 "webpush {} {} {}",
@@ -230,7 +263,7 @@ pushups::__private::android::exports! {
                     &event,
                     Event::RegistrationFailed(pushups::Error::Unregistered)
                 ),
-                "registered" => matches!(&event, Event::Token(Token::Fcm(_))),
+                "registered" => matches!(&event, Event::Token(Token::Fcm { .. })),
                 "session" => matches!(&event, Event::Message(_)),
                 _ => false,
             };
@@ -248,6 +281,18 @@ pushups::__private::android::exports! {
         java_string(
             env,
             pushups::register().err().map(|error| error.to_string()),
+        )
+    }
+
+    /// `Probe.rotateKeys()`: `null`, or the error of `pushups::rotate_keys`.
+    #[cfg(feature = "encryption")]
+    fn Java_rs_pushups_ci_Probe_rotateKeys<'local>(
+        env: JNIEnv<'local>,
+        _class: JClass<'local>,
+    ) -> jstring {
+        java_string(
+            env,
+            pushups::rotate_keys().err().map(|error| error.to_string()),
         )
     }
 
@@ -303,6 +348,15 @@ pushups::__private::android::exports! {
         _class: JClass<'local>,
     ) -> jstring {
         java_string(env, Some(HANDLED.lock().join("\n")))
+    }
+
+    /// `Probe.rendered()`: every push the rendering handler received, one per line.
+    #[cfg(feature = "rendering-handler")]
+    fn Java_rs_pushups_ci_Probe_rendered<'local>(
+        env: JNIEnv<'local>,
+        _class: JClass<'local>,
+    ) -> jstring {
+        java_string(env, Some(RENDERED.lock().join("\n")))
     }
 
     /// `Probe.presentBytes(...)`: `null`, or the error of `Notification::show`. `data` arrives as

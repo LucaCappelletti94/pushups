@@ -217,7 +217,10 @@ mod tests {
     #[test]
     fn events_before_the_handler_are_replayed_in_order_then_live_events_follow() {
         let dispatcher = Dispatcher::new();
-        dispatcher.emit(Event::Token(Token::Fcm("t".to_owned())));
+        dispatcher.emit(Event::Token(Token::Fcm {
+            token: "t".to_owned(),
+            keys: None,
+        }));
         dispatcher.emit(message(1));
         let (seen, handler) = recorder();
         dispatcher.set_handler(handler);
@@ -225,7 +228,10 @@ mod tests {
         assert_eq!(
             *seen.lock(),
             [
-                Event::Token(Token::Fcm("t".to_owned())),
+                Event::Token(Token::Fcm {
+                    token: "t".to_owned(),
+                    keys: None
+                }),
                 message(1),
                 message(2)
             ]

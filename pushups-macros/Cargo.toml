@@ -2,7 +2,7 @@
 name = "pushups-macros"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Macros for pushups"
 repository = "https://github.com/LucaCappelletti94/pushups"
 license = "MIT"

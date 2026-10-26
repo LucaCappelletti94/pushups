@@ -34,6 +34,17 @@ mod dispatch;
     )
 ))]
 mod dx;
+#[cfg(all(
+    feature = "encryption",
+    any(
+        test,
+        target_os = "android",
+        target_os = "ios",
+        target_os = "macos",
+        target_os = "windows"
+    )
+))]
+mod envelope;
 mod error;
 mod event;
 #[cfg(any(
@@ -43,6 +54,17 @@ mod event;
     target_os = "macos"
 ))]
 mod inbox;
+#[cfg(all(
+    feature = "encryption",
+    any(
+        test,
+        target_os = "android",
+        target_os = "ios",
+        target_os = "macos",
+        target_os = "windows"
+    )
+))]
+mod key_store;
 #[cfg(target_os = "linux")]
 mod linux;
 mod notification;
@@ -66,7 +88,6 @@ mod rendering;
 mod session;
 #[cfg(any(target_os = "ios", target_os = "macos", test))]
 mod started;
-mod token;
 #[cfg(any(
     not(any(
         target_os = "android",
@@ -83,7 +104,19 @@ mod unsupported;
 mod web;
 #[cfg(any(all(target_arch = "wasm32", target_os = "unknown"), test))]
 mod web_parts;
-#[cfg(target_os = "linux")]
+#[cfg(any(
+    target_os = "linux",
+    all(
+        feature = "encryption",
+        any(
+            test,
+            target_os = "android",
+            target_os = "ios",
+            target_os = "macos",
+            target_os = "windows"
+        )
+    )
+))]
 mod webpush_crypto;
 #[cfg(any(target_os = "windows", test))]
 mod windows;
@@ -121,9 +154,9 @@ pub use error::{Error, VapidKeyError};
 pub use event::{Event, Message};
 pub use notification::Notification;
 pub use permission::Permission;
-pub use pushups_macros::{background_handler, firebase_config, notification_service};
+pub use pushups_macros::{background_handler, firebase_config, rendering_handler};
+pub use pushups_token::{EncryptionKeys, Token, WebPushKeys, WebPushSubscription};
 pub use rendering::{Rendering, RenderingContext, RenderingOutcome, Suppression};
-pub use token::{Token, WebPushKeys, WebPushSubscription};
 pub use worker_file::write_service_worker;
 
 /// Connects the app to the platform's push service, before the toolkit's event loop starts.
@@ -154,6 +187,28 @@ pub fn install(config: Config) -> Result<(), Error> {
 /// The errors of [`install`], and [`Error::Platform`] when the request cannot be sent.
 pub fn register() -> Result<(), Error> {
     Platform::register()
+}
+
+/// Replaces the keys the device decrypts its pushes with and registers again, so the new keys
+/// arrive as [`Event::Token`].
+///
+/// On Android with FCM, on iOS, on macOS and on Windows the stored keys are replaced and
+/// [`register`] runs again. On Linux a new `keys` file is written, and the token is reported
+/// again with the new keys. The web keeps [`Error::Unsupported`], since the browser owns the
+/// Web Push keys, and so does the UnifiedPush distributor on Android, which keeps
+/// [`Error::Unsupported`] too.
+///
+/// A missing store entry, after an reinstall or a cleared store, creates new keys the same way
+/// at [`register`].
+///
+/// # Errors
+///
+/// [`Error::Unsupported`] on the web and on Android with a UnifiedPush distributor, and
+/// [`Error::Platform`] when the keys cannot be created or stored.
+#[cfg(feature = "encryption")]
+#[cfg_attr(docsrs, doc(cfg(feature = "encryption")))]
+pub fn rotate_keys() -> Result<(), Error> {
+    Platform::rotate_keys()
 }
 
 /// Asks the user to let pushes show notifications, and returns the answer.

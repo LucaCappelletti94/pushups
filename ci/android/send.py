@@ -1,12 +1,15 @@
 """Sends the pushes the instrumented tests ask for.
 
 The tests write `<id>.json` into `files/pushups-ci` of the test package, either an FCM HTTP v1
-`message` object or `{"webpush": <subscription>, "payload": <text>}`. This script polls that
-directory over adb, sends each push with keys that stay on the host, the FCM service account or the
-VAPID private key, and writes the answer to `<id>.status` as `<id> <HTTP status> <body>`. It stops
-after `--bound` seconds on the monotonic clock, or when killed by run.sh.
+`message` object, `{"webpush": <subscription>, "payload": <text>}`, or
+`{"fcm": <message>, "keys": <p256dh and auth>, "plaintext": <text>, "corrupt": true}`, which
+this script seals with the token's keys through the `seal` binary before it sends the message.
+It polls the directory over adb, sends each push with keys that stay on the host, the FCM
+service account or the VAPID private key, and writes the answer to `<id>.status` as
+`<id> <HTTP status> <body>`. It stops after `--bound` seconds on the monotonic clock, or when
+killed by run.sh.
 
-Usage: python3 send.py <service account json> [--webpush-sender path --vapid pem] [--bound seconds]
+Usage: python3 send.py <service account json> [--webpush-sender path --vapid pem] [--fcm-sealer path] [--bound seconds]
 """
 
 import argparse
@@ -111,11 +114,32 @@ def send_web_push(sender: Path, vapid: Path, request: dict) -> str:
     return f"200 {done.stdout.strip()}" if done.returncode == 0 else f"502 {done.stdout.strip()} {done.stderr.strip()}"
 
 
+def send_encrypted_fcm(sealer: Path, key: dict, token: str, request: dict) -> str:
+    """Seals the request's plaintext with the token's keys and sends it as the `pushups` field."""
+    done = subprocess.run(
+        [str(sealer), request["keys"]["p256dh"], request["keys"]["auth"], request["plaintext"]],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if done.returncode != 0:
+        return f"502 {done.stdout.strip()} {done.stderr.strip()}"
+    sealed = done.stdout.strip()
+    if request.get("corrupt"):
+        # A flipped first base64url character, inside the salt, where every bit is data, so the
+        # decoder keeps the change and the decrypt refuses.
+        sealed = ("B" if sealed[0] == "A" else "A") + sealed[1:]
+    message = request["fcm"]
+    message["data"]["pushups"] = sealed
+    return send(key, token, message)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("key", type=Path)
     parser.add_argument("--webpush-sender", type=Path)
     parser.add_argument("--vapid", type=Path)
+    parser.add_argument("--fcm-sealer", type=Path)
     parser.add_argument("--bound", type=float, default=1800)
     args = parser.parse_args()
     key = json.loads(args.key.read_text())
@@ -141,6 +165,11 @@ def main() -> None:
                     status = "500 send.py has no --webpush-sender and --vapid"
                 else:
                     status = send_web_push(args.webpush_sender, args.vapid, request)
+            elif "fcm" in request:
+                if args.fcm_sealer is None:
+                    status = "500 send.py has no --fcm-sealer"
+                else:
+                    status = send_encrypted_fcm(args.fcm_sealer, key, token, request)
             else:
                 status = send(key, token, request)
             print(f"push {request_id}: {status.splitlines()[0][:120]}", flush=True)

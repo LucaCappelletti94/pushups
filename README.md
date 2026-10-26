@@ -6,7 +6,7 @@
 [![codecov](https://codecov.io/gh/LucaCappelletti94/pushups/graph/badge.svg)](https://codecov.io/gh/LucaCappelletti94/pushups)
 [![docs.rs](https://docs.rs/pushups/badge.svg)](https://docs.rs/pushups)
 [![crates.io](https://img.shields.io/crates/v/pushups.svg)](https://crates.io/crates/pushups)
-[![MSRV](https://img.shields.io/badge/MSRV-1.85-blue)](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/)
+[![MSRV](https://img.shields.io/badge/MSRV-1.88-blue)](https://blog.rust-lang.org/2025/06/26/Rust-1.88.0/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/LucaCappelletti94/pushups/blob/main/LICENSE)
 
 Push notifications for Rust apps through each platform's own service, [APNs](https://developer.apple.com/documentation/usernotifications/registering-your-app-with-apns) on iOS and macOS, [FCM](https://firebase.google.com/docs/cloud-messaging) or [UnifiedPush](https://unifiedpush.org/) on Android, [WNS](https://learn.microsoft.com/en-us/windows/apps/develop/notifications/push-notifications/) on Windows, UnifiedPush on Linux and [Web Push](https://developer.mozilla.org/en-US/docs/Web/API/Push_API) in the browser. The app calls `install` in `main` before its toolkit starts, sets one handler and calls `register`. The handler gets the token for the app's server and every push, including the one that started the app.
@@ -26,7 +26,7 @@ pushups::set_handler(|event| match event {
 let _ = pushups::register();
 ```
 
-The handler runs on the platform's delivery thread, so waking the toolkit is its job. The `stream` feature adds `pushups::events()`, the same events as a stream.
+The handler runs on the platform's delivery thread, so waking the toolkit is its job. The `stream` feature adds `pushups::events()`, the same events as a stream. The `encryption` feature makes the pushes [end-to-end encrypted](https://github.com/LucaCappelletti94/pushups/blob/main/docs/encryption.md), with the device's keys in the platform key store.
 
 ## Support
 
@@ -70,7 +70,7 @@ fn on_push(context: Context<'_>, message: Message) {
 
 ## iOS and macOS
 
-The crate adds its push methods to whatever app delegate the toolkit installs, while closed-app iOS alert transformation uses a separate [`notification_service`] Rust callback and [Swift extension adapter](https://github.com/LucaCappelletti94/pushups/blob/main/docs/mobile-notifications.md). The bundle needs the push entitlement and, on iOS, the `remote-notification` background mode, which a `dx` app sets in `Dioxus.toml`. A Tauri app gets the iOS entitlement and the background mode from `tauri-plugin-pushups` and names a macOS entitlements file in `tauri.conf.json`, as [`examples/tauri`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/tauri) does.
+The crate adds its push methods to whatever app delegate the toolkit installs, while closed-app iOS alert transformation uses a separate [`rendering_handler`] Rust callback and [Swift extension adapter](https://github.com/LucaCappelletti94/pushups/blob/main/docs/mobile-notifications.md). The bundle needs the push entitlement and, on iOS, the `remote-notification` background mode, which a `dx` app sets in `Dioxus.toml`. A Tauri app gets the iOS entitlement and the background mode from `tauri-plugin-pushups` and names a macOS entitlements file in `tauri.conf.json`, as [`examples/tauri`](https://github.com/LucaCappelletti94/pushups/tree/main/examples/tauri) does. With the `encryption` feature the app and the extension share the keychain access group both targets carry in the `keychain-access-groups` entitlement, which each `Info.plist` names to the crate with the `PushupsKeychainAccessGroup` string key.
 
 ```toml
 [ios.entitlements]
@@ -102,7 +102,7 @@ let config = Config::new().web(WebPushConfig::new(key));
 
 ## Linux
 
-The crate speaks UnifiedPush over D-Bus to the user's distributor, such as KDE's, and a push to a closed app starts it through D-Bus activation for the background handler. The desktop shows nothing for a push by itself, so the app calls `Notification::show`, and a tap on a notification with `data` reaches the app as a message. Through the desktop portal, 1.19.4 or later, a tap on a closed app opens it. Without that portal a tap reaches the app only while the process that showed the notification runs. `LinuxConfig::app_notifications` names the app and its icon on the notifications, otherwise they carry the app id.
+The crate speaks UnifiedPush over D-Bus to the user's distributor, such as KDE's, and a push to a closed app starts it through D-Bus activation for the background handler. The desktop shows nothing for a push by itself, so the app's `rendering_handler` calls `Notification::show` with the notification it returns, and a tap on a notification with `data` reaches the app as a message. Through the desktop portal, 1.19.4 or later, a tap on a closed app opens it. Without that portal a tap reaches the app only while the process that showed the notification runs. `LinuxConfig::app_notifications` names the app and its icon on the notifications, otherwise they carry the app id.
 
 ```rust
 use pushups::{Config, LinuxConfig, UnifiedPushConfig, VapidPublicKey};

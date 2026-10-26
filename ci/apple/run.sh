@@ -17,14 +17,56 @@ cargo +stable build --manifest-path "$PROBE" --target-dir "$BUILD/rust"
 cargo +stable build --manifest-path "$PROBE" --target aarch64-apple-ios-sim --target-dir "$BUILD/rust"
 cargo +stable build --manifest-path "$PROBE" --target aarch64-apple-ios --target-dir "$BUILD/rust"
 
+# Without a signing identity the harness runs ad-hoc signed and skips the keychain cases, since
+# macOS kills a process that claims a keychain access group no provisioning profile grants. With
+# PUSHUPS_HARNESS_IDENTITY, PUSHUPS_HARNESS_PROFILE and PUSHUPS_HARNESS_TEAM it runs as an app
+# bundle the profile entitles to its access group, keychain cases included.
+HARNESS_BUNDLE_ID="${PUSHUPS_HARNESS_BUNDLE_ID:-rs.pushups.ci.harness}"
+HARNESS_PLIST="$BUILD/harness-Info.plist"
+mkdir -p "$BUILD"
+cp "$CI/harness/Info.plist" "$HARNESS_PLIST"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $HARNESS_BUNDLE_ID" "$HARNESS_PLIST"
+SWIFT_DEFINES=()
+if [ -n "${PUSHUPS_HARNESS_IDENTITY:-}" ]; then
+    : "${PUSHUPS_HARNESS_PROFILE:?the provisioning profile for $HARNESS_BUNDLE_ID}"
+    : "${PUSHUPS_HARNESS_TEAM:?the team identifier of the signing identity}"
+    HARNESS_GROUP="$PUSHUPS_HARNESS_TEAM.$HARNESS_BUNDLE_ID"
+    /usr/libexec/PlistBuddy -c "Add :PushupsKeychainAccessGroup string $HARNESS_GROUP" "$HARNESS_PLIST"
+    /usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string harness" "$HARNESS_PLIST"
+    SWIFT_DEFINES=(-D PUSHUPS_KEYCHAIN)
+fi
+
 xcrun --sdk macosx swiftc \
     -o "$BUILD/harness" \
+    ${SWIFT_DEFINES[@]+"${SWIFT_DEFINES[@]}"} \
     "$CI/harness/main.swift" \
     "$ROOT/ios/PushupsNotificationService.swift" \
     "$BUILD/rust/debug/$LIB" \
     -framework Foundation -framework UserNotifications -framework AppKit \
-    -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$CI/harness/Info.plist"
-"$BUILD/harness"
+    -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$HARNESS_PLIST"
+if [ -n "${PUSHUPS_HARNESS_IDENTITY:-}" ]; then
+    HARNESS_APP="$BUILD/Harness.app"
+    mkdir -p "$HARNESS_APP/Contents/MacOS"
+    cp "$BUILD/harness" "$HARNESS_APP/Contents/MacOS/harness"
+    cp "$HARNESS_PLIST" "$HARNESS_APP/Contents/Info.plist"
+    cp "$PUSHUPS_HARNESS_PROFILE" "$HARNESS_APP/Contents/embedded.provisionprofile"
+    HARNESS_ENTITLEMENTS="$BUILD/harness.entitlements"
+    plutil -create xml1 "$HARNESS_ENTITLEMENTS"
+    /usr/libexec/PlistBuddy \
+        -c "Add :com.apple.application-identifier string $HARNESS_GROUP" \
+        -c "Add :com.apple.developer.team-identifier string $PUSHUPS_HARNESS_TEAM" \
+        -c "Add :keychain-access-groups array" \
+        -c "Add :keychain-access-groups:0 string $HARNESS_GROUP" \
+        "$HARNESS_ENTITLEMENTS"
+    codesign --force --sign "$PUSHUPS_HARNESS_IDENTITY" \
+        ${PUSHUPS_HARNESS_KEYCHAIN:+--keychain "$PUSHUPS_HARNESS_KEYCHAIN"} \
+        --entitlements "$HARNESS_ENTITLEMENTS" "$HARNESS_APP"
+    codesign --verify --strict --verbose=2 "$HARNESS_APP"
+    "$HARNESS_APP/Contents/MacOS/harness"
+else
+    codesign --force --sign - "$BUILD/harness"
+    "$BUILD/harness"
+fi
 
 build_extension() {
     local sdk="$1" swift_target="$2" rust_target="$3"

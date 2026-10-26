@@ -4,7 +4,7 @@
 //! An example keeps what an app author writes, the `install`, the handler, the button that asks
 //! for permission, the background handler and the worker entry, and takes the configuration from
 //! the build-time keys, the log line format, the timing, the worker's notification and the desktop
-//! popup from this crate, calling `log` with its own prefix.
+//! render from this crate, calling `log` with its own prefix.
 
 use pushups::{
     Config, Event, LinuxConfig, Message, Notification, Permission, Token, UnifiedPushConfig,
@@ -79,7 +79,7 @@ pub fn token(token: &Token) -> String {
         return format!("apns={hex}");
     }
     match token {
-        Token::Fcm(token) => format!("fcm={token}"),
+        Token::Fcm { token, .. } => format!("fcm={token}"),
         Token::Wns { channel_uri, .. } => format!("wns={channel_uri}"),
         _ => format!("{token:?}"),
     }
@@ -155,20 +155,17 @@ pub fn log(prefix: &str, line: &str) {
     }
 }
 
-/// Shows the push as a desktop notification, which Windows and Linux leave to the app. A tap on
-/// it hands the payload back as a message, and starts the app when it has exited.
-///
-/// # Errors
-///
-/// The error of [`pushups::Notification::show`], which the example logs under its own prefix.
+/// The push as the example renders it on Linux and Windows, its `title` and `body` or the
+/// defaults, with the payload as its data. A tap on the notification it shows hands the payload
+/// back as a message, and starts the app when it has exited.
+#[must_use]
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-pub fn popup(message: &Message) -> Result<(), pushups::Error> {
+pub fn rendered(message: &Message) -> Notification {
     let title = field(message, "title").unwrap_or_else(|| "pushups".to_owned());
     let body = field(message, "body").unwrap_or_else(|| "A push arrived".to_owned());
-    pushups::Notification::new(title)
+    Notification::new(title)
         .body(body)
-        .data(String::from_utf8_lossy(&message.payload))
-        .show()
+        .data(String::from_utf8_lossy(&message.payload).into_owned())
 }
 
 /// The icon of the examples' desktop notifications, the brand's 256 px PNG in this checkout, as
@@ -248,12 +245,8 @@ pub fn handled(message: &Message, entered: u128) -> String {
     )
 }
 
-/// What an example's background handler does for every push, the desktop popup on Linux and Windows and the handler line, both logged through `log`.
+/// What an example's background handler does for every push, the handler line logged through `log`.
 pub fn handle_push(message: &Message, log: impl Fn(&str)) {
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
-    if let Err(error) = popup(message) {
-        log(&format!("popup failed: {error}"));
-    }
     log(&handled(message, now_ms()));
 }
 

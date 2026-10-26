@@ -5,11 +5,12 @@
 //!
 //! | Tag | Entry | Fields |
 //! |---|---|---|
-//! | 1 | message | `started_app` (0 or 1), payload length, payload |
-//! | 2 | FCM token | length, UTF-8 token |
+//! | 2 | FCM token, without keys | length, UTF-8 token |
 //! | 3 | messages dropped | none |
 //! | 4 | Web Push token | endpoint length, UTF-8 endpoint, 65-byte `p256dh`, 16-byte `auth` |
 //! | 5 | registration failed | length, UTF-8 reason |
+//! | 6 | unregistered | none |
+//! | 7 | FCM token | length, UTF-8 token, 65-byte `p256dh`, 16-byte `auth` |
 //!
 //! One process owns the file at a time, holding an exclusive lock on [`QueueFile::lock_path`]
 //! from its first operation until it exits. A process killed mid-append leaves a short last
@@ -21,6 +22,8 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
+
+use pushups_token::EncryptionKeys;
 
 use crate::{Event, Message, Token};
 
@@ -39,12 +42,17 @@ const MESSAGES_DROPPED: u8 = 3;
 const WEB_PUSH_TOKEN: u8 = 4;
 const REGISTRATION_FAILED: u8 = 5;
 const UNREGISTERED: u8 = 6;
+const FCM_TOKEN_KEYS: u8 = 7;
 
 /// An event waiting in the queue.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Entry {
     Message(Message),
-    FcmToken(String),
+    FcmToken {
+        token: String,
+        /// The keys the token's pushes are sealed for, when the crate built them.
+        keys: Option<EncryptionKeys>,
+    },
     MessagesDropped,
     WebPushToken {
         endpoint: String,
@@ -60,7 +68,7 @@ impl Entry {
     pub(crate) fn into_event(self) -> Event {
         match self {
             Self::Message(message) => Event::Message(message),
-            Self::FcmToken(token) => Event::Token(Token::Fcm(token)),
+            Self::FcmToken { token, keys } => Event::Token(Token::Fcm { token, keys }),
             Self::MessagesDropped => Event::MessagesDropped,
             Self::WebPushToken {
                 endpoint,
@@ -85,9 +93,17 @@ impl Entry {
                 out.push(u8::from(message.started_app));
                 push_bytes(out, &message.payload)
             }
-            Self::FcmToken(token) => {
-                out.push(FCM_TOKEN);
-                push_bytes(out, token.as_bytes())
+            Self::FcmToken { token, keys } => {
+                if let Some(keys) = keys {
+                    out.push(FCM_TOKEN_KEYS);
+                    push_bytes(out, token.as_bytes())?;
+                    out.extend_from_slice(&keys.p256dh);
+                    out.extend_from_slice(&keys.auth);
+                    Ok(())
+                } else {
+                    out.push(FCM_TOKEN);
+                    push_bytes(out, token.as_bytes())
+                }
             }
             Self::MessagesDropped => {
                 out.push(MESSAGES_DROPPED);
@@ -154,6 +170,11 @@ enum Record<'bytes> {
         payload: &'bytes [u8],
     },
     FcmToken(&'bytes str),
+    FcmTokenKeys {
+        token: &'bytes str,
+        p256dh: &'bytes [u8; 65],
+        auth: &'bytes [u8; 16],
+    },
     MessagesDropped,
     WebPushToken {
         endpoint: &'bytes str,
@@ -190,6 +211,19 @@ impl<'bytes> Record<'bytes> {
                 let (token, rest) = take_text(rest)?;
                 Some((Self::FcmToken(token), rest))
             }
+            FCM_TOKEN_KEYS => {
+                let (token, rest) = take_text(rest)?;
+                let (p256dh, rest) = rest.split_first_chunk::<65>()?;
+                let (auth, rest) = rest.split_first_chunk::<16>()?;
+                Some((
+                    Self::FcmTokenKeys {
+                        token,
+                        p256dh,
+                        auth,
+                    },
+                    rest,
+                ))
+            }
             MESSAGES_DROPPED => Some((Self::MessagesDropped, rest)),
             WEB_PUSH_TOKEN => {
                 let (endpoint, rest) = take_text(rest)?;
@@ -222,7 +256,21 @@ impl<'bytes> Record<'bytes> {
                 payload: payload.to_vec(),
                 started_app,
             }),
-            Self::FcmToken(token) => Entry::FcmToken(token.to_owned()),
+            Self::FcmToken(token) => Entry::FcmToken {
+                token: token.to_owned(),
+                keys: None,
+            },
+            Self::FcmTokenKeys {
+                token,
+                p256dh,
+                auth,
+            } => Entry::FcmToken {
+                token: token.to_owned(),
+                keys: Some(EncryptionKeys {
+                    p256dh: *p256dh,
+                    auth: *auth,
+                }),
+            },
             Self::MessagesDropped => Entry::MessagesDropped,
             Self::WebPushToken {
                 endpoint,
@@ -417,6 +465,20 @@ mod tests {
         })
     }
 
+    fn fcm_token(token: &str, keys: Option<EncryptionKeys>) -> Entry {
+        Entry::FcmToken {
+            token: token.to_owned(),
+            keys,
+        }
+    }
+
+    fn fcm_keys() -> EncryptionKeys {
+        EncryptionKeys {
+            p256dh: [3; 65],
+            auth: [5; 16],
+        }
+    }
+
     fn encoded(entries: &[Entry]) -> Vec<u8> {
         let mut bytes = HEADER.to_vec();
         for entry in entries {
@@ -428,8 +490,8 @@ mod tests {
     #[test]
     fn entries_round_trip_in_order() {
         let entries = [
-            Entry::FcmToken("token-1".to_owned()),
-            message(br#"{"seq":"1"}"#, true),
+            fcm_token("token-1", Some(fcm_keys())),
+            fcm_token("token-2", None),
             Entry::MessagesDropped,
             web_push_token("https://ntfy.sh/up123?up=1"),
             Entry::RegistrationFailed("unregistered by the distributor".to_owned()),
@@ -440,12 +502,38 @@ mod tests {
     }
 
     #[test]
+    fn an_fcm_token_without_keys_keeps_the_0_1_0_record() {
+        let mut bytes = HEADER.to_vec();
+        bytes.push(FCM_TOKEN);
+        bytes.extend_from_slice(&4u32.to_le_bytes());
+        bytes.extend_from_slice(b"abcd");
+        assert_eq!(
+            decode(&bytes),
+            [Entry::FcmToken {
+                token: "abcd".to_owned(),
+                keys: None
+            }]
+        );
+        assert_eq!(encoded(&[fcm_token("abcd", None)]), bytes);
+    }
+
+    #[test]
+    fn an_fcm_token_with_keys_round_trips_through_its_record() {
+        let entry = fcm_token("token", Some(fcm_keys()));
+        let mut bytes = HEADER.to_vec();
+        entry.encode(&mut bytes).unwrap();
+        assert_eq!(bytes[HEADER.len()], FCM_TOKEN_KEYS);
+        assert_eq!(decode(&bytes), [entry]);
+    }
+
+    #[test]
     fn a_record_cut_short_by_a_killed_process_is_dropped_and_the_rest_kept() {
-        let complete = [Entry::FcmToken("t".to_owned()), message(b"abc", false)];
+        let complete = [fcm_token("t", None), message(b"abc", false)];
         let unfinished = [
             message(b"never fully written", true),
             web_push_token("https://push.example/never-fully-written"),
             Entry::RegistrationFailed("never fully written".to_owned()),
+            fcm_token("never fully written", Some(fcm_keys())),
         ];
         for last in unfinished {
             let mut bytes = encoded(&complete);
@@ -477,7 +565,7 @@ mod tests {
     #[test]
     fn a_token_that_is_not_utf8_ends_the_readable_part() {
         let mut bytes = encoded(&[Entry::MessagesDropped]);
-        Entry::FcmToken("xx".to_owned()).encode(&mut bytes).unwrap();
+        fcm_token("xx", None).encode(&mut bytes).unwrap();
         let last = bytes.len() - 1;
         bytes[last] = 0xff;
         assert_eq!(decode(&bytes), [Entry::MessagesDropped]);
@@ -486,8 +574,18 @@ mod tests {
     #[test]
     fn entries_become_the_matching_events() {
         assert_eq!(
-            Entry::FcmToken("t".to_owned()).into_event(),
-            Event::Token(Token::Fcm("t".to_owned()))
+            fcm_token("t", Some(fcm_keys())).into_event(),
+            Event::Token(Token::Fcm {
+                token: "t".to_owned(),
+                keys: Some(fcm_keys())
+            })
+        );
+        assert_eq!(
+            fcm_token("t", None).into_event(),
+            Event::Token(Token::Fcm {
+                token: "t".to_owned(),
+                keys: None
+            })
         );
         assert_eq!(
             message(b"p", true).into_event(),
@@ -533,14 +631,14 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let queue = QueueFile::new(directory.path().join("queue"));
         assert_eq!(queue.take_all().unwrap(), []);
-        queue.append(&Entry::FcmToken("a".to_owned())).unwrap();
+        queue.append(&fcm_token("a", None)).unwrap();
         queue.append(&message(b"b", true)).unwrap();
         // The next process to own the file finds the entries.
         drop(queue);
         let reopened = QueueFile::new(directory.path().join("queue"));
         assert_eq!(
             reopened.take_all().unwrap(),
-            [Entry::FcmToken("a".to_owned()), message(b"b", true)]
+            [fcm_token("a", None), message(b"b", true)]
         );
         assert_eq!(reopened.take_all().unwrap(), []);
         reopened.append(&Entry::MessagesDropped).unwrap();
@@ -568,7 +666,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("queue");
         let mut unfinished = Vec::new();
-        Entry::FcmToken("never fully written".to_owned())
+        fcm_token("never fully written", Some(fcm_keys()))
             .encode(&mut unfinished)
             .unwrap();
         for cut in 1..unfinished.len() {
@@ -576,10 +674,10 @@ mod tests {
             bytes.extend_from_slice(&unfinished[..cut]);
             std::fs::write(&path, &bytes).unwrap();
             let queue = QueueFile::new(path.clone());
-            queue.append(&Entry::FcmToken("later".to_owned())).unwrap();
+            queue.append(&fcm_token("later", None)).unwrap();
             assert_eq!(
                 queue.take_all().unwrap(),
-                [Entry::MessagesDropped, Entry::FcmToken("later".to_owned())],
+                [Entry::MessagesDropped, fcm_token("later", None)],
                 "cut at {cut}"
             );
         }
@@ -591,7 +689,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("queue");
         let first = QueueFile::new(path.clone());
-        first.append(&Entry::FcmToken("first".to_owned())).unwrap();
+        first.append(&fcm_token("first", None)).unwrap();
         let second = QueueFile::new(path);
         assert!(
             second.claim_within(Duration::from_millis(200)).is_err(),
@@ -602,7 +700,7 @@ mod tests {
         second.append(&Entry::MessagesDropped).unwrap();
         assert_eq!(
             second.take_all().unwrap(),
-            [Entry::FcmToken("first".to_owned()), Entry::MessagesDropped]
+            [fcm_token("first", None), Entry::MessagesDropped]
         );
     }
 }

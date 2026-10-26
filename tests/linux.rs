@@ -16,18 +16,26 @@ mod linux {
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader};
     use std::path::Path;
+    #[cfg(feature = "encryption")]
+    use std::path::PathBuf;
     use std::process::{Child, Command, Stdio};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
+    #[cfg(feature = "encryption")]
+    use p256::elliptic_curve::point::AffineCoordinates;
+    #[cfg(feature = "encryption")]
+    use pushups::Token;
     use pushups::{Config, Error, Event, LinuxConfig, Permission, UnifiedPushConfig};
     use zbus::zvariant::{OwnedValue, Value};
 
     const CHILD: &str = "PUSHUPS_TEST_CHILD";
     /// The file the child writes once `register` returned, holding the milliseconds it took.
     const MARK: &str = "PUSHUPS_TEST_MARK";
+    /// The directory the child writes its scenario marks in.
+    const MARKS: &str = "PUSHUPS_TEST_MARKS";
     const HOLD: &str = "hold";
     const REFUSE: &str = "refuse";
     const UNREGISTER: &str = "unregister";
@@ -35,7 +43,16 @@ mod linux {
     const DATA_IS_FILE: &str = "data-is-file";
     const NAME_TAKEN: &str = "name-taken";
     const REREGISTER: &str = "reregister";
+    #[cfg(feature = "encryption")]
+    const ROTATE: &str = "rotate";
+    #[cfg(feature = "encryption")]
+    const ROTATE_FIRST: &str = "rotate-first";
+    #[cfg(feature = "encryption")]
+    const ROTATE_WRITE_FAILED: &str = "rotate-write-failed";
     const APP_ID: &str = "rs.pushups.LinuxTest";
+    /// The endpoint the rotation scenarios register with, carried by the token events.
+    #[cfg(feature = "encryption")]
+    const ENDPOINT: &str = "https://push.example/rotate";
     /// How long a scenario may wait on the child, generous for a loaded runner.
     const BOUND: Duration = Duration::from_secs(20);
 
@@ -44,7 +61,7 @@ mod linux {
             child(&scenario);
             return;
         }
-        for scenario in [
+        let scenarios = [
             HOLD,
             REFUSE,
             UNREGISTER,
@@ -52,7 +69,12 @@ mod linux {
             DATA_IS_FILE,
             NAME_TAKEN,
             REREGISTER,
-        ] {
+        ];
+        #[cfg(feature = "encryption")]
+        let scenarios = scenarios
+            .into_iter()
+            .chain([ROTATE, ROTATE_FIRST, ROTATE_WRITE_FAILED]);
+        for scenario in scenarios {
             run(scenario);
             println!("linux scenario {scenario}: ok");
         }
@@ -98,6 +120,13 @@ mod linux {
                             &(unregistered,),
                         )
                         .await;
+                    return HashMap::from([(
+                        "success".to_owned(),
+                        owned("REGISTRATION_SUCCEEDED"),
+                    )]);
+                }
+                #[cfg(feature = "encryption")]
+                ROTATE | ROTATE_FIRST | ROTATE_WRITE_FAILED => {
                     return HashMap::from([(
                         "success".to_owned(),
                         owned("REGISTRATION_SUCCEEDED"),
@@ -175,6 +204,8 @@ mod linux {
         });
         let data = tempfile::tempdir().expect("a temporary data directory");
         let mark = data.path().join("register-returned");
+        let marks = data.path().join("marks");
+        std::fs::create_dir_all(&marks).expect("the marks directory is created");
         let data_home = if scenario == DATA_IS_FILE {
             let file = data.path().join("not-a-directory");
             std::fs::write(&file, b"").expect("the blocking file is written");
@@ -186,12 +217,17 @@ mod linux {
             Command::new(std::env::current_exe().expect("this binary's path"))
                 .env(CHILD, scenario)
                 .env(MARK, &mark)
+                .env(MARKS, &marks)
                 .env("DBUS_SESSION_BUS_ADDRESS", &address)
                 .env("XDG_DATA_HOME", &data_home)
                 .env_remove("UNIFIEDPUSH_DISTRIBUTOR")
                 .spawn()
                 .expect("the app process starts"),
         );
+        #[cfg(feature = "encryption")]
+        if matches!(scenario, ROTATE | ROTATE_FIRST | ROTATE_WRITE_FAILED) {
+            drive_rotation(scenario, &address, data.path());
+        }
         if matches!(scenario, HOLD | REFUSE | UNREGISTER) {
             assert!(
                 wait_until(|| calls.load(Ordering::SeqCst) == 1 && mark.exists()),
@@ -236,6 +272,11 @@ mod linux {
     fn child(scenario: &str) {
         if scenario == NAME_TAKEN {
             name_taken();
+            return;
+        }
+        #[cfg(feature = "encryption")]
+        if matches!(scenario, ROTATE | ROTATE_FIRST | ROTATE_WRITE_FAILED) {
+            rotate_child(scenario);
             return;
         }
         if scenario == REREGISTER {
@@ -360,5 +401,291 @@ mod linux {
                 .as_str(),
             "the other connection still owns the name"
         );
+    }
+
+    /// The app's state directory under `home`, holding the queue, keys and token.
+    #[cfg(feature = "encryption")]
+    fn state_dir(home: &Path) -> PathBuf {
+        home.join(APP_ID).join("pushups")
+    }
+
+    /// The public key the 48-byte `keys` file's scalar signs with, the 65-byte `p256dh` form.
+    #[cfg(feature = "encryption")]
+    fn public_key(keys: &[u8]) -> [u8; 65] {
+        let scalar: [u8; 32] = keys[..32].try_into().expect("the scalar is 32 bytes");
+        let scalar = p256::SecretKey::from_bytes(&scalar.into()).expect("the scalar is in range");
+        let public = scalar.public_key();
+        let point = public.as_affine();
+        let mut p256dh = [0u8; 65];
+        p256dh[0] = 0x04;
+        for (slot, coordinate) in p256dh[1..]
+            .iter_mut()
+            .zip(point.x().iter().chain(point.y().iter()))
+        {
+            *slot = *coordinate;
+        }
+        p256dh
+    }
+
+    /// The 16-byte auth secret of the `keys` file contents.
+    #[cfg(feature = "encryption")]
+    fn auth_secret(keys: &[u8]) -> [u8; 16] {
+        keys[32..48]
+            .try_into()
+            .expect("the auth secret is 16 bytes")
+    }
+
+    /// Seals `plaintext` for the `keys` file contents, one RFC 8291 body.
+    #[cfg(feature = "encryption")]
+    fn seal(keys: &[u8], plaintext: &[u8]) -> Vec<u8> {
+        let token = pushups::Token::WebPush {
+            endpoint: ENDPOINT.to_owned(),
+            p256dh: public_key(keys),
+            auth: auth_secret(keys),
+            expires: None,
+        };
+        pushups_sender::encrypt(&token, plaintext)
+            .expect("the seal encrypts")
+            .into_bytes()
+    }
+
+    /// Reports the endpoint to the connector, so the app reports the token with its current keys.
+    #[cfg(feature = "encryption")]
+    fn new_endpoint_call(connection: &zbus::blocking::Connection, token: &str) {
+        let args = HashMap::from([
+            ("endpoint", Value::from(ENDPOINT)),
+            ("token", Value::from(token)),
+        ]);
+        connection
+            .call_method(
+                Some(APP_ID),
+                "/org/unifiedpush/Connector",
+                Some("org.unifiedpush.Connector2"),
+                "NewEndpoint",
+                &args,
+            )
+            .expect("the endpoint reaches the connector");
+    }
+
+    /// Sends one sealed push to the connector, returning the bus's answer or its refusal.
+    #[cfg(feature = "encryption")]
+    fn push_call(
+        connection: &zbus::blocking::Connection,
+        token: &str,
+        sealed: &[u8],
+    ) -> Result<(), zbus::Error> {
+        let args = HashMap::from([
+            ("token", Value::from(token)),
+            ("message", Value::from(sealed)),
+            ("id", Value::from("rotate-1")),
+        ]);
+        connection
+            .call_method(
+                Some(APP_ID),
+                "/org/unifiedpush/Connector",
+                Some("org.unifiedpush.Connector2"),
+                "Message",
+                &args,
+            )
+            .map(|_| ())
+    }
+
+    /// Drives a rotation scenario. The parent reports the endpoint, the child rotates the keys,
+    /// and the pushes sealed with `pushups-sender` are refused for the old keys and arrive for
+    /// the new ones.
+    #[cfg(feature = "encryption")]
+    fn drive_rotation(scenario: &str, address: &str, data: &Path) {
+        let dir = state_dir(data);
+        let marks = data.join("marks");
+        assert!(
+            wait_until(|| marks.join("ready").exists()),
+            "{scenario}: the child never became ready"
+        );
+        let token = std::fs::read_to_string(dir.join("token")).expect("the token file is readable");
+        let before = std::fs::read(dir.join("keys")).expect("the keys file is readable");
+        assert_eq!(before.len(), 48, "{scenario}: the keys file");
+        let connection = zbus::blocking::connection::Builder::address(address)
+            .expect("the bus address parses")
+            .build()
+            .expect("a connection for the pushes");
+        if scenario == ROTATE_WRITE_FAILED {
+            // The keys path holds a directory, so the rotation's write fails.
+            std::fs::remove_file(dir.join("keys")).expect("the keys file is removed");
+            std::fs::create_dir(dir.join("keys")).expect("the keys path is a directory");
+            std::fs::write(marks.join("rotate"), b"").expect("the rotate mark is written");
+            assert!(
+                wait_until(|| marks.join("rotated-failed").exists()),
+                "{scenario}: the child never reported the failed rotate"
+            );
+            let sealed = seal(&before, b"old-keys-still-work");
+            push_call(&connection, &token, sealed.as_slice())
+                .expect("the old-keys push reaches the connector");
+            assert!(
+                wait_until(|| marks.join("delivered").exists()),
+                "{scenario}: the old-keys push never arrived"
+            );
+            return;
+        }
+        if scenario == ROTATE {
+            // The endpoint arrives before the rotation, so the token the child sees carries the
+            // old keys.
+            new_endpoint_call(&connection, &token);
+        } else {
+            // The rotation happens before any endpoint, so it reports no token.
+            std::fs::write(marks.join("rotate"), b"").expect("the rotate mark is written");
+        }
+        assert!(
+            wait_until(|| marks.join("rotated").exists()),
+            "{scenario}: the child never rotated"
+        );
+        if scenario == ROTATE_FIRST {
+            // The rotation preceded the first endpoint, so it reported no token, and the
+            // endpoint's token carries the new keys.
+            new_endpoint_call(&connection, &token);
+        }
+        let after = std::fs::read(dir.join("keys")).expect("the keys file is readable");
+        assert_eq!(after.len(), 48, "{scenario}: the keys file");
+        assert_ne!(
+            &before[..],
+            &after[..],
+            "{scenario}: the keys did not change"
+        );
+        let stale = seal(&before, b"stale");
+        let error = push_call(&connection, &token, stale.as_slice())
+            .expect_err("{scenario}: a push sealed for the old keys still decrypts");
+        assert!(
+            error
+                .to_string()
+                .contains("the record failed authentication"),
+            "{scenario}: the stale push was refused with {error}"
+        );
+        let fresh = seal(&after, b"rotated");
+        push_call(&connection, &token, fresh.as_slice())
+            .expect("the new-keys push reaches the connector");
+        assert!(
+            wait_until(|| marks.join("delivered").exists()),
+            "{scenario}: the new-keys push never arrived"
+        );
+    }
+
+    /// The app side of the rotation scenarios, run in the child process on the private bus.
+    #[cfg(feature = "encryption")]
+    fn rotate_child(scenario: &str) {
+        pushups::install(config()).expect("install connects to the private bus");
+        let (events, received) = mpsc::channel();
+        pushups::set_handler(move |event| {
+            let _ = events.send(event);
+        });
+        pushups::register().expect("register starts");
+        let home = std::env::var_os("XDG_DATA_HOME").expect("the parent names the data home");
+        let dir = state_dir(Path::new(&home));
+        let marks = std::env::var_os(MARKS).expect("the parent names the marks");
+        let marks = Path::new(&marks);
+        std::fs::write(marks.join("ready"), b"").expect("the ready mark is written");
+        let first = if scenario == ROTATE {
+            // The endpoint's token arrives first, so the child rotates after seeing it carry the
+            // old keys.
+            let event = received
+                .recv_timeout(BOUND)
+                .unwrap_or_else(|_| panic!("{scenario}: no first token within {BOUND:?}"));
+            match event {
+                Event::Token(Token::WebPush {
+                    endpoint,
+                    p256dh,
+                    auth,
+                    ..
+                }) => {
+                    assert_eq!(endpoint, ENDPOINT, "{scenario}: the endpoint");
+                    let (stored_p256dh, stored_auth) = stored_keys(&dir);
+                    assert_eq!(p256dh, stored_p256dh, "{scenario}: the first token");
+                    assert_eq!(auth, stored_auth, "{scenario}: the first token");
+                    pushups::rotate_keys().expect("the keys rotate");
+                    std::fs::write(marks.join("rotated"), b"").expect("the mark is written");
+                    Some((p256dh, auth))
+                }
+                other => panic!("{scenario}: no first token, got {other:?}"),
+            }
+        } else {
+            // Before the first endpoint the rotation reports no token.
+            assert!(
+                wait_until(|| marks.join("rotate").exists()),
+                "{scenario}: the parent never triggered the rotation"
+            );
+            let rotated = pushups::rotate_keys();
+            if scenario == ROTATE_WRITE_FAILED {
+                assert!(
+                    matches!(rotated, Err(Error::Platform(_))),
+                    "the failing rotate gave {rotated:?}"
+                );
+                std::fs::write(marks.join("rotated-failed"), b"").expect("the mark is written");
+                wait_for_message(scenario, &received, marks, b"old-keys-still-work");
+                return;
+            }
+            rotated.expect("the keys rotate");
+            std::fs::write(marks.join("rotated"), b"").expect("the mark is written");
+            None
+        };
+        let event = received
+            .recv_timeout(BOUND)
+            .unwrap_or_else(|_| panic!("{scenario}: no token after the rotation within {BOUND:?}"));
+        match event {
+            Event::Token(Token::WebPush {
+                endpoint,
+                p256dh,
+                auth,
+                ..
+            }) => {
+                assert_eq!(endpoint, ENDPOINT, "{scenario}: the endpoint");
+                let (stored_p256dh, stored_auth) = stored_keys(&dir);
+                assert_eq!(
+                    p256dh, stored_p256dh,
+                    "{scenario}: the token after the rotation"
+                );
+                assert_eq!(
+                    auth, stored_auth,
+                    "{scenario}: the token after the rotation"
+                );
+                if let Some((old_p256dh, old_auth)) = first {
+                    assert_ne!(
+                        p256dh, old_p256dh,
+                        "{scenario}: the token keeps the old keys"
+                    );
+                    assert_ne!(auth, old_auth, "{scenario}: the token keeps the old auth");
+                }
+            }
+            other => panic!("{scenario}: no token after the rotation, got {other:?}"),
+        }
+        wait_for_message(scenario, &received, marks, b"rotated");
+    }
+
+    /// The child's ground truth, the public key and auth secret of the current `keys` file.
+    #[cfg(feature = "encryption")]
+    fn stored_keys(dir: &Path) -> ([u8; 65], [u8; 16]) {
+        let keys = std::fs::read(dir.join("keys")).expect("the keys file is readable");
+        assert_eq!(keys.len(), 48, "the keys file");
+        (public_key(&keys), auth_secret(&keys))
+    }
+
+    /// Waits for the rotation scenario's delivered push, checks its payload, and marks it.
+    #[cfg(feature = "encryption")]
+    fn wait_for_message(
+        scenario: &str,
+        received: &mpsc::Receiver<pushups::Event>,
+        marks: &Path,
+        payload: &[u8],
+    ) {
+        let event = received
+            .recv_timeout(BOUND)
+            .unwrap_or_else(|_| panic!("{scenario}: no push within {BOUND:?}"));
+        match event {
+            Event::Message(message) => {
+                assert_eq!(message.payload, payload, "{scenario}: the payload");
+                std::fs::write(marks.join("delivered"), b"").expect("the mark is written");
+                // The process exits once this returns, so give the connector's executor the
+                // reply to the parent's `Message` call before it goes.
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            other => panic!("{scenario}: no delivered push, got {other:?}"),
+        }
     }
 }

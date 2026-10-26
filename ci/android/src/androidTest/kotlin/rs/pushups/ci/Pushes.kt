@@ -30,6 +30,29 @@ object Pushes {
         request(context, id, JSONObject().put("webpush", webPush).put("payload", payload))
     }
 
+    /**
+     * Seals [plaintext] with the keys the registered token reported and sends it to [message]'s
+     * token as the `pushups` field, [corrupt] when the test wants the open to fail. Fails unless
+     * the host sent it.
+     */
+    fun sendEncrypted(
+        context: Context,
+        id: String,
+        message: JSONObject,
+        p256dh: String,
+        auth: String,
+        plaintext: String,
+        corrupt: Boolean = false,
+    ) {
+        val keys = JSONObject().put("p256dh", p256dh).put("auth", auth)
+        val body = JSONObject()
+            .put("fcm", message)
+            .put("keys", keys)
+            .put("plaintext", plaintext)
+            .put("corrupt", corrupt)
+        request(context, id, body)
+    }
+
     private fun request(context: Context, id: String, body: JSONObject) {
         val dir = File(context.filesDir, "pushups-ci").apply { mkdirs() }
         val partial = File(dir, "$id.part")

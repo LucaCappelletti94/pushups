@@ -4,8 +4,8 @@ import android.content.Context
 import android.util.Log
 
 /**
- * Hands one push to Rust, which persists or emits it, then runs the app's background handler
- * when one exists. FCM and UnifiedPush both deliver through here.
+ * Hands one push to Rust, which persists or emits it, then runs the app's rendering handler
+ * and background handler when they exist. FCM and UnifiedPush both deliver through here.
  */
 internal fun deliverPush(context: Context, payload: ByteArray) {
     if (!ProcessState.loaded) {
@@ -14,6 +14,13 @@ internal fun deliverPush(context: Context, payload: ByteArray) {
     }
     val startedApp = ProcessState.pushStartedApp()
     invokeNative("onMessage") { Native.onMessage(payload, startedApp) }
+    try {
+        RenderingHandler.render(context, payload, startedApp)
+    } catch (e: UnsatisfiedLinkError) {
+        Log.i(TAG, "no rendering handler")
+    } catch (e: RuntimeException) {
+        Log.e(TAG, "rendering handler", e)
+    }
     try {
         BackgroundHandler.handle(context, payload, startedApp)
     } catch (e: UnsatisfiedLinkError) {
@@ -36,4 +43,14 @@ internal object Transport {
     fun set(context: Context, transport: String) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY, transport).apply()
     }
+}
+
+/**
+ * The sealed field of an encrypted push, which the module looks up when the crate's
+ * `encryption` feature was on at build time, asked of Rust once the library loads.
+ */
+internal object Envelope {
+    const val ENCRYPTED_FIELD = "pushups"
+
+    val enabled: Boolean by lazy { invokeNative("encrypts") { Native.encrypts() } ?: false }
 }

@@ -11,8 +11,48 @@ fn main() {
 #[cfg(not(target_os = "linux"))]
 fn main() {}
 
+/// The test's rendering handler, which answers `NoAlert` to `no-alert`, unwinds on `panic` and
+/// shows the payload kind as a tagged notification otherwise.
+#[cfg(target_os = "linux")]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the rendering handler signature settles through a result the runner turns into an outcome"
+)]
+#[pushups::rendering_handler]
+fn render(
+    _context: pushups::RenderingContext,
+    message: pushups::Message,
+) -> Result<pushups::Rendering, pushups::Error> {
+    let kind = String::from_utf8(message.payload).expect("the test payloads are ascii");
+    match kind.as_str() {
+        "no-alert" => Ok(pushups::Rendering::NoAlert),
+        "panic" => panic!("the test rendering handler unwinds"),
+        _ => Ok(pushups::Notification::new(&kind)
+            .tag(&kind)
+            .body("rendered")
+            .into()),
+    }
+}
+
+/// The test's background handler, which marks whether the render's notification was shown
+/// before it ran.
+#[cfg(target_os = "linux")]
+#[pushups::background_handler]
+fn on_background(_context: pushups::Context, message: pushups::Message) {
+    let kind = String::from_utf8(message.payload).expect("the test payloads are ascii");
+    let marks = std::env::var_os("PUSHUPS_TEST_MARKS").expect("the parent names the marks");
+    let rendered = std::path::Path::new(&marks).join(format!("rendered-{kind}"));
+    let order = if rendered.exists() { "after" } else { "before" };
+    std::fs::write(
+        std::path::Path::new(&marks).join(format!("b-{kind}")),
+        order,
+    )
+    .expect("the background mark");
+}
+
 #[cfg(target_os = "linux")]
 mod linux {
+    use p256::elliptic_curve::point::AffineCoordinates;
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader};
     use std::path::{Path, PathBuf};
@@ -44,6 +84,8 @@ mod linux {
     const NAMED: &str = "named";
     /// An entry this crate wrote with other contents, which `install` rewrites and keeps the portal for.
     const STALE_ENTRY: &str = "stale-entry";
+    /// A push rendered by the app's rendering handler before the background handler runs it.
+    const RENDERING: &str = "rendering";
     /// The desktop entry the parent puts in place for the scenarios that need one already.
     const PACKAGED_ENTRY: &str = "[Desktop Entry]\nType=Application\nName=Packaged\n";
     /// An entry an earlier run of this crate wrote, before the app had a display name.
@@ -80,6 +122,7 @@ mod linux {
             HUNG,
             NAMED,
             STALE_ENTRY,
+            RENDERING,
         ] {
             run(scenario);
             println!("linux notification scenario {scenario}: ok");
@@ -151,6 +194,7 @@ mod linux {
     struct Notifications {
         log: Log,
         next: AtomicU32,
+        marks: Option<PathBuf>,
     }
 
     #[expect(
@@ -179,6 +223,10 @@ mod linux {
                 "notify app={app_name} replaces={replaces_id} summary={summary} body={body} actions={actions:?} icon={app_icon} image={}",
                 text(&hints, "image-path")
             ));
+            if let Some(marks) = &self.marks {
+                std::fs::write(marks.join(format!("rendered-{summary}")), b"")
+                    .expect("the rendered mark");
+            }
             if replaces_id == 0 {
                 self.next.fetch_add(1, Ordering::SeqCst)
             } else {
@@ -319,7 +367,7 @@ mod linux {
         notifications: Option<Connection>,
     }
 
-    fn serve(scenario: &str, address: &str, log: &Log) -> Services {
+    fn serve(scenario: &str, address: &str, log: &Log, marks: &Path) -> Services {
         let portal = matches!(
             scenario,
             PORTAL
@@ -349,7 +397,7 @@ mod linux {
             builder.build().expect("the portal connects")
         });
         let notifications = match scenario {
-            FALLBACK | FRESH_ENTRY | NO_BACKEND | NAMED => Some(
+            FALLBACK | FRESH_ENTRY | NO_BACKEND | NAMED | RENDERING => Some(
                 connect(address)
                     .name(NOTIFICATIONS_NAME)
                     .expect("the notifications name is valid")
@@ -358,6 +406,7 @@ mod linux {
                         Notifications {
                             log: Arc::clone(log),
                             next: AtomicU32::new(7),
+                            marks: (scenario == RENDERING).then(|| marks.to_path_buf()),
                         },
                     )
                     .expect("the notifications object is served")
@@ -412,7 +461,7 @@ mod linux {
                 .expect("the desktop entry in place");
         }
         let log: Log = Arc::default();
-        let fakes = serve(scenario, &address, &log);
+        let fakes = serve(scenario, &address, &log, &marks);
         let mut app = Reaped(
             Command::new(&exe)
                 .env(CHILD, scenario)
@@ -446,6 +495,7 @@ mod linux {
             FRESH_ENTRY => check_fresh_entry(&marks, &data_home, &log),
             NAMED => check_named(&marks, &data_home, &log),
             STALE_ENTRY => check_stale_entry(&marks, &data_home, &log),
+            RENDERING => check_rendering(&marks, &data_home, &log, &address),
             _ => {}
         }
         let mut status = None;
@@ -624,6 +674,95 @@ mod linux {
         );
     }
 
+    /// The push renders through the app's rendering handler before the background handler runs,
+    /// `NoAlert` shows nothing, and a panicking render still lets the background handler run.
+    fn check_rendering(marks: &Path, data_home: &Path, log: &Log, address: &str) {
+        assert!(
+            wait_until(|| marks.join("ready").exists()),
+            "{RENDERING}: the child never became ready"
+        );
+        let dir = data_home.join(APP_ID).join("pushups");
+        let token_file = std::fs::read_to_string(dir.join("token")).expect("the token file");
+        let keys = std::fs::read(dir.join("keys")).expect("the keys file");
+        assert_eq!(keys.len(), 48, "{RENDERING}: the keys file");
+        let secret: [u8; 32] = keys[0..32].try_into().expect("the scalar is 32 bytes");
+        let auth: [u8; 16] = keys[32..48]
+            .try_into()
+            .expect("the auth secret is 16 bytes");
+        let secret = p256::SecretKey::from_bytes(&secret.into()).expect("the scalar is in range");
+        let public = secret.public_key();
+        let point = public.as_affine();
+        let mut p256dh = [0u8; 65];
+        p256dh[0] = 0x04;
+        for (slot, coordinate) in p256dh[1..]
+            .iter_mut()
+            .zip(point.x().iter().chain(point.y().iter()))
+        {
+            *slot = *coordinate;
+        }
+        let token = pushups::Token::WebPush {
+            endpoint: "https://push.example/app".to_owned(),
+            p256dh,
+            auth,
+            expires: None,
+        };
+        let sender = connect(address)
+            .build()
+            .expect("a connection for the pushes");
+        for (index, kind) in ["show", "no-alert", "panic"].iter().enumerate() {
+            let sealed = pushups_sender::encrypt(&token, kind.as_bytes())
+                .expect("the seal encrypts")
+                .into_bytes();
+            let args = HashMap::from([
+                ("token", Value::from(token_file.as_str())),
+                ("message", Value::from(sealed)),
+                ("id", Value::from(format!("r-{index}"))),
+            ]);
+            sender
+                .call_method(
+                    Some(APP_ID),
+                    "/org/unifiedpush/Connector",
+                    Some("org.unifiedpush.Connector2"),
+                    "Message",
+                    &args,
+                )
+                .expect("the push reaches the connector");
+        }
+        std::fs::write(marks.join("done"), b"").expect("the done mark");
+        let recorded = log.lock().expect("the log").clone();
+        let shown: Vec<&String> = recorded
+            .iter()
+            .filter(|line| line.contains("summary=show"))
+            .collect();
+        assert_eq!(
+            shown.len(),
+            1,
+            "{RENDERING}: the notification the render showed is not in the Notify calls, {recorded:?}"
+        );
+        let line = &shown[0];
+        assert!(line.contains("body=rendered"), "{line}");
+        assert!(
+            recorded
+                .iter()
+                .all(|line| !line.contains("summary=no-alert") && !line.contains("summary=panic")),
+            "{RENDERING}: NoAlert or the panic showed something, {recorded:?}"
+        );
+        for kind in ["show", "no-alert", "panic"] {
+            let order =
+                std::fs::read_to_string(marks.join(format!("b-{kind}"))).unwrap_or_else(|error| {
+                    panic!("{RENDERING}: no background mark for {kind}, {error}")
+                });
+            if kind == "show" {
+                assert_eq!(
+                    order, "after",
+                    "{RENDERING}: the background handler ran before the render finished"
+                );
+            } else {
+                assert_eq!(order, "before", "{RENDERING}: {kind} showed something");
+            }
+        }
+    }
+
     /// The first process installs, which writes the activation file, and exits. A tap, or a
     /// launcher's `Open`, then makes the bus start a headless process, which starts the UI with
     /// the call's activation token. The UI drains the tap, or finds nothing for a launch.
@@ -757,6 +896,27 @@ mod linux {
     }
 
     /// The app side, run in a child process on the private bus.
+    /// The render's pushes render, refuse, or unwind in the app before the background handler
+    /// runs, and nothing else arrives on the channel.
+    fn child_rendering(received: &mpsc::Receiver<Event>) {
+        std::fs::write(mark("ready"), b"").expect("the ready mark");
+        while !mark("done").exists() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        for kind in ["show", "no-alert", "panic"] {
+            let seen = next_message(received, BOUND).expect("the push reaches the channel");
+            assert_eq!(seen.payload, kind.as_bytes().to_vec());
+            assert!(
+                !seen.started_app,
+                "a push to a running process started nothing"
+            );
+        }
+        assert!(
+            next_message(received, QUIET).is_none(),
+            "a fourth message arrived"
+        );
+    }
+
     fn child(scenario: &str) {
         let activated = std::env::var_os("PUSHUPS_DBUS_ACTIVATED").is_some();
         // A process the bus started for a tap stays inside `install`, and starts the UI process.
@@ -833,6 +993,7 @@ mod linux {
                     .expect("the portal shows the notification");
                 std::fs::write(mark("shown"), b"").expect("the shown mark");
             }
+            RENDERING => child_rendering(&received),
             HUNG => {
                 let started = Instant::now();
                 let shown = Notification::new("Held").show();

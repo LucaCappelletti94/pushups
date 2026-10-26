@@ -2043,7 +2043,7 @@ dependencies = [
  "p256 0.14.0",
  "parking_lot",
  "pushups-macros",
- "serde",
+ "pushups-token",
  "sha2 0.11.0",
  "thiserror 2.0.21",
  "wasm-bindgen",
@@ -2063,6 +2063,8 @@ version = "0.0.0"
 dependencies = [
  "pushups",
  "pushups-probe-support",
+ "pushups-sender",
+ "pushups-token",
  "serde_json",
  "tokio",
  "web-push",
@@ -2085,6 +2087,26 @@ name = "pushups-probe-support"
 version = "0.0.0"
 dependencies = [
  "pushups",
+]
+
+[[package]]
+name = "pushups-sender"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "getrandom 0.4.3",
+ "hkdf 0.13.0",
+ "p256 0.14.0",
+ "pushups-token",
+ "sha2 0.11.0",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pushups-token"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

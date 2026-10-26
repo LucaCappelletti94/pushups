@@ -22,6 +22,10 @@ object Probe {
     @JvmStatic
     external fun register(): String?
 
+    /** `null`, or the error of `pushups::rotate_keys`. */
+    @JvmStatic
+    external fun rotateKeys(): String?
+
     /** Starts `pushups::request_permission` on a thread of its own. */
     @JvmStatic
     external fun startPermission()
@@ -50,6 +54,10 @@ object Probe {
     /** Every push the background handler received, one per line. */
     @JvmStatic
     external fun handled(): String
+
+    /** Every push the rendering handler received, one per line. */
+    @JvmStatic
+    external fun rendered(): String
 
     /** Writes the Rust coverage profile to [path]. */
     @JvmStatic
