@@ -12,7 +12,7 @@ use super::log;
 #[component]
 pub fn App() -> Element {
     let mut lines = use_signal(Vec::<String>::new);
-    let mut permission = use_signal(|| None::<String>);
+    let mut permission = use_signal(|| None::<support::PermissionUi>);
     let favicon = use_hook(|| format!("data:image/svg+xml;base64,{}", STANDARD.encode(FAVICON)));
     use_future(move || async move {
         log(&format!("ui mounted at_ms={}", support::now_ms()));
@@ -28,6 +28,24 @@ pub fn App() -> Element {
             }
         }
     });
+    // The permission the platform holds, re-read when the page or webview comes back to the
+    // foreground, where the user may have changed it in Settings.
+    let mut read = permission;
+    use_future(move || async move {
+        let mut eval = document::eval(FOREGROUND);
+        loop {
+            let status = pushups::permission_status().await;
+            log(&format!(
+                "permission {}",
+                support::permission(status.clone())
+            ));
+            read.set(Some(support::permission_ui(status)));
+            // The foreground script stops sending once the page is gone.
+            if eval.recv::<bool>().await.is_err() {
+                break;
+            }
+        }
+    });
     rsx! {
         document::Style { {PAGE} }
         document::Link { rel: "icon", href: favicon }
@@ -37,13 +55,16 @@ pub fn App() -> Element {
                 h2 { "pushups example" }
             }
             div { class: "actions",
-                button {
-                    onclick: move |_| async move {
-                        let answer = support::permission(pushups::request_permission().await);
-                        log(&format!("permission {answer}"));
-                        permission.set(Some(answer));
-                    },
-                    "Allow notifications"
+                if permission.read().as_ref().is_some_and(|ui| ui.asks) {
+                    button {
+                        onclick: move |_| async move {
+                            let status = pushups::request_permission().await;
+                            let answer = support::permission(status.clone());
+                            log(&format!("permission {answer}"));
+                            permission.set(Some(support::permission_ui(status)));
+                        },
+                        "Allow notifications"
+                    }
                 }
                 if cfg!(target_arch = "wasm32") {
                     button { onclick: move |_| reload_page(), "Reload" }
@@ -53,7 +74,10 @@ pub fn App() -> Element {
                     }
                 }
             }
-            p { class: "muted", "permission: " {permission.read().clone().unwrap_or_default()} }
+            p {
+                class: "muted",
+                {permission.read().as_ref().map(|ui| ui.label.clone()).unwrap_or_default()}
+            }
             for line in lines.read().iter() {
                 p { class: "line", {line.clone()} }
             }
@@ -74,6 +98,14 @@ html, body { margin: 0; min-height: 100%; background: var(--navy); }
 .actions button { font-size: 16px; font-weight: 600; color: #ffffff; padding: 10px 16px; border: none; border-radius: 10px; background: var(--gradient); }
 .muted { color: var(--muted); }
 .line { font-family: ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; background: var(--surface); padding: 8px 10px; border-radius: 8px; margin: 8px 0; }
+";
+
+/// The page or webview is back in the foreground, so the permission read re-runs.
+const FOREGROUND: &str = "
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') dioxus.send(true);
+});
+window.addEventListener('focus', () => dioxus.send(true));
 ";
 
 /// The brand mark, drawn inline so every platform shows it without an asset pipeline.

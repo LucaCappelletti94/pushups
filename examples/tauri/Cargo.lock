@@ -3032,6 +3032,7 @@ dependencies = [
  "font8x8",
  "js-sys",
  "pushups",
+ "serde",
  "serde_json",
  "web-sys",
 ]

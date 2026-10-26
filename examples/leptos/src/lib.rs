@@ -86,11 +86,18 @@ pub fn App() -> impl IntoView {
 #[component]
 fn Home() -> impl IntoView {
     let lines = RwSignal::new(Vec::<String>::new());
-    let permission = RwSignal::new(String::new());
+    let permission = RwSignal::new(None::<support::PermissionUi>);
     // Effects run only in the browser, after hydration.
     Effect::new(move |_| {
         spawn_local_scoped_with_cancellation(async move {
             log(&format!("ui mounted at_ms={}", support::now_ms()));
+            // The permission the platform holds, read without asking, so the page shows it.
+            let status = pushups::permission_status().await;
+            log(&format!(
+                "permission {}",
+                support::permission(status.clone())
+            ));
+            permission.set(Some(support::permission_ui(status)));
             let mut events = pushups::events();
             if let Err(error) = pushups::register() {
                 lines.update(|lines| lines.push(format!("register failed: {error}")));
@@ -101,18 +108,47 @@ fn Home() -> impl IntoView {
             }
         });
     });
-    let allow = move |_| {
-        spawn_local_scoped_with_cancellation(async move {
-            let answer = support::permission(pushups::request_permission().await);
-            log(&format!("permission {answer}"));
-            permission.set(answer);
-        });
-    };
+    // The user can change the permission in Settings, so the page re-reads it when it comes
+    // back to the foreground.
+    let on_foreground = permission.clone();
+    let handle = window_event_listener_untyped("visibilitychange", move |_| {
+        if leptos::web_sys::window()
+            .and_then(|window| window.document())
+            .is_some_and(|document| {
+                document.visibility_state() == leptos::web_sys::VisibilityState::Visible
+            })
+        {
+            let on_foreground = on_foreground.clone();
+            leptos::task::spawn_local(async move {
+                let status = pushups::permission_status().await;
+                let answer = support::permission(status.clone());
+                log(&format!("permission {answer}"));
+                on_foreground.set(Some(support::permission_ui(status)));
+            });
+        }
+    });
+    on_cleanup(move || handle.remove());
+    // The ask button exists only while asking is offered, and the state shows on its own line.
     view! {
         <div style="font-family: system-ui, sans-serif; color: #f5f7fa; padding: 20px 16px;">
             <h2>"pushups Leptos example"</h2>
-            <button on:click=allow>"Allow notifications"</button>
-            <p>"permission: " {move || permission.get()}</p>
+            {move || {
+                let permission = permission.clone();
+                permission.get().is_some_and(|ui| ui.asks).then(|| {
+                    view! {
+                        <button on:click=move |_| {
+                            let permission = permission.clone();
+                            spawn_local_scoped_with_cancellation(async move {
+                                let status = pushups::request_permission().await;
+                                let answer = support::permission(status.clone());
+                                log(&format!("permission {answer}"));
+                                permission.set(Some(support::permission_ui(status)));
+                            });
+                        }>"Allow notifications"</button>
+                    }
+                })
+            }}
+            <p>{move || permission.get().map(|ui| ui.label.clone()).unwrap_or_default()}</p>
             <For
                 each=move || lines.get().into_iter().enumerate()
                 key=|(index, _)| *index

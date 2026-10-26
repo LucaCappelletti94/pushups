@@ -2196,6 +2196,7 @@ dependencies = [
  "font8x8",
  "js-sys",
  "pushups",
+ "serde",
  "serde_json",
  "web-sys",
 ]
@@ -2213,6 +2214,7 @@ dependencies = [
  "pushups-example-support",
  "tokio",
  "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

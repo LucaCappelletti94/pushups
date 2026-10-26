@@ -15,7 +15,8 @@
     <body>
         <h2>pushups Tauri example</h2>
         <!-- Asks for the notification permission from Rust, which the prompt needs from a gesture. -->
-        <button onclick="window.__TAURI__.core.invoke('allow').then((answer) => { this.textContent = 'Notifications: ' + answer; })">Allow notifications</button>
+        <button id="allow" onclick="ask()">Allow notifications</button>
+        <p id="permission"></p>
         <div id="lines"></div>
         <script>
             // The Rust side calls this through `eval` for every line, the earlier ones once the page has loaded.
@@ -24,6 +25,25 @@
                 line.textContent = text;
                 document.getElementById("lines").append(line);
             }
+            // Shows the permission Rust reports, hiding the ask while it no longer can change it.
+            function applyPermission(permission) {
+                document.getElementById("allow").style.display = permission.asks ? "" : "none";
+                document.getElementById("permission").textContent = permission.label;
+            }
+            function ask() {
+                window.__TAURI__.core.invoke("allow").then(applyPermission);
+            }
+            // The permission Rust holds, which the page re-reads when it comes back to the foreground.
+            (async () => {
+                const refresh = () => window.__TAURI__.core.invoke("status").then(applyPermission);
+                applyPermission(await window.__TAURI__.core.invoke("status"));
+                document.addEventListener("visibilitychange", () => {
+                    if (document.visibilityState === "visible") {
+                        refresh();
+                    }
+                });
+                window.addEventListener("focus", refresh);
+            })();
         </script>
     </body>
 </html>

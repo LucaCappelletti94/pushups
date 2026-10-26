@@ -15,6 +15,8 @@ const KEPT: usize = 32;
 
 /// The lines the window shows, and the surface they are drawn on while the window has one.
 pub(crate) struct Screen {
+    /// The permission state, the hint while asking is offered, drawn above the lines.
+    state: Option<String>,
     lines: VecDeque<String>,
     surface: Option<Surface<Rc<dyn Window>, Rc<dyn Window>>>,
 }
@@ -22,6 +24,7 @@ pub(crate) struct Screen {
 impl Screen {
     pub(crate) fn new() -> Self {
         Self {
+            state: None,
             lines: VecDeque::new(),
             surface: None,
         }
@@ -48,6 +51,15 @@ impl Screen {
             self.lines.pop_front();
         }
         self.lines.push_back(line);
+        if let Some(surface) = &self.surface {
+            surface.window().request_redraw();
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    /// Sets the permission state drawn above the lines and asks for a redraw.
+    pub(crate) fn set_state(&mut self, state: String) {
+        self.state = Some(state);
         if let Some(surface) = &self.surface {
             surface.window().request_redraw();
         }
@@ -81,12 +93,12 @@ impl Screen {
             scale: text::scale(window.scale_factor()),
             insets: insets(window.as_ref()),
         };
-        text::draw(
-            &mut buffer,
-            &frame,
-            TITLE_TEXT,
-            self.lines.iter().map(String::as_str),
-        );
+        let lines = self
+            .state
+            .iter()
+            .map(String::as_str)
+            .chain(self.lines.iter().map(String::as_str));
+        text::draw(&mut buffer, &frame, TITLE_TEXT, lines);
         let _ = buffer.present();
     }
 }

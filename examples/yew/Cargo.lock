@@ -1456,6 +1456,7 @@ dependencies = [
  "font8x8",
  "js-sys",
  "pushups",
+ "serde",
  "serde_json",
  "web-sys",
 ]
@@ -1485,7 +1486,9 @@ dependencies = [
  "futures-util",
  "pushups",
  "pushups-example-support",
+ "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-sys",
  "yew",
 ]
 

@@ -259,6 +259,47 @@ pub fn permission(answer: Result<Permission, pushups::Error>) -> String {
     }
 }
 
+/// What an example shows for the notification permission, from a status or a prompt answer.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct PermissionUi {
+    /// The state, as the example describes it on its own line.
+    pub label: String,
+    /// Whether a prompt can change the answer, so the example offers asking.
+    pub asks: bool,
+}
+
+/// Maps the permission the platform holds or the prompt answered to what the example shows.
+#[must_use]
+pub fn permission_ui(status: Result<Permission, pushups::Error>) -> PermissionUi {
+    match status {
+        Ok(Permission::NotDetermined) => PermissionUi {
+            label: "Notifications are not allowed yet".to_owned(),
+            asks: true,
+        },
+        Ok(Permission::Dismissed) => PermissionUi {
+            label: "The prompt was dismissed, it can be shown again".to_owned(),
+            asks: true,
+        },
+        Ok(Permission::Granted) => PermissionUi {
+            label: "Notifications are on".to_owned(),
+            asks: false,
+        },
+        Ok(Permission::Denied) => PermissionUi {
+            label: "Notifications are off, turn them on in Settings".to_owned(),
+            asks: false,
+        },
+        // A platform answer `Permission` has not named yet, which the example cannot ask about.
+        Ok(unknown) => PermissionUi {
+            label: format!("Notifications: {unknown:?}"),
+            asks: false,
+        },
+        Err(error) => PermissionUi {
+            label: format!("Notifications are unavailable: {error}"),
+            asks: false,
+        },
+    }
+}
+
 /// What an example's service worker shows for `message`, its `title` and `body` or the push's timing, after logging the timing through `log`.
 pub fn worker_notification(message: &Message, log: impl Fn(&str)) -> Notification {
     let at = now_ms();

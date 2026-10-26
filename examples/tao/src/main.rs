@@ -15,10 +15,30 @@ use tao::window::WindowBuilder;
 
 use crate::screen::Screen;
 
-/// What the event loop wakes for, a push event or the answer to the permission prompt.
+/// What the event loop wakes for, a push event or the permission the platform holds or the
+/// prompt answered.
 enum Update {
     Push(Event),
-    Permission(String),
+    /// The permission, shown on the window's state line.
+    Permission(support::PermissionUi),
+}
+
+/// The window's state line for the permission, the hint while asking is offered.
+fn state_line(ui: &support::PermissionUi) -> String {
+    if ui.asks {
+        "Click, tap or press a key to allow notifications".to_owned()
+    } else {
+        ui.label.clone()
+    }
+}
+
+/// Logs the permission read and maps it to what the window shows.
+fn note(status: Result<pushups::Permission, pushups::Error>) -> support::PermissionUi {
+    log(&format!(
+        "permission {}",
+        support::permission(status.clone())
+    ));
+    support::permission_ui(status)
 }
 
 fn main() {
@@ -36,13 +56,18 @@ fn main() {
     if let Err(error) = pushups::register() {
         log(&format!("register failed: {error}"));
     }
+    // The permission the platform holds, read before the loop so the window starts from it.
+    let permission = note(futures_executor::block_on(pushups::permission_status()));
     // Holds the window and its drawing for the life of the loop.
     let mut screen = None;
     // A prompt is open, so another click asks nothing.
     let mut asking = false;
+    // Asking is offered while the platform's answer is one a prompt can change.
+    let mut asks = permission.asks;
     event_loop.run(move |event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
         let mut ask = false;
+        let mut refresh = false;
         match event {
             TaoEvent::NewEvents(tao::event::StartCause::Init) => {
                 screen = WindowBuilder::new()
@@ -56,7 +81,7 @@ fn main() {
                             .ok()
                     });
                 if let Some(screen) = &mut screen {
-                    screen.push("Click, tap or press a key to allow notifications".to_owned());
+                    screen.set_state(state_line(&permission));
                 }
                 log(&format!("ui ready at_ms={}", support::now_ms()));
             }
@@ -69,12 +94,12 @@ fn main() {
                     log(&format!("register failed: {error}"));
                 }
             }
-            TaoEvent::UserEvent(Update::Permission(answer)) => {
-                log(&format!("permission {answer}"));
+            TaoEvent::UserEvent(Update::Permission(ui)) => {
                 if let Some(screen) = &mut screen {
-                    screen.push(format!("Notifications: {answer}"));
+                    screen.set_state(state_line(&ui));
                 }
                 asking = false;
+                asks = ui.asks;
             }
             TaoEvent::RedrawRequested(_) => {
                 if let Some(screen) = &mut screen {
@@ -83,16 +108,19 @@ fn main() {
             }
             TaoEvent::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+                // The window is back in the foreground, where the user may have changed the
+                // permission in Settings.
+                WindowEvent::Resumed | WindowEvent::Focused(true) => refresh = true,
                 // A mouse button, a touch or a key, the user's action the prompt answers.
                 WindowEvent::MouseInput {
                     state: ElementState::Pressed,
                     ..
-                } => ask = true,
-                WindowEvent::Touch(touch) if touch.phase == TouchPhase::Started => ask = true,
+                } => ask = asks,
+                WindowEvent::Touch(touch) if touch.phase == TouchPhase::Started => ask = asks,
                 WindowEvent::KeyboardInput { event, .. }
                     if event.state == ElementState::Pressed && !event.repeat =>
                 {
-                    ask = true;
+                    ask = asks;
                 }
                 _ => {}
             },
@@ -114,9 +142,15 @@ fn main() {
             let proxy = proxy.clone();
             // A thread of its own, outside any async runtime, so blocking on the prompt is safe.
             std::thread::spawn(move || {
-                let answer =
-                    support::permission(futures_executor::block_on(pushups::request_permission()));
-                let _ = proxy.send_event(Update::Permission(answer));
+                let ui = note(futures_executor::block_on(pushups::request_permission()));
+                let _ = proxy.send_event(Update::Permission(ui));
+            });
+        }
+        if refresh {
+            let proxy = proxy.clone();
+            std::thread::spawn(move || {
+                let ui = note(futures_executor::block_on(pushups::permission_status()));
+                let _ = proxy.send_event(Update::Permission(ui));
             });
         }
     });

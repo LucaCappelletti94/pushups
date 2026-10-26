@@ -32,7 +32,7 @@ pub fn run() {
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_pushups::init())
-        .invoke_handler(tauri::generate_handler![allow])
+        .invoke_handler(tauri::generate_handler![allow, status])
         .on_page_load(|webview, payload| {
             if payload.event() == PageLoadEvent::Finished {
                 page_loaded(webview.clone());
@@ -45,10 +45,25 @@ pub fn run() {
 /// Asks for the notification permission, which the page's button calls through the `__TAURI__`
 /// API since the prompt needs the click's gesture, and returns the answer for the page to show.
 #[tauri::command]
-async fn allow() -> String {
-    let answer = support::permission(pushups::request_permission().await);
-    log(&format!("permission {answer}"));
-    answer
+async fn allow() -> support::PermissionUi {
+    let status = pushups::request_permission().await;
+    log(&format!(
+        "permission {}",
+        support::permission(status.clone())
+    ));
+    support::permission_ui(status)
+}
+
+/// The permission the platform holds, which the page calls on load and when it comes back to
+/// the foreground.
+#[tauri::command]
+async fn status() -> support::PermissionUi {
+    let status = pushups::permission_status().await;
+    log(&format!(
+        "permission {}",
+        support::permission(status.clone())
+    ));
+    support::permission_ui(status)
 }
 
 /// The lines the page shows, and the page once it has loaded.
