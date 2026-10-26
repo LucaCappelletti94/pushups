@@ -550,6 +550,8 @@ jobs:
           security import "$RUNNER_TEMP/harness.p12" -k "$keychain" -P "$P12_PASSWORD" -T /usr/bin/codesign
           rm "$RUNNER_TEMP/harness.p12"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          # codesign finds an identity only in a keychain on the user's search list.
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
           printf '%s' "$PROFILE" | base64 --decode > "$RUNNER_TEMP/harness.provisionprofile"
           identity="$(security find-identity -v -p codesigning "$keychain" | awk '/Developer ID Application/ { print $2; exit }')"
           test -n "$identity"

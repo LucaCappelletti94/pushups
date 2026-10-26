@@ -5,6 +5,7 @@
 //! runs, and `pushups` never sets `keyring_core`'s default store, so an app's own keyring use
 //! is untouched.
 
+use parking_lot::Mutex;
 use std::sync::{Arc, OnceLock};
 
 use keyring_core::{CredentialStore, Entry, Error as StoreError};
@@ -21,6 +22,9 @@ static KEY_STORE: OnceLock<KeyStore> = OnceLock::new();
 pub(crate) struct KeyStore {
     store: Arc<CredentialStore>,
     service: String,
+    /// Serializes the read-then-write of `load_or_create` and `rotate` against a parallel
+    /// create, so every caller reports the keys the entry ends up holding.
+    writes: Mutex<()>,
 }
 
 impl core::fmt::Debug for KeyStore {
@@ -37,6 +41,7 @@ impl KeyStore {
         Self {
             store,
             service: service.into(),
+            writes: Mutex::new(()),
         }
     }
 
@@ -62,6 +67,7 @@ impl KeyStore {
     ///
     /// [`Error::Platform`] when the keys cannot be created or the key store fails.
     pub(crate) fn load_or_create(&self) -> Result<Keys, Error> {
+        let _writes = self.writes.lock();
         match self.load()? {
             Some(keys) => Ok(keys),
             None => self.store_new(),
@@ -74,6 +80,7 @@ impl KeyStore {
     ///
     /// [`Error::Platform`] when the keys cannot be created or the key store fails.
     pub(crate) fn rotate(&self) -> Result<Keys, Error> {
+        let _writes = self.writes.lock();
         self.store_new()
     }
 
@@ -220,5 +227,95 @@ mod tests {
         );
         let still = installed().expect("the first store installs");
         assert_eq!(still.service, "rs.pushups");
+    }
+    /// A credential whose `get_secret` sleeps, so a check-then-create running in a parallel
+    /// thread reads the entry before the first write lands.
+    struct SlowCred {
+        specifiers: (String, String),
+        secret: Arc<Mutex<Option<Vec<u8>>>>,
+    }
+
+    impl keyring_core::api::CredentialApi for SlowCred {
+        fn set_secret(&self, secret: &[u8]) -> keyring_core::Result<()> {
+            *self.secret.lock() = Some(secret.to_vec());
+            Ok(())
+        }
+
+        fn get_secret(&self) -> keyring_core::Result<Vec<u8>> {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            self.secret
+                .lock()
+                .clone()
+                .ok_or(keyring_core::Error::NoEntry)
+        }
+
+        fn delete_credential(&self) -> keyring_core::Result<()> {
+            *self.secret.lock() = None;
+            Ok(())
+        }
+
+        fn get_credential(&self) -> keyring_core::Result<Option<Arc<keyring_core::Credential>>> {
+            Ok(None)
+        }
+
+        fn get_specifiers(&self) -> Option<(String, String)> {
+            Some(self.specifiers.clone())
+        }
+
+        fn as_any(&self) -> &dyn core::any::Any {
+            self
+        }
+    }
+
+    /// A store that shares one entry between its `build` calls, the one the keys live in.
+    struct SlowStore {
+        secret: Arc<Mutex<Option<Vec<u8>>>>,
+    }
+
+    impl keyring_core::api::CredentialStoreApi for SlowStore {
+        fn vendor(&self) -> String {
+            String::from("the slow store")
+        }
+
+        fn id(&self) -> String {
+            String::from("slow")
+        }
+
+        fn build(
+            &self,
+            service: &str,
+            user: &str,
+            _modifiers: Option<&std::collections::HashMap<&str, &str>>,
+        ) -> keyring_core::Result<Entry> {
+            Ok(Entry::new_with_credential(Arc::new(SlowCred {
+                specifiers: (service.to_owned(), user.to_owned()),
+                secret: self.secret.clone(),
+            })))
+        }
+
+        fn as_any(&self) -> &dyn core::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    fn concurrent_load_or_create_stores_one_key_set() {
+        let store: Arc<CredentialStore> = Arc::new(SlowStore {
+            secret: Arc::new(Mutex::new(None)),
+        });
+        let shared = Arc::new(KeyStore::new(store, "rs.pushups"));
+        let handles = (0..8)
+            .map(|_| {
+                let shared = shared.clone();
+                std::thread::spawn(move || shared.load_or_create().expect("fresh keys store"))
+            })
+            .collect::<Vec<_>>();
+        let keys = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("the thread ends").to_bytes())
+            .collect::<Vec<_>>();
+        for key in &keys[1..] {
+            assert_eq!(*key, keys[0]);
+        }
     }
 }

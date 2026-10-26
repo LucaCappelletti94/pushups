@@ -116,9 +116,10 @@ run_variant jni-boundary "config-real" default NativeBoundaryTest
 run_variant full "config-real background-handler" default PushupsTest
 run_variant fallback-name config-real fallback-name FallbackNameTest
 run_variant no-background-handler config-real default NoBackgroundHandlerTest
-run_variant rendering "config-real rendering-handler" default RenderingHandlerTest
+# The rendering handler presents through the launcher activity, which only the presentation manifest declares.
+run_variant rendering "config-real rendering-handler" presentation RenderingHandlerTest
 # The crate's `encryption` feature: the token reports its keys and encrypted pushes arrive as the plaintext.
-run_variant encryption "config-real encryption background-handler rendering-handler" default EncryptedPushesTest
+run_variant encryption "config-real encryption background-handler rendering-handler" presentation EncryptedPushesTest
 run_variant unconfigured "" default RegistrationFailsTest expect "FCM is not configured"
 run_variant mismatched config-mismatched default RegistrationFailsTest expect "FCM is not configured"
 run_variant rejected config-fixture default RegistrationFailsTest expect "Please set a valid API key"

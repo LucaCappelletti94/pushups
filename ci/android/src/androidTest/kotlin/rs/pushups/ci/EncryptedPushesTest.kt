@@ -122,9 +122,11 @@ class EncryptedPushesTest {
         val id = "headless-${UUID.randomUUID()}"
         val plaintext = """{"encrypted":"$id"}"""
         Pushes.sendEncrypted(context, id, message(id), p256dh, auth, plaintext)
-        assertPlaintextLine(awaitLine(Probe::events, id), plaintext)
+        // The headless event waits in the queue until the next session drains it.
         assertPlaintextLine(awaitLine(Probe::rendered, id), plaintext)
         assertPlaintextLine(awaitLine(Probe::handled, id), plaintext)
+        openUi()
+        assertPlaintextLine(awaitLine(Probe::events, id), plaintext)
     }
 
     @Test

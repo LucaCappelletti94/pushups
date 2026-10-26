@@ -43,7 +43,8 @@ exclude = ["tauri-plugin-pushups"]
 # The RFC 8291 crypto, optional here and unconditional on Linux, which keeps its own copies for
 # the `UnifiedPush` connector.
 aes-gcm = { version = "0.11", optional = true }
-getrandom = { version = "0.4", optional = true }
+# Its `wasm_js` backend, so the `encryption` feature builds on a bare wasm target.
+getrandom = { version = "0.4", optional = true, features = ["wasm_js"] }
 hkdf = { version = "0.13", optional = true }
 p256 = { version = "0.14", optional = true, features = ["ecdh"] }
 sha2 = { version = "0.11", optional = true }
