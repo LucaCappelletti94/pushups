@@ -126,9 +126,9 @@ def send_encrypted_fcm(sealer: Path, key: dict, token: str, request: dict) -> st
         return f"502 {done.stdout.strip()} {done.stderr.strip()}"
     sealed = done.stdout.strip()
     if request.get("corrupt"):
-        # A single flipped base64url character, which the device's decoder keeps and the decrypt
-        # refuses.
-        sealed = sealed[:-1] + ("B" if sealed[-1] == "A" else "A")
+        # A flipped first base64url character, inside the salt, where every bit is data, so the
+        # decoder keeps the change and the decrypt refuses.
+        sealed = ("B" if sealed[0] == "A" else "A") + sealed[1:]
     message = request["fcm"]
     message["data"]["pushups"] = sealed
     return send(key, token, message)

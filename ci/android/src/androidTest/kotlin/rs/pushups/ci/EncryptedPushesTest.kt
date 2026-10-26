@@ -24,7 +24,8 @@ import java.util.concurrent.TimeUnit
  * The plan's Android encrypted push lines with real FCM pushes: the token reports the keys its
  * envelopes are sealed against, an encrypted push reaches every job as the plaintext, in the UI
  * and headless, a corrupt one reaches none, and an unencrypted push arrives as the data map.
- * The steps share the process, so they run in name order.
+ * The steps share the process, so they run in name order. The runner finishes every Activity
+ * after each step, which ends the UI session, so a step that needs a session opens its own.
  */
 @RunWith(AndroidJUnit4::class)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
@@ -85,6 +86,16 @@ class EncryptedPushesTest {
             assertFalse(line, line.contains("\"pushups\""))
         }
 
+        /** The first line of `Probe.events()` containing [id], with every job's log on a failure. */
+        private fun awaitEvent(id: String): String =
+            waitFor(DELIVERY_MS) { lines(Probe.events()).firstOrNull { it.contains(id) } }
+                ?: error(
+                    "no line with $id within ${DELIVERY_MS / 1000} s, got:\n" +
+                        "events:\n${Probe.events()}\n" +
+                        "rendered:\n${Probe.rendered()}\n" +
+                        "handled:\n${Probe.handled()}"
+                )
+
         private fun openUi() {
             scenario = ActivityScenario.launch(TapActivity::class.java)
         }
@@ -111,7 +122,7 @@ class EncryptedPushesTest {
         val id = "ui-${UUID.randomUUID()}"
         val plaintext = """{"encrypted":"$id"}"""
         Pushes.sendEncrypted(context, id, message(id), p256dh, auth, plaintext)
-        assertPlaintextLine(awaitLine(Probe::events, id), plaintext)
+        assertPlaintextLine(awaitEvent(id), plaintext)
         assertPlaintextLine(awaitLine(Probe::rendered, id), plaintext)
         assertPlaintextLine(awaitLine(Probe::handled, id), plaintext)
     }
@@ -126,7 +137,7 @@ class EncryptedPushesTest {
         assertPlaintextLine(awaitLine(Probe::rendered, id), plaintext)
         assertPlaintextLine(awaitLine(Probe::handled, id), plaintext)
         openUi()
-        assertPlaintextLine(awaitLine(Probe::events, id), plaintext)
+        assertPlaintextLine(awaitEvent(id), plaintext)
     }
 
     @Test
@@ -147,15 +158,22 @@ class EncryptedPushesTest {
 
     @Test
     fun a05_anUnencryptedPushArrivesAsTheDataMap() {
+        openUi()
         val id = "plain-${UUID.randomUUID()}"
+        val data = """{"id":"$id"}"""
         Pushes.send(context, id, message(id))
-        val line = awaitLine(Probe::events, id)
+        val line = awaitEvent(id)
         assertTrue(line, line.startsWith("message started_app="))
-        assertTrue(line, line.contains("""{"id":"$id"}"""))
+        assertTrue(line, line.contains(data))
+        val rendered = awaitLine(Probe::rendered, id)
+        assertTrue(rendered, rendered.contains(data))
+        val handled = awaitLine(Probe::handled, id)
+        assertTrue(handled, handled.contains(data))
     }
 
     @Test
     fun a06_rotatedKeysReportAgainAndOpenTheNewPushes() {
+        openUi()
         val old = p256dh
         assertNull(Probe.rotateKeys())
         val fresh = awaitNewKeys()
@@ -163,7 +181,7 @@ class EncryptedPushesTest {
         val id = "rotated-${UUID.randomUUID()}"
         val plaintext = """{"encrypted":"$id"}"""
         Pushes.sendEncrypted(context, id, message(id), p256dh, auth, plaintext)
-        assertPlaintextLine(awaitLine(Probe::events, id), plaintext)
+        assertPlaintextLine(awaitEvent(id), plaintext)
         assertPlaintextLine(awaitLine(Probe::rendered, id), plaintext)
         assertPlaintextLine(awaitLine(Probe::handled, id), plaintext)
     }
