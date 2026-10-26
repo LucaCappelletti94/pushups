@@ -1,8 +1,12 @@
 package rs.pushups.ci
 
 import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.os.Build
+import android.os.ParcelFileDescriptor
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -26,6 +30,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.runners.MethodSorters
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import rs.pushups.PushupsMessagingService
 
@@ -50,7 +55,35 @@ class PushupsTest {
         @BeforeClass
         @JvmStatic
         fun fetchToken() {
+            leaveStoppedState()
             token = Tasks.await(FirebaseMessaging.getInstance().token, 120, TimeUnit.SECONDS)
+        }
+
+        /**
+         * Takes the package out of the stopped state `am instrument` leaves it in, where FCM holds
+         * its pushes until an Activity starts, through a broadcast to a manifest receiver, which
+         * creates no Activity, so the first push still finds a process that never had one.
+         */
+        private fun leaveStoppedState() {
+            val delivered = CountDownLatch(1)
+            context.sendOrderedBroadcast(
+                Intent().setComponent(ComponentName(context, UnstoppedReceiver::class.java)),
+                null,
+                object : BroadcastReceiver() {
+                    override fun onReceive(context: Context, intent: Intent) = delivered.countDown()
+                },
+                null,
+                Activity.RESULT_OK,
+                null,
+                null,
+            )
+            check(delivered.await(30, TimeUnit.SECONDS)) { "the receiver got no broadcast within 30 s" }
+            val state = instrumentation.uiAutomation
+                .executeShellCommand("dumpsys package ${context.packageName}")
+                .let { descriptor ->
+                    ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use { it.readText() }
+                }
+            check(" stopped=false" in state) { "the package is still stopped:\n$state" }
         }
 
         @AfterClass
