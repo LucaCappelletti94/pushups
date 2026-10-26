@@ -1,7 +1,7 @@
 //! The consumer transform linked into the native completion harness and iOS extension.
 
 use std::collections::HashMap;
-use std::ffi::{c_char, CString};
+use std::ffi::{CString, c_char};
 
 use keyring_core::api::CredentialStoreApi;
 use p256::elliptic_curve::point::AffineCoordinates;

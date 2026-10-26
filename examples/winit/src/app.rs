@@ -255,7 +255,6 @@ fn render(
     Ok(support::rendered(&message).into())
 }
 
-
 /// Runs in the service worker for every push, and decides what the user sees.
 #[cfg(target_arch = "wasm32")]
 pub(crate) async fn notification_for(message: Message) -> pushups::Notification {

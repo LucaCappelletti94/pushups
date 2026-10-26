@@ -139,7 +139,6 @@ fn render(
     Ok(support::rendered(&message).into())
 }
 
-
 fn log(line: &str) {
     support::log("pushups-tao-example", line);
 }
