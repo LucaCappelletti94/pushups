@@ -4,8 +4,6 @@
 <dict>
     <key>CFBundleIdentifier</key>
     <string>rs.pushups.ci.harness</string>
-    <key>PushupsKeychainAccessGroup</key>
-    <string>rs.pushups.ci.harness</string>
     <key>PushupsNotificationFiltering</key>
     <true/>
 </dict>

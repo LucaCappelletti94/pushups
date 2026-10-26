@@ -529,6 +529,36 @@ jobs:
       - run: |
           rustup toolchain install stable --profile minimal
           rustup target add --toolchain stable aarch64-apple-ios-sim aarch64-apple-ios
+      # The harness's keychain cases need the Developer ID identity and the profile for
+      # rs.pushups.ci.harness, which neither a fork's pull request nor a Dependabot run can read.
+      - name: Install the harness's signing identity
+        if: >-
+          github.event_name == 'push' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+          github.event.pull_request.user.login != 'dependabot[bot]')
+        env:
+          P12: ${{ secrets.MACOS_HARNESS_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_HARNESS_P12_PASSWORD }}
+          PROFILE: ${{ secrets.MACOS_HARNESS_PROFILE }}
+        run: |
+          keychain="$RUNNER_TEMP/harness.keychain-db"
+          password="$(openssl rand -hex 16)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/harness.p12"
+          security import "$RUNNER_TEMP/harness.p12" -k "$keychain" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/harness.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          printf '%s' "$PROFILE" | base64 --decode > "$RUNNER_TEMP/harness.provisionprofile"
+          identity="$(security find-identity -v -p codesigning "$keychain" | awk '/Developer ID Application/ { print $2; exit }')"
+          test -n "$identity"
+          {
+            echo "PUSHUPS_HARNESS_IDENTITY=$identity"
+            echo "PUSHUPS_HARNESS_KEYCHAIN=$keychain"
+            echo "PUSHUPS_HARNESS_PROFILE=$RUNNER_TEMP/harness.provisionprofile"
+            echo "PUSHUPS_HARNESS_TEAM=7W8527FJJE"
+          } >> "$GITHUB_ENV"
       - name: Exercise the native service and link the simulator extension
         run: bash ci/apple/run.sh
 

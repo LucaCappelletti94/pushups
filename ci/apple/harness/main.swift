@@ -96,6 +96,7 @@ if let content = rendered.snapshot.content {
     expect(content.subtitle == "Kept subtitle" && content.sound == UNNotificationSound.default, "original subtitle and sound preserved")
 }
 
+#if PUSHUPS_KEYCHAIN
 // The probe installs the crate, rotates the key in the protected keychain and seals a push the way a sender would.
 pushupsProbeInstall()
 expect(pushupsProbeRotate() == 0, "key rotation registers")
@@ -127,6 +128,7 @@ if let sealedPointer {
     expect(corruptedPush.snapshot.content?.title == "Safe title" && corruptedPush.snapshot.content?.body == "Safe body", "the corrupted envelope keeps the safe alert")
     expect(corruptedPush.snapshot.content?.userInfo["original"] as? String == "ciphertext", "the corrupted envelope keeps the sender payload")
 }
+#endif
 
 let cleared = receive(service, ["kind": "clear"])
 wait(cleared)
