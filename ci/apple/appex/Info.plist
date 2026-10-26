@@ -11,7 +11,7 @@
     <key>CFBundleName</key>
     <string>PushupsNotificationService</string>
     <key>CFBundlePackageType</key>
-    <string>XPCS</string>
+    <string>XPC!</string>
     <key>CFBundleShortVersionString</key>
     <string>1.0</string>
     <key>CFBundleVersion</key>
