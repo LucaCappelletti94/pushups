@@ -43,6 +43,12 @@ if [ "$sdk" -ge "$ntfy_min_sdk" ]; then
 else
   echo "API $sdk is below ntfy's $ntfy_min_sdk, so the UnifiedPush variants do not run"
 fi
+# Android 7's package manager can stall on a streamed `adb install`, waiting for the rest of an
+# APK that never comes, so an older device gets the APK pushed whole before the install.
+install_flags=()
+if [ "$sdk" -lt 26 ]; then
+  install_flags=(--no-streaming)
+fi
 if $unified_push && ! adb shell pm list packages io.heckel.ntfy | grep -q io.heckel.ntfy; then
   apk=$build/ntfy-$ntfy_version.apk
   [ -f "$apk" ] || curl -fsSL -o "$apk" "https://f-droid.org/repo/io.heckel.ntfy_$ntfy_version.apk"
@@ -82,15 +88,14 @@ sender=$!
 trap 'kill $sender 2>/dev/null || true; adb shell pm enable io.heckel.ntfy >/dev/null 2>&1 || true; adb shell svc power stayon false || true' EXIT
 
 # What the device shows when a step gives no answer: the focused window naming a dialog that
-# waits on a tap, the busiest processes, any install or compile still running, and the package
-# manager's and installer's lines since the variant began, on standard error so a step's own
+# waits on a tap, the busiest processes, any install or compile still running, and the system's
+# informational and worse lines since the variant began, on standard error so a step's own
 # redirect keeps them.
 diagnose() {
   adb shell dumpsys window | grep -E 'mCurrentFocus|mFocusedApp' >&2 || true
   adb shell dumpsys cpuinfo | head -15 >&2 || true
   adb shell ps | grep -E 'dex2oat|installd|dexopt| pm$|vending|packageinstaller' >&2 || true
-  adb logcat -d -v time | grep -iE 'PackageManager|PackageInstaller|installd|dex2oat|dexopt|Finsky|BackgroundDexOpt|ActivityManager: (Start|Kill)' \
-    | tail -120 >&2 || true
+  adb logcat -d -v time | grep -vE ' (V|D)/' | tail -300 >&2 || true
 }
 
 # Runs a step under a bound, so a device waiting on a dialog fails the run at once with what it
@@ -133,7 +138,7 @@ run_variant() {
   wake
   bounded 60 adb logcat -c
   bounded 120 adb uninstall "$package" >/dev/null || true
-  bounded 300 adb install -t "$build/pushups/outputs/apk/androidTest/debug/pushups-debug-androidTest.apk" >/dev/null
+  bounded 300 adb install -t ${install_flags[@]+"${install_flags[@]}"} "$build/pushups/outputs/apk/androidTest/debug/pushups-debug-androidTest.apk" >/dev/null
   timeout 900 adb shell am instrument -w -e class "rs.pushups.ci.$class" "${arguments[@]}" \
     -e coverage true -e coverageFile "$files/jacoco.ec" "$package/androidx.test.runner.AndroidJUnitRunner" \
     | tee "$out/$variant.txt" || true
