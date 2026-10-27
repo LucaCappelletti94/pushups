@@ -207,9 +207,12 @@ pub fn transport(token: &Token) -> &'static str {
 }
 
 /// The token line cut to the page's width, the first and last 8 characters of [`token`] around
-/// an ellipsis.
+/// an ellipsis, or for Web Push the endpoint's host and the last 8 characters of its path.
 #[must_use]
 pub fn shortened(token: &Token) -> String {
+    if let Token::WebPush { endpoint, .. } = token {
+        return shortened_endpoint(endpoint);
+    }
     let line = self::token(token);
     let chars = line.chars().count();
     if chars <= 16 {
@@ -218,6 +221,20 @@ pub fn shortened(token: &Token) -> String {
     let head: String = line.chars().take(8).collect();
     let tail: String = line.chars().skip(chars - 8).collect();
     format!("{head}...{tail}")
+}
+
+/// The endpoint without its scheme, its path cut to the last 8 characters after the host.
+fn shortened_endpoint(endpoint: &str) -> String {
+    let rest = endpoint
+        .split_once("://")
+        .map_or(endpoint, |(_, rest)| rest);
+    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let chars = path.chars().count();
+    if chars <= 8 {
+        return rest.to_owned();
+    }
+    let tail: String = path.chars().skip(chars - 8).collect();
+    format!("{host}...{tail}")
 }
 
 /// The wall-clock milliseconds since 1970, from the standard clock on the native targets and
@@ -479,15 +496,7 @@ mod tests {
             "APNs"
         );
         #[cfg(not(target_arch = "wasm32"))]
-        assert_eq!(
-            transport(&Token::WebPush {
-                endpoint: "https://example.com".into(),
-                p256dh: [0; 65],
-                auth: [0; 16],
-                expires: None
-            }),
-            "UnifiedPush"
-        );
+        assert_eq!(transport(&web_push("https://example.com")), "UnifiedPush");
     }
 
     #[test]
@@ -505,6 +514,26 @@ mod tests {
     fn shortened_leaves_a_short_line_alone() {
         let token = fcm("short");
         assert_eq!(shortened(&token), super::token(&token));
+    }
+
+    fn web_push(endpoint: &str) -> Token {
+        Token::WebPush {
+            endpoint: endpoint.into(),
+            p256dh: [0; 65],
+            auth: [0; 16],
+            expires: None,
+        }
+    }
+
+    #[test]
+    fn shortened_names_a_web_push_endpoint_by_its_host_and_tail() {
+        let token = web_push("https://fcm.googleapis.com/fcm/send/abcdefgh:12345678");
+        assert_eq!(shortened(&token), "fcm.googleapis.com...12345678");
+    }
+
+    #[test]
+    fn shortened_leaves_a_short_web_push_path_whole() {
+        assert_eq!(shortened(&web_push("https://ntfy.sh/up1")), "ntfy.sh/up1");
     }
 
     #[test]
