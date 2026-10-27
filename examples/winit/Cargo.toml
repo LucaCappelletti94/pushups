@@ -29,7 +29,7 @@ winit = { version = "=0.31.0-beta.3", features = ["android-native-activity"] }
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Document", "Element", "Event", "Window"] }
+web-sys = { version = "0.3", features = ["Document", "Element", "Event", "HtmlElement", "VisibilityState", "Window"] }
 
 [workspace]
 

@@ -25,6 +25,22 @@ fn main() {
         Ok(()) => log(&format!("installed at_ms={}", support::now_ms())),
         Err(error) => log(&format!("install failed: {error}")),
     }
+    launch_app()
+}
+
+#[cfg(feature = "desktop")]
+fn launch_app() {
+    use dioxus::desktop::{Config, LogicalSize, WindowBuilder};
+    let window = WindowBuilder::new()
+        .with_title("pushups dioxus example")
+        .with_inner_size(LogicalSize::new(1024, 768));
+    dioxus::LaunchBuilder::desktop()
+        .with_cfg(Config::new().with_window(window))
+        .launch(app::App);
+}
+
+#[cfg(not(feature = "desktop"))]
+fn launch_app() {
     dioxus::launch(app::App);
 }
 

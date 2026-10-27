@@ -17,6 +17,8 @@ tauri-build = { version = "2.7", features = [] }
 [dependencies]
 pushups = { path = "../..", features = ["serde"] }
 pushups-example-support = { path = "../support" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
 serde_json = "1"
 tauri = { version = "2.12", features = [] }
 tauri-plugin-pushups = { path = "../../tauri-plugin-pushups" }

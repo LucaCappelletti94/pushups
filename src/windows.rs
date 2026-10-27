@@ -63,6 +63,10 @@ use parking_lot::Mutex;
 #[cfg(target_os = "windows")]
 use windows::Foundation::TypedEventHandler;
 #[cfg(target_os = "windows")]
+use windows::Foundation::Uri;
+#[cfg(target_os = "windows")]
+use windows::System::Launcher;
+#[cfg(target_os = "windows")]
 use windows_core::Interface as _;
 
 use crate::Permission;
@@ -591,6 +595,21 @@ impl Backend for Windows {
             Some(result) => result,
             None => Err(Error::NotConfigured),
         })
+    }
+
+    fn open_notification_settings() -> Result<(), Error> {
+        let notifications = "ms-settings:notifications".into();
+        let uri = Uri::CreateUri(&notifications).map_err(Error::platform)?;
+        let opened = Launcher::LaunchUriAsync(&uri)
+            .and_then(|operation| operation.join())
+            .map_err(Error::platform)?;
+        if opened {
+            Ok(())
+        } else {
+            Err(Error::platform(
+                "the system refused to open the notification setting",
+            ))
+        }
     }
 
     /// Replaces the stored keys with fresh ones and registers again, so the new keys arrive as

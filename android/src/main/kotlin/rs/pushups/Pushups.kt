@@ -5,7 +5,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.core.app.NotificationManagerCompat
 import com.google.firebase.messaging.FirebaseMessaging
 import org.unifiedpush.android.connector.UnifiedPush
@@ -133,6 +135,29 @@ object Pushups {
     ): String? {
         val appContext = context ?: return "the module has no application context"
         return Presentation.present(appContext, title, body, navigate, tag, icon, data)
+    }
+
+    /**
+     * Opens the system setting where the user turns this app's notifications on or off,
+     * returning `null` on success or an error message when it cannot be opened.
+     */
+    @JvmStatic
+    fun openNotificationSettings(): String? {
+        val appContext = context ?: return "the module has no application context"
+        val intent = if (Build.VERSION.SDK_INT >= 26) {
+            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, appContext.packageName)
+        } else {
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .setData(Uri.parse("package:${appContext.packageName}"))
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return try {
+            appContext.startActivity(intent)
+            null
+        } catch (e: RuntimeException) {
+            e.message ?: "could not open the notification setting"
+        }
     }
 
     /** Reports the transport this app's pushes come through, which Rust's key rotation reads. */

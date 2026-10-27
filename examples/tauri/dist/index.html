@@ -4,26 +4,159 @@
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
         <title>pushups Tauri example</title>
-        <style>
-            html { background: #0e1824; }
-            body { margin: 0; padding: calc(20px + env(safe-area-inset-top, 0px)) 16px 20px; background: #0e1824; color: #f5f7fa; font-family: system-ui, sans-serif; }
-            h2 { margin: 0 0 16px; color: #f67017; }
-            button { margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #ffffff; padding: 10px 16px; border: none; border-radius: 10px; background: linear-gradient(135deg, #fa1e13, #f67017); }
-            p { margin: 0 0 8px; overflow-wrap: anywhere; }
+        <style id="css">
+            html, body {
+                margin: 0;
+                background: #0e1824;
+            }
         </style>
     </head>
     <body>
-        <h2>pushups Tauri example</h2>
-        <!-- Asks for the notification permission from Rust, which the prompt needs from a gesture. -->
-        <button onclick="window.__TAURI__.core.invoke('allow').then((answer) => { this.textContent = 'Notifications: ' + answer; })">Allow notifications</button>
-        <div id="lines"></div>
+        <div class="app">
+            <div class="header">
+                <div class="mark" id="mark"></div>
+                <h2>pushups Tauri example</h2>
+            </div>
+            <div class="status">
+                <div class="row">
+                    <span class="label">Transport</span>
+                    <span id="transport" class="muted"></span>
+                </div>
+                <div class="row">
+                    <span id="permission" class="muted"></span>
+                    <!-- Asks through Rust, which the prompt needs from a gesture. -->
+                    <button id="allow" hidden onclick="ask()">Allow notifications</button>
+                    <!-- Opens the notification settings through Rust, while the platform
+                        refuses the permission and a prompt cannot change it. -->
+                    <button id="open" hidden onclick="openSettings()">Open Settings</button>
+                </div>
+                <div class="row" id="token-row" hidden>
+                    <span id="token" class="token"></span>
+                    <button id="copy" class="copy" onclick="copyToken()">Copy</button>
+                </div>
+                <div class="row" id="actions">
+                    <button id="copy-log" class="copy" onclick="copyLog()">Copy log</button>
+                    <span id="error" class="error"></span>
+                </div>
+            </div>
+            <div id="lines"></div>
+        </div>
         <script>
-            // The Rust side calls this through `eval` for every line, the earlier ones once the page has loaded.
-            function pushupsShow(text) {
-                const line = document.createElement("p");
-                line.textContent = text;
-                document.getElementById("lines").append(line);
+            // Rust applies the brand assets on load and posts every event through eval, the
+            // earlier ones once the page has loaded, and the page draws it, newest first.
+            window.pushups = {
+                token: null,
+                lines: [],
+                settings: false,
+                inited: false,
+            };
+            function pushupsEvent(event) {
+                const list = document.getElementById("lines");
+                if (event.push) {
+                    const push = event.push;
+                    const card = document.createElement("div");
+                    card.className = "card";
+                    const title = document.createElement("p");
+                    title.className = "title";
+                    title.textContent = push.title;
+                    const body = document.createElement("p");
+                    body.className = "body";
+                    body.textContent = push.body;
+                    const meta = document.createElement("div");
+                    meta.className = "meta";
+                    const time = document.createElement("span");
+                    time.textContent = push.time;
+                    meta.append(time);
+                    if (push.started_app) {
+                        const badge = document.createElement("span");
+                        badge.className = "badge";
+                        badge.textContent = "started the app";
+                        meta.append(badge);
+                    }
+                    if (push.delay_ms !== null) {
+                        const delay = document.createElement("span");
+                        delay.textContent = "+" + push.delay_ms + " ms";
+                        meta.append(delay);
+                    }
+                    card.append(title, body, meta);
+                    list.prepend(card);
+                } else {
+                    const line = document.createElement("p");
+                    line.className = "line";
+                    line.textContent = event.line;
+                    list.prepend(line);
+                }
+                window.pushups.lines.unshift(event.line);
+                if (event.token) {
+                    window.pushups.token = event.full;
+                    document.getElementById("transport").textContent = event.transport;
+                    document.getElementById("token").textContent = event.token;
+                    document.getElementById("token-row").hidden = false;
+                }
             }
+            function pushupsInit(assets) {
+                if (window.pushups.inited) return;
+                window.pushups.inited = true;
+                window.pushups.settings = assets.settings;
+                document.getElementById("css").textContent = assets.css;
+                document.getElementById("mark").innerHTML = assets.mark;
+            }
+            // Shows the permission Rust reports, the ask while it still can change it and the
+            // settings button while the platform refuses the permission and offers them.
+            function applyPermission(permission) {
+                document.getElementById("allow").hidden = !permission.asks;
+                document.getElementById("open").hidden =
+                    !(permission.denied && window.pushups.settings);
+                document.getElementById("permission").textContent = permission.label;
+            }
+            function ask() {
+                window.__TAURI__.core.invoke("allow").then(applyPermission);
+            }
+            function openSettings() {
+                document.getElementById("error").textContent = "";
+                window.__TAURI__.core
+                    .invoke("open_settings")
+                    .catch((error) => {
+                        document.getElementById("error").textContent = String(error);
+                    });
+            }
+            function copyText(text) {
+                (function (t) {
+                    var fallback = function () {
+                        var field = document.createElement("textarea");
+                        field.value = t;
+                        document.body.appendChild(field);
+                        field.select();
+                        document.execCommand("copy");
+                        field.remove();
+                    };
+                    if (navigator.clipboard) {
+                        navigator.clipboard.writeText(t).catch(fallback);
+                    } else {
+                        fallback();
+                    }
+                })(text);
+            }
+            function copyToken() {
+                if (window.pushups.token !== null) {
+                    copyText(window.pushups.token);
+                }
+            }
+            function copyLog() {
+                copyText(window.pushups.lines.slice().reverse().join("\n"));
+            }
+            // The permission Rust holds, which the page re-reads when it comes back to the
+            // foreground.
+            (async () => {
+                const refresh = () => window.__TAURI__.core.invoke("status").then(applyPermission);
+                applyPermission(await window.__TAURI__.core.invoke("status"));
+                document.addEventListener("visibilitychange", () => {
+                    if (document.visibilityState === "visible") {
+                        refresh();
+                    }
+                });
+                window.addEventListener("focus", refresh);
+            })();
         </script>
     </body>
 </html>

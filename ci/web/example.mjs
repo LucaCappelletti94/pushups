@@ -65,7 +65,7 @@ try {
     const page = await browser.newPage();
     page.on("console", (message) => lines.push(message.text()));
     await page.goto(origin);
-    await page.waitForSelector("button", { timeout: STEP_MS });
+    await page.waitForSelector("h2", { timeout: STEP_MS });
     return page;
   };
   let page = await open();

@@ -143,8 +143,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 29 asks for no notification permission, 35 shows the Android 13 prompt.
-        api: [29, 35]
+        # 24 is the module's minSdk, 29 asks for no notification permission, 35 shows the
+        # Android 13 prompt.
+        api: [24, 29, 35]
     # Neither a fork's pull request nor a Dependabot run can read the Firebase secrets.
     if: >-
       github.event_name == 'push' ||
@@ -304,7 +305,7 @@ jobs:
       - uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: target/coverage.lcov,target/android-29-rust.lcov,target/android-35-rust.lcov,target/android-29-rendering-rust.lcov,target/android-35-rendering-rust.lcov,target/android-29-kotlin.xml,target/android-35-kotlin.xml,target/android-29-rendering-kotlin.xml,target/android-35-rendering-kotlin.xml,target/linux-rust.lcov,target/web-rust.lcov,target/web-shim.lcov
+          files: target/coverage.lcov,target/android-24-rust.lcov,target/android-29-rust.lcov,target/android-35-rust.lcov,target/android-24-rendering-rust.lcov,target/android-29-rendering-rust.lcov,target/android-35-rendering-rust.lcov,target/android-24-kotlin.xml,target/android-29-kotlin.xml,target/android-35-kotlin.xml,target/android-24-rendering-kotlin.xml,target/android-29-rendering-kotlin.xml,target/android-35-rendering-kotlin.xml,target/linux-rust.lcov,target/web-rust.lcov,target/web-shim.lcov
           fail_ci_if_error: true
 
   example-android:

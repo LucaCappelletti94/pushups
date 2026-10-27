@@ -31,10 +31,25 @@ target_env=$(echo "$target" | tr '[:lower:]-' '[:upper:]_')
 rm -rf "$out"
 mkdir -p "$out" "$root/target"
 
-# ntfy is the UnifiedPush distributor of the UnifiedPush variant, pinned to an F-Droid build.
+# ntfy is the UnifiedPush distributor of the UnifiedPush variant, pinned to an F-Droid build. It
+# needs Android 8, API 26, so an older device runs no UnifiedPush variant.
 ntfy_version=63
 ntfy_sha256=b4baa6f668bd57ad5df3b4e0e769165dcf25c5ee19fdb04f78077ee819616f2a
-if ! adb shell pm list packages io.heckel.ntfy | grep -q io.heckel.ntfy; then
+ntfy_min_sdk=26
+sdk=$(adb shell getprop ro.build.version.sdk | tr -d '\r')
+unified_push=false
+if [ "$sdk" -ge "$ntfy_min_sdk" ]; then
+  unified_push=true
+else
+  echo "API $sdk is below ntfy's $ntfy_min_sdk, so the UnifiedPush variants do not run"
+fi
+# Android 7's package manager can stall on a streamed `adb install`, waiting for the rest of an
+# APK that never comes, so an older device gets the APK pushed whole before the install.
+install_flags=()
+if [ "$sdk" -lt 26 ]; then
+  install_flags=(--no-streaming)
+fi
+if $unified_push && ! adb shell pm list packages io.heckel.ntfy | grep -q io.heckel.ntfy; then
   apk=$build/ntfy-$ntfy_version.apk
   [ -f "$apk" ] || curl -fsSL -o "$apk" "https://f-droid.org/repo/io.heckel.ntfy_$ntfy_version.apk"
   echo "$ntfy_sha256  $apk" | sha256sum -c --quiet
@@ -54,21 +69,48 @@ wake() {
 }
 adb shell svc power stayon true
 
-# A distributor never opened stays in Android's stopped state, which drops the app's registration
-# broadcast, so ntfy is opened once, as its user would, with its own permission prompt pre-answered.
-adb shell pm grant io.heckel.ntfy android.permission.POST_NOTIFICATIONS 2>/dev/null || true
-# ntfy's first screen asks for this. Without it, Android 12 and later refuse ntfy's subscriber
-# service from the background, and ntfy.sh then refuses pushes to a topic with no subscriber.
-adb shell dumpsys deviceidle whitelist +io.heckel.ntfy >/dev/null
-wake
-adb shell am start -W -n io.heckel.ntfy/.ui.MainActivity >/dev/null
-adb shell input keyevent KEYCODE_HOME
+if $unified_push; then
+  # A distributor never opened stays in Android's stopped state, which drops the app's registration
+  # broadcast, so ntfy is opened once, as its user would, with its own permission prompt pre-answered.
+  adb shell pm grant io.heckel.ntfy android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+  # ntfy's first screen asks for this. Without it, Android 12 and later refuse ntfy's subscriber
+  # service from the background, and ntfy.sh then refuses pushes to a topic with no subscriber.
+  adb shell dumpsys deviceidle whitelist +io.heckel.ntfy >/dev/null
+  wake
+  adb shell am start -W -n io.heckel.ntfy/.ui.MainActivity >/dev/null
+  adb shell input keyevent KEYCODE_HOME
+fi
 
 # Request files a previous run left on the device would be sent ahead of this run's, so they go.
 adb uninstall "$package" >/dev/null 2>&1 || true
 python3 "$ci/send.py" "$key" --webpush-sender "$root/ci/linux/probe/target/debug/send" --vapid "$out/vapid.pem" --fcm-sealer "$root/ci/linux/probe/target/debug/seal" &
 sender=$!
 trap 'kill $sender 2>/dev/null || true; adb shell pm enable io.heckel.ntfy >/dev/null 2>&1 || true; adb shell svc power stayon false || true' EXIT
+
+# What the device shows when a step gives no answer: the focused window naming a dialog that
+# waits on a tap, the busiest processes, any install or compile still running, and the system's
+# informational and worse lines since the variant began, on standard error so a step's own
+# redirect keeps them.
+diagnose() {
+  adb shell dumpsys window | grep -E 'mCurrentFocus|mFocusedApp' >&2 || true
+  adb shell dumpsys cpuinfo | head -15 >&2 || true
+  adb shell ps | grep -E 'dex2oat|installd|dexopt| pm$|vending|packageinstaller' >&2 || true
+  adb logcat -d -v time | grep -vE ' (V|D)/' | tail -300 >&2 || true
+}
+
+# Runs a step under a bound, so a device waiting on a dialog fails the run at once with what it
+# shows, rather than at the job's own limit with nothing.
+bounded() {
+  local seconds=$1
+  shift
+  local status=0
+  timeout "$seconds" "$@" || status=$?
+  if [ "$status" -eq 124 ]; then
+    echo "no answer from '$*' within $seconds s" >&2
+    diagnose
+  fi
+  return "$status"
+}
 
 # One app configuration: the probe built with <features>, the test manifest <manifest>, the test
 # class <class>, and instrumentation arguments as key and value pairs. Each runs in a fresh
@@ -91,20 +133,20 @@ run_variant() {
   mkdir -p "$build/jniLibs/$abi"
   cp "$ci/probe/target/$target/debug/libpushups_probe.so" "$build/jniLibs/$abi/"
   cp "$ci/probe/target/$target/debug/libpushups_probe.so" "$out/$variant.so"
-  (cd "$ci" && ./gradlew --no-daemon --quiet -Ppushups.manifest="$manifest" assembleDebugAndroidTest)
+  (cd "$ci" && bounded 900 ./gradlew --no-daemon --quiet -Ppushups.manifest="$manifest" assembleDebugAndroidTest)
 
   wake
-  adb uninstall "$package" >/dev/null 2>&1 || true
-  adb install -t "$build/pushups/outputs/apk/androidTest/debug/pushups-debug-androidTest.apk" >/dev/null
-  adb logcat -c
+  bounded 60 adb logcat -c
+  bounded 120 adb uninstall "$package" >/dev/null || true
+  bounded 300 adb install -t ${install_flags[@]+"${install_flags[@]}"} "$build/pushups/outputs/apk/androidTest/debug/pushups-debug-androidTest.apk" >/dev/null
   timeout 900 adb shell am instrument -w -e class "rs.pushups.ci.$class" "${arguments[@]}" \
     -e coverage true -e coverageFile "$files/jacoco.ec" "$package/androidx.test.runner.AndroidJUnitRunner" \
     | tee "$out/$variant.txt" || true
   # The device's side of a failure, which the runner's report does not show, by tag, since system lines naming the package and UiDevice's polls for a title would fill the tail.
   grep -q '^OK (' "$out/$variant.txt" || adb logcat -d -v time -s pushups:V FirebaseMessaging:V FirebaseApp:V \
     NotificationService:V ActivityManager:V ActivityTaskManager:V AndroidRuntime:V TestRunner:V | tail -300
-  adb exec-out run-as "$package" cat files/pushups.profraw > "$out/$variant.profraw"
-  adb exec-out run-as "$package" cat files/jacoco.ec > "$out/$variant.ec"
+  bounded 120 adb exec-out run-as "$package" cat files/pushups.profraw > "$out/$variant.profraw"
+  bounded 120 adb exec-out run-as "$package" cat files/jacoco.ec > "$out/$variant.ec"
 }
 
 run_variant jni-registered "" default PanicBoundaryTest panicCase registered
@@ -123,13 +165,17 @@ run_variant encryption "config-real encryption background-handler rendering-hand
 run_variant unconfigured "" default RegistrationFailsTest expect "FCM is not configured"
 run_variant mismatched config-mismatched default RegistrationFailsTest expect "FCM is not configured"
 run_variant rejected config-fixture default RegistrationFailsTest expect "Please set a valid API key"
-run_variant unifiedpush "config-real background-handler" default UnifiedPushTest vapid "$vapid_b64url" endpoint https://ntfy.sh/
-# With ntfy disabled the device has no distributor, so the same configuration registers through FCM.
-adb shell pm disable-user --user 0 io.heckel.ntfy >/dev/null
-run_variant unifiedpush-fallback "config-real background-handler" default UnifiedPushFallbackTest vapid "$vapid_b64url"
-adb shell pm enable io.heckel.ntfy >/dev/null
+if $unified_push; then
+  run_variant unifiedpush "config-real background-handler" default UnifiedPushTest vapid "$vapid_b64url" endpoint https://ntfy.sh/
+  # With ntfy disabled the device has no distributor, so the same configuration registers through FCM.
+  adb shell pm disable-user --user 0 io.heckel.ntfy >/dev/null
+  run_variant unifiedpush-fallback "config-real background-handler" default UnifiedPushFallbackTest vapid "$vapid_b64url"
+  adb shell pm enable io.heckel.ntfy >/dev/null
+fi
 # A tap into a running singleTop Activity, plain and androidx.
 run_variant single-top "config-real background-handler" single-top SingleTopTapTest
+# Opens the app's notification setting through `open_notification_settings` and lands in the settings app.
+run_variant open-settings "" default NotificationSettingsTest
 # A Kotlin module of another version than the crate, which the handshake stops before any other export.
 run_variant module-mismatch config-real module-mismatch ModuleMismatchTest crate "$("$ci/../crate-version.sh")"
 # A library without the handshake, as one built with a crate older than the module.

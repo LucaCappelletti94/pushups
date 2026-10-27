@@ -334,6 +334,18 @@ pushups::__private::android::exports! {
         java_string(env, Some(answer))
     }
 
+    /// `Probe.openNotificationSettings()`: `null`, or the error of
+    /// `pushups::open_notification_settings`.
+    fn Java_rs_pushups_ci_Probe_openNotificationSettings<'local>(
+        env: JNIEnv<'local>,
+        _class: JClass<'local>,
+    ) -> jstring {
+        java_string(
+            env,
+            pushups::open_notification_settings().err().map(|error| error.to_string()),
+        )
+    }
+
     /// `Probe.events()`: every event so far, one per line.
     fn Java_rs_pushups_ci_Probe_events<'local>(
         env: JNIEnv<'local>,

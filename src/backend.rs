@@ -11,6 +11,11 @@ pub(crate) trait Backend {
 
     fn permission_status() -> impl Future<Output = Result<Permission, Error>>;
 
+    /// Opens the system setting where the user turns this app's notifications on or off.
+    fn open_notification_settings() -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+
     /// A handler was set, so events kept outside the dispatcher go to it now.
     fn handler_set() {}
 
