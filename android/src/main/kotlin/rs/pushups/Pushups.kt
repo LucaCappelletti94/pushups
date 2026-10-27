@@ -1,7 +1,6 @@
 package rs.pushups
 
 import android.Manifest
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -156,9 +155,7 @@ object Pushups {
         return try {
             appContext.startActivity(intent)
             null
-        } catch (e: ActivityNotFoundException) {
-            e.message ?: "no activity opens the notification setting"
-        } catch (e: Exception) {
+        } catch (e: RuntimeException) {
             e.message ?: "could not open the notification setting"
         }
     }
