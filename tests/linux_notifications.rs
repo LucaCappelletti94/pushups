@@ -54,7 +54,7 @@ fn on_background(_context: pushups::Context, message: pushups::Message) {
 mod linux {
     use p256::elliptic_curve::point::AffineCoordinates;
     use std::collections::HashMap;
-    use std::io::{BufRead, BufReader};
+    use std::io::{BufRead, BufReader, Write as _};
     use std::path::{Path, PathBuf};
     use std::process::{Child, Command, Stdio};
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -86,6 +86,14 @@ mod linux {
     const STALE_ENTRY: &str = "stale-entry";
     /// A push rendered by the app's rendering handler before the background handler runs it.
     const RENDERING: &str = "rendering";
+    /// A portal that names the app but refuses its notifications.
+    const REFUSED: &str = "refused";
+    /// Thread stacks the child cannot start, so no service choice thread runs.
+    const SPAWN_FAIL: &str = "spawn-fail";
+    /// A portal that restarts between two shows, which drops the registration.
+    const PORTAL_RESTART: &str = "portal-restart";
+    /// The desktop entry's path holds a directory, which `install` must swallow.
+    const ENTRY_IS_DIR: &str = "entry-is-dir";
     /// The desktop entry the parent puts in place for the scenarios that need one already.
     const PACKAGED_ENTRY: &str = "[Desktop Entry]\nType=Application\nName=Packaged\n";
     /// An entry an earlier run of this crate wrote, before the app had a display name.
@@ -123,6 +131,10 @@ mod linux {
             NAMED,
             STALE_ENTRY,
             RENDERING,
+            REFUSED,
+            SPAWN_FAIL,
+            PORTAL_RESTART,
+            ENTRY_IS_DIR,
         ] {
             run(scenario);
             println!("linux notification scenario {scenario}: ok");
@@ -187,6 +199,27 @@ mod linux {
                 text(&notification, "default-action-target"),
                 icon_kind(&notification),
             ));
+        }
+    }
+
+    /// The notification interface of a portal that refuses every app.
+    struct RefusedNotification;
+
+    #[expect(
+        clippy::unused_self,
+        reason = "zbus calls the served object's method, which refuses without reading it"
+    )]
+    #[zbus::interface(name = "org.freedesktop.portal.Notification")]
+    impl RefusedNotification {
+        fn add_notification(
+            &self,
+            id: String,
+            notification: HashMap<String, OwnedValue>,
+        ) -> zbus::fdo::Result<()> {
+            drop((id, notification));
+            Err(zbus::fdo::Error::Failed(
+                "the portal has no backend for the app".to_owned(),
+            ))
         }
     }
 
@@ -363,7 +396,7 @@ mod linux {
 
     /// The fake services a scenario runs against, kept alive for its length.
     struct Services {
-        _portal: Option<Connection>,
+        portal: Option<Connection>,
         notifications: Option<Connection>,
     }
 
@@ -378,15 +411,24 @@ mod linux {
                 | FRESH_ENTRY
                 | NAMED
                 | STALE_ENTRY
+                | REFUSED
+                | PORTAL_RESTART
         )
         .then(|| {
             let mut builder = connect(address)
                 .name(PORTAL_NAME)
                 .expect("the portal name is valid");
             if scenario != NO_BACKEND {
-                builder = builder
-                    .serve_at(PORTAL_PATH, PortalNotification(Arc::clone(log)))
-                    .expect("the portal notification object is served");
+                let notification = if scenario == REFUSED {
+                    builder
+                        .serve_at(PORTAL_PATH, RefusedNotification)
+                        .expect("the refusing notification object is served")
+                } else {
+                    builder
+                        .serve_at(PORTAL_PATH, PortalNotification(Arc::clone(log)))
+                        .expect("the portal notification object is served")
+                };
+                builder = notification;
             }
             // A portal older than 1.19.4 has no Registry, which sends the app to the fallback.
             if scenario != FALLBACK {
@@ -397,22 +439,24 @@ mod linux {
             builder.build().expect("the portal connects")
         });
         let notifications = match scenario {
-            FALLBACK | FRESH_ENTRY | NO_BACKEND | NAMED | RENDERING => Some(
-                connect(address)
-                    .name(NOTIFICATIONS_NAME)
-                    .expect("the notifications name is valid")
-                    .serve_at(
-                        NOTIFICATIONS_PATH,
-                        Notifications {
-                            log: Arc::clone(log),
-                            next: AtomicU32::new(7),
-                            marks: (scenario == RENDERING).then(|| marks.to_path_buf()),
-                        },
-                    )
-                    .expect("the notifications object is served")
-                    .build()
-                    .expect("the notification server connects"),
-            ),
+            FALLBACK | FRESH_ENTRY | NO_BACKEND | NAMED | RENDERING | SPAWN_FAIL | ENTRY_IS_DIR => {
+                Some(
+                    connect(address)
+                        .name(NOTIFICATIONS_NAME)
+                        .expect("the notifications name is valid")
+                        .serve_at(
+                            NOTIFICATIONS_PATH,
+                            Notifications {
+                                log: Arc::clone(log),
+                                next: AtomicU32::new(7),
+                                marks: (scenario == RENDERING).then(|| marks.to_path_buf()),
+                            },
+                        )
+                        .expect("the notifications object is served")
+                        .build()
+                        .expect("the notification server connects"),
+                )
+            }
             HUNG => Some(
                 connect(address)
                     .name(NOTIFICATIONS_NAME)
@@ -425,7 +469,7 @@ mod linux {
             _ => None,
         };
         Services {
-            _portal: portal,
+            portal,
             notifications,
         }
     }
@@ -451,7 +495,9 @@ mod linux {
         );
         let applications = data_home.join("applications");
         let entry = match scenario {
-            PORTAL | NO_BACKEND | HUNG => Some(PACKAGED_ENTRY),
+            PORTAL | NO_BACKEND | HUNG | REFUSED | SPAWN_FAIL | PORTAL_RESTART => {
+                Some(PACKAGED_ENTRY)
+            }
             STALE_ENTRY => Some(STALE_MARKED_ENTRY),
             _ => None,
         };
@@ -460,19 +506,27 @@ mod linux {
             std::fs::write(applications.join(format!("{APP_ID}.desktop")), entry)
                 .expect("the desktop entry in place");
         }
+        if scenario == ENTRY_IS_DIR {
+            std::fs::create_dir_all(&applications).expect("the applications directory");
+            std::fs::create_dir_all(applications.join(format!("{APP_ID}.desktop")))
+                .expect("the desktop entry's path is a directory");
+        }
         let log: Log = Arc::default();
-        let fakes = serve(scenario, &address, &log, &marks);
-        let mut app = Reaped(
-            Command::new(&exe)
-                .env(CHILD, scenario)
-                .env(MARKS, &marks)
-                .env("DBUS_SESSION_BUS_ADDRESS", &address)
-                .env("XDG_DATA_HOME", &data_home)
-                .env_remove("PUSHUPS_DBUS_ACTIVATED")
-                .env_remove("XDG_ACTIVATION_TOKEN")
-                .spawn()
-                .expect("the app process starts"),
-        );
+        let mut fakes = serve(scenario, &address, &log, &marks);
+        let mut command = Command::new(&exe);
+        command
+            .env(CHILD, scenario)
+            .env(MARKS, &marks)
+            .env("DBUS_SESSION_BUS_ADDRESS", &address)
+            .env("XDG_DATA_HOME", &data_home)
+            .env_remove("PUSHUPS_DBUS_ACTIVATED")
+            .env_remove("XDG_ACTIVATION_TOKEN");
+        if scenario == SPAWN_FAIL {
+            // Every thread the child starts needs this much stack, so the child starts its
+            // own and nothing a notification show needs after it.
+            command.env("RUST_MIN_STACK", "16777216");
+        }
+        let mut app = Reaped(command.spawn().expect("the app process starts"));
         let tapper = connect(&address)
             .build()
             .expect("a connection for the taps");
@@ -496,6 +550,7 @@ mod linux {
             NAMED => check_named(&marks, &data_home, &log),
             STALE_ENTRY => check_stale_entry(&marks, &data_home, &log),
             RENDERING => check_rendering(&marks, &data_home, &log, &address),
+            PORTAL_RESTART => check_restarted(&mut fakes, &address, &marks, &log),
             _ => {}
         }
         let mut status = None;
@@ -510,6 +565,18 @@ mod linux {
             status.is_some_and(|status| status.success()),
             "{scenario}: the app failed with {status:?}"
         );
+        if scenario == PORTAL_RESTART {
+            check_restarted_log(&log);
+        }
+        if scenario == REFUSED {
+            check_refused(&log);
+        }
+        if scenario == SPAWN_FAIL {
+            check_spawn_fail(&log);
+        }
+        if scenario == ENTRY_IS_DIR {
+            check_entry_is_dir(&data_home, &log);
+        }
     }
 
     /// The portal got the app id before the notifications, the tagged one under its tag with a
@@ -763,6 +830,84 @@ mod linux {
         }
     }
 
+    /// A portal that names the app but refuses its notifications leaves `show` the portal's
+    /// error, not the fallback's.
+    fn check_refused(log: &Log) {
+        let recorded = log.lock().expect("the log").clone();
+        assert_eq!(
+            recorded,
+            [format!("register {APP_ID}")],
+            "{REFUSED}: the portal calls"
+        );
+    }
+
+    /// With no thread the service choice can start, nothing registers and nothing is shown.
+    fn check_spawn_fail(log: &Log) {
+        let recorded = log.lock().expect("the log").clone();
+        assert!(
+            recorded.is_empty(),
+            "{SPAWN_FAIL}: the fakes saw {recorded:?}"
+        );
+    }
+
+    /// A portal that restarts between two shows must be re-registered before the second. It
+    /// drops the first portal, serves the second, and marks it for the child's second show.
+    fn check_restarted(fakes: &mut Services, address: &str, marks: &Path, log: &Log) {
+        assert!(
+            wait_until(|| marks.join("shown-1").exists()),
+            "{PORTAL_RESTART}: the first show never finished"
+        );
+        drop(fakes.portal.take().expect("the first portal runs"));
+        fakes.portal = Some(
+            connect(address)
+                .name(PORTAL_NAME)
+                .expect("the portal name is valid")
+                .serve_at(PORTAL_PATH, PortalNotification(Arc::clone(log)))
+                .expect("the portal notification object is served")
+                .serve_at(PORTAL_PATH, Registry(Arc::clone(log)))
+                .expect("the registry is served")
+                .build()
+                .expect("the restarted portal connects"),
+        );
+        std::fs::write(marks.join("restarted"), b"").expect("the restarted mark is written");
+    }
+
+    /// The restarted portal got the app id again before the second show.
+    fn check_restarted_log(log: &Log) {
+        let recorded = log.lock().expect("the log").clone();
+        assert_eq!(
+            recorded.len(),
+            4,
+            "{PORTAL_RESTART}: the portal calls {recorded:?}"
+        );
+        assert!(
+            recorded[0].starts_with(&format!("register {APP_ID}")),
+            "{recorded:?}"
+        );
+        assert!(recorded[1].starts_with("add "), "{recorded:?}");
+        assert!(
+            recorded[2].starts_with(&format!("register {APP_ID}")),
+            "{recorded:?}"
+        );
+        assert!(recorded[3].starts_with("add "), "{recorded:?}");
+    }
+
+    /// A desktop entry's path that holds a directory must not stop `install`, and the fallback
+    /// shows through it.
+    fn check_entry_is_dir(data_home: &Path, log: &Log) {
+        let path = data_home
+            .join("applications")
+            .join(format!("{APP_ID}.desktop"));
+        assert!(path.is_dir(), "install replaced the directory entry");
+        let recorded = log.lock().expect("the log").clone();
+        assert_eq!(
+            recorded.len(),
+            1,
+            "{ENTRY_IS_DIR}: the Notify calls {recorded:?}"
+        );
+        assert!(recorded[0].contains("summary=Broken"), "{recorded:?}");
+    }
+
     /// The first process installs, which writes the activation file, and exits. A tap, or a
     /// launcher's `Open`, then makes the bus start a headless process, which starts the UI with
     /// the call's activation token. The UI drains the tap, or finds nothing for a launch.
@@ -775,8 +920,8 @@ mod linux {
             tap(tapper, "closed-data");
             "closed-data started_app=true token=tok-1"
         } else {
-            tapper
-                .call_method(
+            let open = |tapper: &Connection| {
+                tapper.call_method(
                     Some(APP_ID),
                     APP_PATH,
                     Some(APPLICATION),
@@ -786,7 +931,11 @@ mod linux {
                         HashMap::from([("activation-token", Value::from("tok-1"))]),
                     ),
                 )
-                .expect("Open reaches the app");
+            };
+            open(tapper).expect("Open reaches the app");
+            // A second `Open` right after the first must reach the same headless process,
+            // which has launched the UI already.
+            open(tapper).expect("a second Open still reaches the app");
             "nothing token=tok-1"
         };
         assert!(
@@ -795,6 +944,9 @@ mod linux {
         );
         let seen = std::fs::read_to_string(marks.join("ui")).expect("the mark");
         assert_eq!(seen, expected, "{scenario}");
+        let count = std::fs::read_to_string(marks.join("ui-count"))
+            .unwrap_or_else(|error| panic!("{scenario}: no ui count, {error}"));
+        assert_eq!(count, "1\n", "{scenario}: the UI started once");
     }
 
     /// `Notify` with the `default` action, a file icon and a replacement under the tag. A forged
@@ -836,6 +988,26 @@ mod linux {
         };
         invoked(tapper, 7, "default");
         invoked(server, 7, "other");
+        // A body that does not deserialize as the signal's is dropped, and a well-formed one
+        // after it still reaches the tap.
+        server
+            .emit_signal(
+                None::<&str>,
+                NOTIFICATIONS_PATH,
+                NOTIFICATIONS_NAME,
+                "ActionInvoked",
+                &(7_u32, 7_u32),
+            )
+            .expect("the malformed action signal is sent");
+        server
+            .emit_signal(
+                None::<&str>,
+                NOTIFICATIONS_PATH,
+                NOTIFICATIONS_NAME,
+                "NotificationClosed",
+                &(8_u32, "wrong reason".to_string()),
+            )
+            .expect("the malformed closing signal is sent");
         std::thread::sleep(QUIET);
         std::fs::write(marks.join("real"), b"").expect("the real mark");
         invoked(server, 7, "default");
@@ -893,6 +1065,12 @@ mod linux {
         );
         let token = std::env::var("XDG_ACTIVATION_TOKEN").unwrap_or_default();
         std::fs::write(mark("ui"), format!("{seen} token={token}")).expect("the ui mark");
+        let mut count = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(mark("ui-count"))
+            .expect("the ui count is opened");
+        count.write_all(b"1\n").expect("the ui count is appended");
     }
 
     /// The app side, run in a child process on the private bus.
@@ -930,27 +1108,7 @@ mod linux {
             let _ = events.send(event);
         });
         match scenario {
-            PORTAL => {
-                Notification::new("Title")
-                    .body("Body")
-                    .tag("tag-1")
-                    .icon("dialog-information")
-                    .data("tap-data")
-                    .show()
-                    .expect("the portal shows the notification");
-                Notification::new("Untagged")
-                    .icon(mark("icon.png").to_string_lossy())
-                    .show()
-                    .expect("the portal shows the second notification");
-                std::fs::write(mark("shown"), b"").expect("the shown mark");
-                let tap = next_message(&received, BOUND).expect("the tap arrives");
-                assert_eq!(tap.payload, b"tap-data");
-                assert!(!tap.started_app, "a tap to a running UI started nothing");
-                assert!(
-                    next_message(&received, QUIET).is_none(),
-                    "a second tap on the same data delivered again"
-                );
-            }
+            PORTAL => portal_shown(&received),
             PORTAL_CLOSED | LAUNCHED if !mark("installed").exists() => {
                 std::fs::write(mark("installed"), b"").expect("the installed mark");
             }
@@ -994,21 +1152,119 @@ mod linux {
                 std::fs::write(mark("shown"), b"").expect("the shown mark");
             }
             RENDERING => child_rendering(&received),
-            HUNG => {
-                let started = Instant::now();
-                let shown = Notification::new("Held").show();
-                let took = started.elapsed();
+            HUNG => hung_show(),
+            REFUSED => refused_show(),
+            SPAWN_FAIL => {
+                let limit = address_space_limit();
+                // SAFETY: `RLIMIT_AS` is a valid resource and `limit` is a valid `rlimit`
+                // passed by pointer for the call's duration.
+                assert_eq!(
+                    unsafe { libc::setrlimit(libc::RLIMIT_AS, &raw const limit) },
+                    0,
+                    "the address space limit is set"
+                );
+                let shown = Notification::new("Starved").show();
                 assert!(
                     matches!(shown, Err(Error::Platform(_))),
-                    "show to a server that never answers gave {shown:?}"
+                    "show with no thread to start the service choice gave {shown:?}"
                 );
+            }
+            PORTAL_RESTART => restarted_shown(),
+            ENTRY_IS_DIR => {
+                let shown = Notification::new("Broken").show();
                 assert!(
-                    took >= SHOW_BOUND && took < SHOW_BOUND + Duration::from_secs(3),
-                    "show returned after {took:?}"
+                    matches!(shown, Ok(())),
+                    "show with a broken entry path gave {shown:?}"
                 );
+                std::fs::write(mark("shown"), b"").expect("the shown mark");
             }
             other => panic!("unknown scenario {other}"),
         }
+    }
+
+    /// A limit on the address space that fits the `show` thread and its connection, and no
+    /// thread a notification show needs after them.
+    fn address_space_limit() -> libc::rlimit {
+        let status = std::fs::read_to_string("/proc/self/status").expect("the process status");
+        let vm_size = status
+            .lines()
+            .find_map(|line| line.strip_prefix("VmSize:"))
+            .and_then(|line| line.split_whitespace().next())
+            .and_then(|kb| kb.parse::<u64>().ok())
+            .expect("the process size in kibibytes");
+        let limit = vm_size * 1024 + 40 * 1024 * 1024;
+        libc::rlimit {
+            rlim_cur: limit as _,
+            rlim_max: limit as _,
+        }
+    }
+
+    /// The portal shows the tagged and the untagged notification, and a second tap on the same
+    /// data delivers nothing.
+    fn portal_shown(received: &mpsc::Receiver<Event>) {
+        Notification::new("Title")
+            .body("Body")
+            .tag("tag-1")
+            .icon("dialog-information")
+            .data("tap-data")
+            .show()
+            .expect("the portal shows the notification");
+        Notification::new("Untagged")
+            .icon(mark("icon.png").to_string_lossy())
+            .show()
+            .expect("the portal shows the second notification");
+        std::fs::write(mark("shown"), b"").expect("the shown mark");
+        let tap = next_message(received, BOUND).expect("the tap arrives");
+        assert_eq!(tap.payload, b"tap-data");
+        assert!(!tap.started_app, "a tap to a running UI started nothing");
+        assert!(
+            next_message(received, QUIET).is_none(),
+            "a second tap on the same data delivered again"
+        );
+    }
+
+    /// A `Notify` the server never answers returns `show`'s bound error after the bound.
+    fn hung_show() {
+        let started = Instant::now();
+        let shown = Notification::new("Held").show();
+        let took = started.elapsed();
+        assert!(
+            matches!(shown, Err(Error::Platform(_))),
+            "show to a server that never answers gave {shown:?}"
+        );
+        assert!(
+            took >= SHOW_BOUND && took < SHOW_BOUND + Duration::from_secs(3),
+            "show returned after {took:?}"
+        );
+    }
+
+    /// A portal that refuses the app's notifications leaves the portal's error on `show`.
+    fn refused_show() {
+        let shown = Notification::new("Refused").show();
+        let Err(Error::Platform(message)) = shown else {
+            panic!("show a portal that refuses the app gave {shown:?}");
+        };
+        assert!(
+            message.contains("the portal has no backend for the app"),
+            "the refusal reached the app as {message}"
+        );
+    }
+
+    /// The portal restarts between two shows, and the second registers again before it shows.
+    fn restarted_shown() {
+        Notification::new("First")
+            .show()
+            .expect("the portal shows the first notification");
+        std::fs::write(mark("shown-1"), b"").expect("the mark is written");
+        assert!(
+            wait_until(|| mark("restarted").exists()),
+            "the portal never restarted"
+        );
+        // The watch on the portal's owner must have forgotten the registration by now.
+        std::thread::sleep(Duration::from_millis(1500));
+        Notification::new("Second")
+            .show()
+            .expect("the restarted portal shows the second notification");
     }
 
     fn fallback(received: &mpsc::Receiver<Event>) {

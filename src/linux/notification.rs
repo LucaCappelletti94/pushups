@@ -611,6 +611,13 @@ mod tests {
     }
 
     #[test]
+    fn a_carriage_return_is_escaped_like_the_other_control_characters() {
+        assert_eq!(desktop_string("a\rb\nc\td"), "a\\rb\\nc\\td");
+        assert_eq!(desktop_string(" lead"), "\\slead");
+        assert_eq!(desktop_string("mid dle"), "mid dle");
+    }
+
+    #[test]
     fn only_a_marked_entry_in_the_data_home_is_rewritten() {
         let home = tempfile::tempdir().expect("a data home");
         let system = tempfile::tempdir().expect("a system data dir");
