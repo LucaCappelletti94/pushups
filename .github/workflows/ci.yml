@@ -74,15 +74,22 @@ jobs:
       - run: cargo +stable test --workspace
       - run: cargo +stable test --workspace --all-features
 
-  test-windows:
+  windows-coverage:
     # No Windows App SDK runtime on the runner, so this runs the Windows backend as an app shipped without it.
-    name: Test on Windows
+    name: Coverage on Windows
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-      - run: rustup toolchain install stable --profile minimal
-      - run: cargo +stable test --workspace --all-features
+      - run: rustup toolchain install nightly --profile minimal --component llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - run: cargo +nightly llvm-cov --workspace --all-features --all-targets --no-report
+      - run: cargo +nightly llvm-cov --workspace --all-features --doc --no-clean --lcov --output-path target/windows-rust.lcov
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-coverage
+          path: target/windows-rust.lcov
+          if-no-files-found: error
 
   msrv:
     name: MSRV
@@ -283,7 +290,7 @@ jobs:
 
   coverage:
     name: Coverage
-    needs: [android-coverage, linux-coverage, web-coverage]
+    needs: [android-coverage, linux-coverage, web-coverage, windows-coverage, mobile-rendering-apple]
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     # Neither a fork's pull request nor a Dependabot run can read CODECOV_TOKEN.
@@ -305,7 +312,7 @@ jobs:
       - uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: target/coverage.lcov,target/android-24-rust.lcov,target/android-29-rust.lcov,target/android-35-rust.lcov,target/android-24-rendering-rust.lcov,target/android-29-rendering-rust.lcov,target/android-35-rendering-rust.lcov,target/android-24-kotlin.xml,target/android-29-kotlin.xml,target/android-35-kotlin.xml,target/android-24-rendering-kotlin.xml,target/android-29-rendering-kotlin.xml,target/android-35-rendering-kotlin.xml,target/linux-rust.lcov,target/web-rust.lcov,target/web-shim.lcov
+          files: target/coverage.lcov,target/android-24-rust.lcov,target/android-29-rust.lcov,target/android-35-rust.lcov,target/android-24-rendering-rust.lcov,target/android-29-rendering-rust.lcov,target/android-35-rendering-rust.lcov,target/android-24-kotlin.xml,target/android-29-kotlin.xml,target/android-35-kotlin.xml,target/android-24-rendering-kotlin.xml,target/android-29-rendering-kotlin.xml,target/android-35-rendering-kotlin.xml,target/linux-rust.lcov,target/web-rust.lcov,target/web-shim.lcov,target/windows-rust.lcov,target/apple-rust.lcov
           fail_ci_if_error: true
 
   example-android:
@@ -530,7 +537,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: |
-          rustup toolchain install stable --profile minimal
+          rustup toolchain install stable --profile minimal --component llvm-tools
           rustup target add --toolchain stable aarch64-apple-ios-sim aarch64-apple-ios
       # The harness's keychain cases need the Developer ID identity and the profile for
       # rs.pushups.ci.harness, which neither a fork's pull request nor a Dependabot run can read.
@@ -566,6 +573,11 @@ jobs:
           } >> "$GITHUB_ENV"
       - name: Exercise the native service and link the simulator extension
         run: bash ci/apple/run.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: apple-coverage
+          path: target/apple-rust.lcov
+          if-no-files-found: error
 
   example-apple:
     name: Example apps for iOS and macOS

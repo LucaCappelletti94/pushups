@@ -1,5 +1,5 @@
 # Runs the W1 checks with the probe from ci/windows/w1 on a Windows machine with the Windows App SDK 2.5 runtime.
-# Run from the repository root after `cargo build --release --manifest-path ci/windows/w1/Cargo.toml`,
+# Run from the repository root after `cargo build --manifest-path ci/windows/w1/Cargo.toml`,
 # with WNS_TENANT_ID, WNS_APP_ID, WNS_OBJECT_ID and WNS_CLIENT_SECRET set.
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -9,6 +9,9 @@ $work = Join-Path ($env:RUNNER_TEMP ?? [IO.Path]::GetTempPath()) 'w1'
 $app = Join-Path $work 'app'
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $app | Out-Null
+# Every probe process writes its Rust profile here on a clean exit.
+New-Item -ItemType Directory -Force (Join-Path $work 'prof') | Out-Null
+if (-not $env:LLVM_PROFILE_FILE) { $env:LLVM_PROFILE_FILE = Join-Path (Join-Path $work 'prof') '%m.profraw' }
 $exe = Join-Path $app 'pushups-w1-probe.exe'
 $verdict = [Collections.Generic.List[string]]::new()
 $passed = $true
@@ -204,7 +207,7 @@ Invoke-WebRequest -TimeoutSec 600 -OutFile $package `
     "https://api.nuget.org/v3-flatcontainer/microsoft.windowsappsdk.foundation/$Foundation/microsoft.windowsappsdk.foundation.$Foundation.nupkg"
 Expand-Archive $package (Join-Path $work 'foundation')
 Copy-Item (Join-Path $work 'foundation/runtimes/win-x64/native/Microsoft.WindowsAppRuntime.Bootstrap.dll') $app
-Copy-Item 'ci/windows/w1/target/release/pushups-w1-probe.exe' $exe
+Copy-Item 'ci/windows/w1/target/debug/pushups-w1-probe.exe' $exe
 Copy-Item 'assets/brand/png/icon-macos-512.png' (Join-Path $app 'icon.png')
 
 # The files a process Windows starts for a tap reads, with no environment from this script.

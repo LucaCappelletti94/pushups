@@ -11,11 +11,25 @@ PROBE="$CI/probe/Cargo.toml"
 BUILD="$ROOT/target/apple-run"
 rm -rf "$BUILD"
 trap 'rm -rf "$BUILD"' EXIT
+mkdir -p "$BUILD/prof"
+host_triple=$(rustc -vV | sed -n 's/^host: //p')
+tools=$(rustc --print sysroot)/lib/rustlib/$host_triple/bin
 
-cargo +stable test -p pushups --lib rendering:: --target-dir "$BUILD/rust"
-cargo +stable build --manifest-path "$PROBE" --target-dir "$BUILD/rust"
+# Every instrumented host run writes its profile into $BUILD/prof. The iOS builds stay plain,
+# since the extensions only get their symbols checked and never run.
+env LLVM_PROFILE_FILE="$BUILD/prof/%m.profraw" RUSTFLAGS="-Cinstrument-coverage" \
+  cargo +stable test -p pushups --lib --target-dir "$BUILD/rust"
+env LLVM_PROFILE_FILE="$BUILD/prof/%m.profraw" RUSTFLAGS="-Cinstrument-coverage" \
+  cargo +stable build --manifest-path "$PROBE" --target-dir "$BUILD/rust"
 cargo +stable build --manifest-path "$PROBE" --target aarch64-apple-ios-sim --target-dir "$BUILD/rust"
 cargo +stable build --manifest-path "$PROBE" --target aarch64-apple-ios --target-dir "$BUILD/rust"
+
+# The probe's instrumented static library references the profiler runtime, which rustc links
+# only into the executables it links itself, so the harness links the runtime's objects.
+profobj="$BUILD/profobj"
+prof_lib=$(ls "$(rustc --print sysroot)/lib/rustlib/$host_triple/lib/libprofiler_builtins-"*.rlib | head -n 1)
+mkdir -p "$profobj"
+(cd "$profobj" && ar x "$prof_lib")
 
 # Without a signing identity the harness runs ad-hoc signed and skips the keychain cases, since
 # macOS kills a process that claims a keychain access group no provisioning profile grants. With
@@ -42,6 +56,7 @@ xcrun --sdk macosx swiftc \
     "$CI/harness/main.swift" \
     "$ROOT/ios/PushupsNotificationService.swift" \
     "$BUILD/rust/debug/$LIB" \
+    "$BUILD"/profobj/*.o \
     -framework Foundation -framework UserNotifications -framework AppKit \
     -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$HARNESS_PLIST"
 if [ -n "${PUSHUPS_HARNESS_IDENTITY:-}" ]; then
@@ -62,10 +77,10 @@ if [ -n "${PUSHUPS_HARNESS_IDENTITY:-}" ]; then
         ${PUSHUPS_HARNESS_KEYCHAIN:+--keychain "$PUSHUPS_HARNESS_KEYCHAIN"} \
         --entitlements "$HARNESS_ENTITLEMENTS" "$HARNESS_APP"
     codesign --verify --strict --verbose=2 "$HARNESS_APP"
-    "$HARNESS_APP/Contents/MacOS/harness"
+    env LLVM_PROFILE_FILE="$BUILD/prof/%m.profraw" "$HARNESS_APP/Contents/MacOS/harness"
 else
     codesign --force --sign - "$BUILD/harness"
-    "$BUILD/harness"
+    env LLVM_PROFILE_FILE="$BUILD/prof/%m.profraw" "$BUILD/harness"
 fi
 
 build_extension() {
@@ -125,3 +140,14 @@ check_row undeclared unentitled 0
 check_row declared entitled 0
 check_row declared unentitled 1
 check_row undeclared entitled 1
+
+# The Rust LCOV merges the test's and the harness's profiles against both instrumented binaries,
+# kept to the crate's own sources with paths relative to the repository. `llvm-cov export` reads
+# only its first positional file as an object, so the test binary comes through `-object`.
+mkdir -p "$ROOT/target"
+"$tools/llvm-profdata" merge -sparse "$BUILD"/prof/*.profraw -o "$BUILD/pushups.profdata"
+test_bin=$(find "$BUILD/rust/debug/deps" -maxdepth 1 -type f -perm -111 -name 'pushups-*' | head -n 1)
+[ -n "$test_bin" ]
+"$tools/llvm-cov" export -format=lcov -instr-profile "$BUILD/pushups.profdata" \
+  "$BUILD/harness" -object "$test_bin" "$ROOT/src" \
+  | sed "s|^SF:$ROOT/|SF:|" > "$ROOT/target/apple-rust.lcov"

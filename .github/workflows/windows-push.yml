@@ -50,7 +50,7 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
-      - run: rustup toolchain install stable --profile minimal
+      - run: rustup toolchain install stable --profile minimal --component llvm-tools
       - name: Install the Windows App SDK 2.5 runtime
         shell: pwsh
         run: |
@@ -61,7 +61,12 @@ jobs:
           $null = $install.Handle
           if (-not $install.WaitForExit(600000)) { $install.Kill(); throw 'the runtime installer did not finish within 10 minutes' }
           if ($install.ExitCode -ne 0) { throw "the runtime installer exited with $($install.ExitCode)" }
-      - run: cargo +stable build --release --manifest-path ci/windows/w1/Cargo.toml
+      - name: Build the W1 probe instrumented for coverage
+        shell: pwsh
+        run: |
+          $env:RUSTFLAGS = '-Cinstrument-coverage'
+          cargo +stable build --manifest-path ci/windows/w1/Cargo.toml
+          Remove-Item Env:RUSTFLAGS
       - name: W1
         shell: pwsh
         env:
@@ -69,7 +74,36 @@ jobs:
           WNS_APP_ID: ${{ secrets.WNS_APP_ID }}
           WNS_OBJECT_ID: ${{ secrets.WNS_OBJECT_ID }}
           WNS_CLIENT_SECRET: ${{ secrets.WNS_CLIENT_SECRET }}
+          LLVM_PROFILE_FILE: ${{ runner.temp }}/w1/prof/%m.profraw
         run: ./ci/windows/w1.ps1
+      - name: Write the Rust LCOV
+        shell: pwsh
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP 'w1'
+          $exe = Join-Path $work 'app\pushups-w1-probe.exe'
+          $hostTriple = (rustc -vV | Select-String -Pattern '^host: ').Line -replace '^host: ', ''
+          $tools = Join-Path (rustc --print sysroot) "lib\rustlib\$hostTriple\bin"
+          $profraw = @()
+          foreach ($dir in @(Join-Path $work 'prof'), (Join-Path $work 'app')) {
+            $profraw += @(Get-ChildItem -Path $dir -Filter '*.profraw' -ErrorAction SilentlyContinue).FullName
+          }
+          if ($profraw.Count -eq 0) { throw 'no Rust profile written' }
+          $profdata = Join-Path $work 'pushups.profdata'
+          & (Join-Path $tools 'llvm-profdata.exe') merge -sparse @profraw -o $profdata
+          $root = $env:GITHUB_WORKSPACE
+          & (Join-Path $tools 'llvm-cov.exe') export -format=lcov -instr-profile $profdata $exe "$root\src" |
+            ForEach-Object { $_ -replace '^SF:.*[/\\]src[/\\]', 'SF:src/' } |
+            ForEach-Object { $_ -replace '\\', '/' } |
+            Set-Content -Path (Join-Path $root 'target\windows-w1-rust.lcov') -Encoding ascii
+          if (-not (Select-String -Path (Join-Path $root 'target\windows-w1-rust.lcov') -Pattern '^SF:src/' -Quiet)) {
+            throw 'no src/ file in the Rust LCOV'
+          }
+      - name: Upload the Rust coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: target/windows-w1-rust.lcov
+          fail_ci_if_error: true
       - name: The screens where no banner was clicked
         if: always()
         uses: actions/upload-artifact@v7
