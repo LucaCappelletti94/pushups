@@ -15,9 +15,8 @@ fn main() {}
 mod linux {
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader};
-    use std::path::Path;
-    #[cfg(feature = "encryption")]
-    use std::path::PathBuf;
+    use std::os::fd::AsRawFd as _;
+    use std::path::{Path, PathBuf};
     use std::process::{Child, Command, Stdio};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -42,6 +41,18 @@ mod linux {
     const NO_DISTRIBUTOR: &str = "no-distributor";
     const DATA_IS_FILE: &str = "data-is-file";
     const NAME_TAKEN: &str = "name-taken";
+    /// A stale process keeps the queue's lock, so `install` gives up on it after its bound.
+    const QUEUE_HELD: &str = "queue-held";
+    /// The stale process that keeps the queue's lock.
+    const QUEUE_OWNER: &str = "queue-owner";
+    /// A headless process asks for a name a UI process holds without allowing the replacement.
+    const NAME_TAKEN_HEADLESS: &str = "name-taken-headless";
+    /// The process that holds the name for [`NAME_TAKEN_HEADLESS`].
+    const NAME_OWNER: &str = "name-owner";
+    /// A push that names a token the app does not know.
+    const FOREIGN_TOKEN: &str = "foreign-token";
+    /// The system ships the activation file, which `install` must leave alone.
+    const SYSTEM_SERVICE: &str = "system-service";
     const REREGISTER: &str = "reregister";
     #[cfg(feature = "encryption")]
     const ROTATE: &str = "rotate";
@@ -49,6 +60,9 @@ mod linux {
     const ROTATE_FIRST: &str = "rotate-first";
     #[cfg(feature = "encryption")]
     const ROTATE_WRITE_FAILED: &str = "rotate-write-failed";
+    /// A second push of an identical payload delivers nothing.
+    #[cfg(feature = "encryption")]
+    const DUPLICATE: &str = "duplicate";
     const APP_ID: &str = "rs.pushups.LinuxTest";
     /// The endpoint the rotation scenarios register with, carried by the token events.
     #[cfg(feature = "encryption")]
@@ -68,12 +82,17 @@ mod linux {
             NO_DISTRIBUTOR,
             DATA_IS_FILE,
             NAME_TAKEN,
+            QUEUE_HELD,
+            NAME_TAKEN_HEADLESS,
+            FOREIGN_TOKEN,
+            SYSTEM_SERVICE,
             REREGISTER,
         ];
         #[cfg(feature = "encryption")]
-        let scenarios = scenarios
-            .into_iter()
-            .chain([ROTATE, ROTATE_FIRST, ROTATE_WRITE_FAILED]);
+        let scenarios =
+            scenarios
+                .into_iter()
+                .chain([ROTATE, ROTATE_FIRST, ROTATE_WRITE_FAILED, DUPLICATE]);
         for scenario in scenarios {
             run(scenario);
             println!("linux scenario {scenario}: ok");
@@ -126,7 +145,7 @@ mod linux {
                     )]);
                 }
                 #[cfg(feature = "encryption")]
-                ROTATE | ROTATE_FIRST | ROTATE_WRITE_FAILED => {
+                ROTATE | ROTATE_FIRST | ROTATE_WRITE_FAILED | DUPLICATE => {
                     return HashMap::from([(
                         "success".to_owned(),
                         owned("REGISTRATION_SUCCEEDED"),
@@ -171,16 +190,57 @@ mod linux {
         (Reaped(daemon), address.trim().to_owned())
     }
 
-    /// Polls `done` until it holds or [`BOUND`] passes.
-    fn wait_until(mut done: impl FnMut() -> bool) -> bool {
+    /// Polls `done` until it holds or `bound` passes.
+    fn wait_until_within(mut done: impl FnMut() -> bool, bound: Duration) -> bool {
         let started = Instant::now();
-        while started.elapsed() < BOUND {
+        while started.elapsed() < bound {
             if done() {
                 return true;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
         done()
+    }
+
+    /// Polls `done` until it holds or [`BOUND`] passes.
+    fn wait_until(done: impl FnMut() -> bool) -> bool {
+        wait_until_within(done, BOUND)
+    }
+
+    /// The system services directory of the [`SYSTEM_SERVICE`] scenario, holding the shipped
+    /// activation file.
+    fn system_service_dir(scenario: &str, data: &Path) -> Option<PathBuf> {
+        (scenario == SYSTEM_SERVICE).then(|| {
+            let services = data.join("sys").join("dbus-1").join("services");
+            std::fs::create_dir_all(&services).expect("the system services directory is created");
+            std::fs::write(
+                services.join(format!("{APP_ID}.service")),
+                "[D-BUS Service]\nName={APP_ID}\n",
+            )
+            .expect("the system activation file is written");
+            data.join("sys")
+        })
+    }
+
+    /// The parent side of the scenarios that run a process beside the main child.
+    fn drive(scenario: &str, address: &str, data: &Path) {
+        #[cfg(feature = "encryption")]
+        if matches!(scenario, ROTATE | ROTATE_FIRST | ROTATE_WRITE_FAILED) {
+            drive_rotation(scenario, address, data);
+        }
+        #[cfg(feature = "encryption")]
+        if scenario == DUPLICATE {
+            drive_duplicate(address, data);
+        }
+        if scenario == QUEUE_HELD {
+            drive_queue_owner(data);
+        }
+        if scenario == NAME_TAKEN_HEADLESS {
+            drive_name_owner(address, data);
+        }
+        if scenario == FOREIGN_TOKEN {
+            drive_foreign_token(address, data);
+        }
     }
 
     fn run(scenario: &'static str) {
@@ -213,21 +273,23 @@ mod linux {
         } else {
             data.path().to_owned()
         };
-        let mut app = Reaped(
-            Command::new(std::env::current_exe().expect("this binary's path"))
-                .env(CHILD, scenario)
-                .env(MARK, &mark)
-                .env(MARKS, &marks)
-                .env("DBUS_SESSION_BUS_ADDRESS", &address)
-                .env("XDG_DATA_HOME", &data_home)
-                .env_remove("UNIFIEDPUSH_DISTRIBUTOR")
-                .spawn()
-                .expect("the app process starts"),
-        );
-        #[cfg(feature = "encryption")]
-        if matches!(scenario, ROTATE | ROTATE_FIRST | ROTATE_WRITE_FAILED) {
-            drive_rotation(scenario, &address, data.path());
+        let sys = system_service_dir(scenario, data.path());
+        let mut command = Command::new(std::env::current_exe().expect("this binary's path"));
+        command
+            .env(CHILD, scenario)
+            .env(MARK, &mark)
+            .env(MARKS, &marks)
+            .env("DBUS_SESSION_BUS_ADDRESS", &address)
+            .env("XDG_DATA_HOME", &data_home)
+            .env_remove("UNIFIEDPUSH_DISTRIBUTOR");
+        if scenario == NAME_TAKEN_HEADLESS {
+            command.env("PUSHUPS_DBUS_ACTIVATED", "1");
         }
+        if let Some(sys) = &sys {
+            command.env("XDG_DATA_DIRS", sys);
+        }
+        let mut app = Reaped(command.spawn().expect("the app process starts"));
+        drive(scenario, &address, data.path());
         if matches!(scenario, HOLD | REFUSE | UNREGISTER) {
             assert!(
                 wait_until(|| calls.load(Ordering::SeqCst) == 1 && mark.exists()),
@@ -253,13 +315,22 @@ mod linux {
             );
         }
         if scenario != HOLD {
+            // The queue's claim waits its full bound before it fails.
+            let bound = if scenario == QUEUE_HELD {
+                Duration::from_secs(50)
+            } else {
+                BOUND
+            };
             let mut status = None;
             assert!(
-                wait_until(|| {
-                    status = app.0.try_wait().expect("the app can be waited on");
-                    status.is_some()
-                }),
-                "scenario {scenario}: the app still ran after {BOUND:?}"
+                wait_until_within(
+                    || {
+                        status = app.0.try_wait().expect("the app can be waited on");
+                        status.is_some()
+                    },
+                    bound,
+                ),
+                "scenario {scenario}: the app still ran after {bound:?}"
             );
             assert!(
                 status.is_some_and(|status| status.success()),
@@ -271,18 +342,47 @@ mod linux {
     /// The app side, run in the child process on the private bus.
     fn child(scenario: &str) {
         if scenario == NAME_TAKEN {
-            name_taken();
-            return;
+            return name_taken();
+        }
+        if scenario == QUEUE_HELD {
+            return queue_held();
+        }
+        if scenario == QUEUE_OWNER {
+            return queue_owner();
+        }
+        if scenario == NAME_OWNER {
+            return name_owner();
+        }
+        if scenario == NAME_TAKEN_HEADLESS {
+            return name_taken_headless();
+        }
+        if scenario == FOREIGN_TOKEN {
+            return foreign_token();
+        }
+        if scenario == SYSTEM_SERVICE {
+            return system_service();
+        }
+        #[cfg(feature = "encryption")]
+        if scenario == DUPLICATE {
+            return duplicate();
         }
         #[cfg(feature = "encryption")]
         if matches!(scenario, ROTATE | ROTATE_FIRST | ROTATE_WRITE_FAILED) {
-            rotate_child(scenario);
-            return;
+            return rotate_child(scenario);
         }
         if scenario == REREGISTER {
-            reregister();
-            return;
+            return reregister();
         }
+        let permission = futures_executor::block_on(pushups::request_permission());
+        assert_eq!(
+            permission,
+            Ok(if scenario == NO_DISTRIBUTOR {
+                Permission::Denied
+            } else {
+                Permission::Granted
+            }),
+            "request_permission before install gave {permission:?}"
+        );
         let installed = pushups::install(config());
         if scenario == DATA_IS_FILE {
             assert!(
@@ -378,12 +478,15 @@ mod linux {
             .request_name_with_flags(APP_ID, zbus::fdo::RequestNameFlags::DoNotQueue.into())
             .expect("the other connection asks for the name");
         assert_eq!(reply, zbus::fdo::RequestNameReply::PrimaryOwner);
+        let message = format!("another process of {APP_ID} owns its bus name");
         for attempt in ["first", "second"] {
             let installed = pushups::install(config());
-            assert!(
-                matches!(installed, Err(Error::Platform(_))),
-                "the {attempt} install while another connection owns the name gave {installed:?}"
-            );
+            let Err(Error::Platform(reason)) = installed else {
+                panic!(
+                    "the {attempt} install while another connection owns the name gave {installed:?}"
+                );
+            };
+            assert_eq!(reason, message, "the {attempt} install");
         }
         other
             .release_name(APP_ID)
@@ -400,6 +503,137 @@ mod linux {
                 .expect("the other connection's name")
                 .as_str(),
             "the other connection still owns the name"
+        );
+    }
+
+    /// A stale process that keeps the queue's lock, the way a hung one would until it is killed.
+    /// It takes the lock itself, since the queue is one process's by that file.
+    fn queue_owner() {
+        let home = std::env::var_os("XDG_DATA_HOME").expect("the parent names the data home");
+        let dir = Path::new(&home).join(APP_ID).join("pushups");
+        std::fs::create_dir_all(&dir).expect("the queue directory is created");
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir.join("queue.lock"))
+            .expect("the lock file opens");
+        // SAFETY: the descriptor stays open across the sleep that ends this process.
+        assert_eq!(
+            unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0,
+            "the stale process takes the queue's lock"
+        );
+        let marks = std::env::var_os(MARKS).expect("the parent names the marks");
+        std::fs::write(Path::new(&marks).join("queue-held"), b"").expect("the mark is written");
+        std::thread::sleep(Duration::from_secs(60));
+    }
+
+    /// `install` asks for the queue the stale process still holds, waits its full bound, and
+    /// fails naming the app.
+    fn queue_held() {
+        let marks = std::env::var_os(MARKS).expect("the parent names the marks");
+        assert!(
+            wait_until(|| Path::new(&marks).join("queue-held").exists()),
+            "the stale process never held the queue"
+        );
+        let installed = pushups::install(config());
+        let Err(Error::Platform(message)) = installed else {
+            panic!("install while a stale process holds the queue gave {installed:?}");
+        };
+        assert!(
+            message.contains(&format!(
+                "another process of {APP_ID} still holds its queue"
+            )),
+            "{message}"
+        );
+    }
+
+    /// Holds the app's bus name without allowing the replacement a headless process asks for.
+    fn name_owner() {
+        pushups::install(config()).expect("install owns the name");
+        let marks = std::env::var_os(MARKS).expect("the parent names the marks");
+        std::fs::write(Path::new(&marks).join("name-held"), b"").expect("the mark is written");
+        std::thread::sleep(Duration::from_secs(60));
+    }
+
+    /// A headless process asks for a name a UI process holds, and the bus queues the request
+    /// rather than grants it.
+    fn name_taken_headless() {
+        let marks = std::env::var_os(MARKS).expect("the parent names the marks");
+        assert!(
+            wait_until(|| Path::new(&marks).join("name-held").exists()),
+            "the name owner never held the name"
+        );
+        let installed = pushups::install(config());
+        let Err(Error::Platform(message)) = installed else {
+            panic!("install behind a name holder gave {installed:?}");
+        };
+        assert_eq!(
+            message,
+            format!("another process of {APP_ID} owns its bus name")
+        );
+    }
+
+    /// A push that names a token the app does not know reaches the connector, echoes its id,
+    /// and delivers nothing.
+    fn foreign_token() {
+        pushups::install(config()).expect("install connects to the private bus");
+        let (events, received) = mpsc::channel();
+        pushups::set_handler(move |event| {
+            let _ = events.send(event);
+        });
+        pushups::register().expect("register starts");
+        let error = received
+            .recv_timeout(BOUND)
+            .unwrap_or_else(|_| panic!("no RegistrationFailed within {BOUND:?}"));
+        match error {
+            Event::RegistrationFailed(_) => {}
+            other => panic!("no RegistrationFailed, got {other:?}"),
+        }
+        let marks = std::env::var_os(MARKS).expect("the parent names the marks");
+        std::fs::write(Path::new(&marks).join("foreign-ready"), b"").expect("the mark is written");
+        assert!(
+            received.recv_timeout(Duration::from_secs(4)).is_err(),
+            "a push with a token the app does not know was delivered"
+        );
+    }
+
+    /// The system ships the app's activation file, so `install` writes no file for the user.
+    fn system_service() {
+        pushups::install(config()).expect("install connects to the private bus");
+        let home = std::env::var_os("XDG_DATA_HOME").expect("the parent names the data home");
+        let user = Path::new(&home)
+            .join("dbus-1")
+            .join("services")
+            .join(format!("{APP_ID}.service"));
+        assert!(
+            !user.exists(),
+            "install wrote a user activation file over the system's"
+        );
+    }
+
+    /// The second push of an identical payload delivers nothing.
+    #[cfg(feature = "encryption")]
+    fn duplicate() {
+        pushups::install(config()).expect("install connects to the private bus");
+        let (events, received) = mpsc::channel();
+        pushups::set_handler(move |event| {
+            let _ = events.send(event);
+        });
+        pushups::register().expect("register starts");
+        let marks = std::env::var_os(MARKS).expect("the parent names the marks");
+        std::fs::write(Path::new(&marks).join("dup-ready"), b"").expect("the mark is written");
+        let event = received
+            .recv_timeout(BOUND)
+            .unwrap_or_else(|_| panic!("no first push within {BOUND:?}"));
+        let Event::Message(message) = event else {
+            panic!("no first push, got {event:?}");
+        };
+        assert_eq!(message.payload, b"once");
+        assert!(
+            received.recv_timeout(Duration::from_secs(4)).is_err(),
+            "a second push of the same payload was delivered"
         );
     }
 
@@ -447,6 +681,120 @@ mod linux {
         pushups_sender::encrypt(&token, plaintext)
             .expect("the seal encrypts")
             .into_bytes()
+    }
+
+    /// The parent side of the queue scenarios. It starts the stale process that keeps the
+    /// queue's lock, and the main child's `install` then gives up on the queue after its bound.
+    fn drive_queue_owner(data: &Path) {
+        let marks = data.join("marks");
+        let holder = Reaped(
+            Command::new(std::env::current_exe().expect("this binary's path"))
+                .env(CHILD, QUEUE_OWNER)
+                .env(MARKS, &marks)
+                .env("XDG_DATA_HOME", data)
+                .spawn()
+                .expect("the stale process starts"),
+        );
+        assert!(
+            wait_until(|| marks.join("queue-held").exists()),
+            "the stale process never held the queue"
+        );
+        // The holder must outlive the main child's 30-second claim, so it is not reaped here.
+        std::mem::forget(holder);
+    }
+
+    /// The parent side of the headless name scenario. It starts the process that holds the name
+    /// without allowing the replacement.
+    fn drive_name_owner(address: &str, data: &Path) {
+        let marks = data.join("marks");
+        let owner = Reaped(
+            Command::new(std::env::current_exe().expect("this binary's path"))
+                .env(CHILD, NAME_OWNER)
+                .env(MARKS, &marks)
+                .env("DBUS_SESSION_BUS_ADDRESS", address)
+                .env("XDG_DATA_HOME", data)
+                .spawn()
+                .expect("the name holder starts"),
+        );
+        assert!(
+            wait_until(|| marks.join("name-held").exists()),
+            "the name holder never held the name"
+        );
+        std::mem::forget(owner);
+    }
+
+    /// The parent side of the foreign token scenario. It waits for the child to be ready, pushes
+    /// with a token the child does not know, and checks the reply.
+    fn drive_foreign_token(address: &str, data: &Path) {
+        let marks = data.join("marks");
+        assert!(
+            wait_until(|| marks.join("foreign-ready").exists()),
+            "the child never became ready"
+        );
+        let connection = zbus::blocking::connection::Builder::address(address)
+            .expect("the bus address parses")
+            .build()
+            .expect("a connection for the push");
+        let args = HashMap::from([
+            ("token", Value::from("00000000-0000-4000-8000-000000000000")),
+            ("message", Value::from(vec![0u8; 8])),
+            ("id", Value::from("foreign-1")),
+        ]);
+        let reply = connection
+            .call_method(
+                Some(APP_ID),
+                "/org/unifiedpush/Connector",
+                Some("org.unifiedpush.Connector2"),
+                "Message",
+                &args,
+            )
+            .expect("the foreign push reaches the connector");
+        let reply: HashMap<String, OwnedValue> =
+            reply.body().deserialize().expect("the reply deserializes");
+        assert_eq!(
+            reply.len(),
+            1,
+            "the reply to a foreign push carries only the id"
+        );
+        let id = reply
+            .get("id")
+            .and_then(|id| <&str>::try_from(id).ok())
+            .unwrap_or("-");
+        assert_eq!(id, "foreign-1", "the reply echoes the push's id");
+    }
+
+    /// The parent side of the duplicate scenario. It seals one payload and pushes it twice.
+    #[cfg(feature = "encryption")]
+    fn drive_duplicate(address: &str, data: &Path) {
+        let marks = data.join("marks");
+        assert!(
+            wait_until(|| marks.join("dup-ready").exists()),
+            "the child never became ready"
+        );
+        let dir = state_dir(data);
+        let token = std::fs::read_to_string(dir.join("token")).expect("the token file is readable");
+        let keys = std::fs::read(dir.join("keys")).expect("the keys file is readable");
+        let sealed = seal(&keys, b"once");
+        let connection = zbus::blocking::connection::Builder::address(address)
+            .expect("the bus address parses")
+            .build()
+            .expect("a connection for the pushes");
+        for id in ["dup-1", "dup-2"] {
+            let args = HashMap::from([
+                ("token", Value::from(token.as_str())),
+                ("message", Value::from(sealed.as_slice())),
+                ("id", Value::from(id)),
+            ]);
+            connection
+                .call_method(
+                    Some(APP_ID),
+                    "/org/unifiedpush/Connector",
+                    Some("org.unifiedpush.Connector2"),
+                    "Message",
+                    &args,
+                )
+                .expect("the duplicate push reaches the connector");
+        }
     }
 
     /// Reports the endpoint to the connector, so the app reports the token with its current keys.
