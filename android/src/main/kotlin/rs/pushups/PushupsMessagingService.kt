@@ -14,7 +14,7 @@ class PushupsMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         // Firebase makes a token at start on its own, which an app on UnifiedPush does not use.
-        val context = Pushups.context ?: return
+        val context = Pushups.context
         if (Transport.get(context) == Transport.UNIFIED_PUSH) {
             Log.i(TAG, "FCM token dropped, the app's pushes come through UnifiedPush")
             return

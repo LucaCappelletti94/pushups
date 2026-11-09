@@ -89,7 +89,6 @@ impl Backend for Android {
             )?
             .v()
         })
-        .map_err(Error::platform)
     }
 
     async fn request_permission() -> Result<Permission, Error> {
@@ -108,7 +107,7 @@ impl Backend for Android {
         });
         if let Err(error) = asked {
             PERMISSIONS.lock().remove(&id);
-            return Err(Error::platform(error));
+            return Err(error);
         }
         match reply.await {
             Ok(true) => Ok(Permission::Granted),
@@ -119,11 +118,11 @@ impl Backend for Android {
 
     fn permission_status() -> impl Future<Output = Result<Permission, Error>> {
         let result = runtime().and_then(|runtime| {
-            let status = with_attached(&runtime.vm, |env| -> jni::errors::Result<i32> {
+            with_attached(&runtime.vm, |env| -> jni::errors::Result<i32> {
                 env.call_static_method(&runtime.pushups, "permissionStatus", "()I", &[])?
                     .i()
-            });
-            status.map_err(Error::platform).and_then(permission_from)
+            })
+            .and_then(permission_from)
         });
         std::future::ready(result)
     }
@@ -144,8 +143,7 @@ impl Backend for Android {
             } else {
                 Ok(Some(env.get_string(&JString::from(message))?.into()))
             }
-        })
-        .map_err(Error::platform)?;
+        })?;
         refused.map_or(Ok(()), |message| Err(Error::platform(message)))
     }
 
@@ -168,8 +166,7 @@ impl Backend for Android {
                 .call_static_method(&runtime.pushups, "transport", "()Ljava/lang/String;", &[])?
                 .l()?;
             Ok(env.get_string(&JString::from(value))?.into())
-        })
-        .map_err(Error::platform)?;
+        })?;
         if transport != "fcm" {
             return Err(Error::Unsupported);
         }
@@ -210,8 +207,7 @@ pub(crate) fn show(notification: &Notification) -> Result<(), Error> {
         } else {
             Ok(Some(env.get_string(&JString::from(message))?.into()))
         }
-    })
-    .map_err(Error::platform)?;
+    })?;
     refused.map_or(Ok(()), |message| Err(Error::platform(message)))
 }
 

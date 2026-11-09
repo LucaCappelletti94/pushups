@@ -49,16 +49,13 @@ internal object Presentation {
         val manager = NotificationManagerCompat.from(context)
         if (!manager.areNotificationsEnabled()) return "notifications are disabled"
         if (Build.VERSION.SDK_INT >= 26) {
-            if (manager.getNotificationChannel(CHANNEL_ID) == null) {
-                manager.createNotificationChannel(
-                    NotificationChannel(
-                        CHANNEL_ID,
-                        context.applicationInfo.loadLabel(context.packageManager).toString(),
-                        NotificationManager.IMPORTANCE_DEFAULT,
-                    )
-                )
-            }
-            if (manager.getNotificationChannel(CHANNEL_ID)?.importance == NotificationManager.IMPORTANCE_NONE) {
+            val channel = manager.getNotificationChannel(CHANNEL_ID)
+                ?: NotificationChannel(
+                    CHANNEL_ID,
+                    context.applicationInfo.loadLabel(context.packageManager).toString(),
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                ).also { manager.createNotificationChannel(it) }
+            if (channel.importance == NotificationManager.IMPORTANCE_NONE) {
                 return "the pushups channel is disabled"
             }
         }
