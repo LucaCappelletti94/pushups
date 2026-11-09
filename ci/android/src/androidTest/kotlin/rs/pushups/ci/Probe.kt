@@ -34,6 +34,10 @@ object Probe {
     @JvmStatic
     external fun permission(): String?
 
+    /** `pushups::request_permission` on the calling thread: `Granted`, `Denied` or `error ...`. */
+    @JvmStatic
+    external fun requestPermissionNow(): String
+
     /** The answer of `pushups::permission_status`, `Granted`, `Denied`, `NotDetermined` or `error ...`. */
     @JvmStatic
     external fun permissionStatus(): String

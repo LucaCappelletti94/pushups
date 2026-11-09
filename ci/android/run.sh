@@ -156,6 +156,10 @@ run_variant jni-session "" default PanicBoundaryTest panicCase session
 # The generated export's failure policy, in a fresh install.
 run_variant jni-boundary "config-real" default NativeBoundaryTest
 run_variant full "config-real background-handler" default PushupsTest
+# The prompt Activity's edge results, in a fresh process where each request starts ungranted.
+run_variant prompt-result "config-real background-handler" default PromptResultTest
+# The request's own refusal when the manifest lacks the module's permission Activity.
+run_variant permission-activity-missing "config-real background-handler" permission-activity-missing PermissionActivityMissingTest
 run_variant fallback-name config-real fallback-name FallbackNameTest
 run_variant no-background-handler config-real default NoBackgroundHandlerTest
 # The rendering handler presents through the launcher activity, which only the presentation manifest declares.
@@ -180,6 +184,19 @@ run_variant open-settings "" default NotificationSettingsTest
 run_variant module-mismatch config-real module-mismatch ModuleMismatchTest crate "$("$ci/../crate-version.sh")"
 # A library without the handshake, as one built with a crate older than the module.
 run_variant no-handshake config-real no-handshake LibraryWithoutPushupsTest
+# The probe's handlers panic on their marker payloads, and the other handler and the queue keep going.
+run_variant handler-panic "config-real background-handler rendering-handler" presentation HandlerPanicTest
+# The distributor chooser reached by a stale or refused intent. The refusal needs no distributor
+# usable at the moment, so the one run.sh installed stays disabled while it runs.
+if $unified_push; then
+  adb shell pm disable-user --user 0 io.heckel.ntfy >/dev/null
+fi
+run_variant distributor-refusal "config-real background-handler" default DistributorRefusalTest vapid "$vapid_b64url"
+if $unified_push; then
+  adb shell pm enable io.heckel.ntfy >/dev/null
+fi
+# Key rotation on a UnifiedPush transport, which keeps the trait's refusal since the distributor owns the keys.
+run_variant rotate-refused "config-real encryption background-handler" default RotateRefusedTest
 
 # Rust: every variant's profile against its own library, kept to the crate's own sources, with
 # paths relative to the repository.

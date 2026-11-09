@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.ParcelFileDescriptor
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.AfterClass
@@ -91,5 +92,25 @@ class PresentationRefusalsTest {
         )
         assertNotNull(Probe.present("pushups channel", "shown", null, null, null, null))
         assertEquals(0, notifications.activeNotifications.size)
+    }
+
+    @Test
+    fun a03b_aDisabledNotificationSettingRefusesAndReportsDenied() {
+        // Below 26 the notification setting is the NOTIFICATIONS app op, which the compat check
+        // reads. From 26 on the check reads the channel states, which the module keeps at
+        // default importance, so the setting never refuses there.
+        assumeTrue(Build.VERSION.SDK_INT in 24 until 26)
+        val shell = { command: String ->
+            ParcelFileDescriptor.AutoCloseInputStream(
+                instrumentation.uiAutomation.executeShellCommand(command)
+            ).bufferedReader().use { it.readText() }
+        }
+        shell("appops set ${context.packageName} NOTIFICATIONS ignore")
+        try {
+            assertEquals("notifications are disabled", Probe.present("pushups disabled", "shown", null, null, null, null))
+            assertEquals("Denied", Probe.permissionStatus())
+        } finally {
+            shell("appops set ${context.packageName} NOTIFICATIONS allow")
+        }
     }
 }

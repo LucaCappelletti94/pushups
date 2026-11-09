@@ -3,6 +3,8 @@
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
+use crate::Error;
+use jni::objects::{JString, JThrowable};
 use jni::{JNIEnv, JavaVM};
 
 mod sealed {
@@ -97,24 +99,55 @@ fn discard_panic(payload: Box<dyn Any + Send>) {
 }
 
 /// Attaches this thread and releases its local frame before returning or resuming a panic.
-pub(crate) fn with_attached<T, E>(
+pub(crate) fn with_attached<T>(
     vm: &JavaVM,
-    body: impl for<'local> FnOnce(&mut JNIEnv<'local>) -> Result<T, E>,
-) -> Result<T, E>
-where
-    E: From<jni::errors::Error>,
-{
-    let mut env = vm.attach_current_thread()?;
+    body: impl for<'local> FnOnce(&mut JNIEnv<'local>) -> jni::errors::Result<T>,
+) -> Result<T, Error> {
+    let mut env = vm.attach_current_thread().map_err(Error::platform)?;
     if pending(&env) {
-        return Err(jni::errors::Error::JavaException.into());
+        return Err(Error::platform(jni::errors::Error::JavaException));
     }
-    let result = env.with_local_frame(16, |env| {
-        Ok::<_, E>(catch_unwind(AssertUnwindSafe(|| body(env))))
-    })?;
+    let result = env
+        .with_local_frame(16, |env| {
+            Ok::<_, jni::errors::Error>(catch_unwind(AssertUnwindSafe(|| {
+                body(env).map_err(|error| {
+                    if pending(env) {
+                        Error::platform(take_exception(env))
+                    } else {
+                        Error::platform(error)
+                    }
+                })
+            })))
+        })
+        .map_err(Error::platform)?;
     match result {
         Ok(result) => result,
         Err(payload) => resume_unwind(payload),
     }
+}
+
+/// Clears the pending exception and returns its `toString()`, so the thread serves later calls.
+fn take_exception(env: &mut JNIEnv<'_>) -> String {
+    let exception = env
+        .exception_occurred()
+        .unwrap_or_else(|_| env.fatal_error("JNI exception check failed"));
+    clear(env);
+    describe(env, &exception).unwrap_or_else(|_| {
+        clear(env);
+        "a Java exception that could not describe itself".to_owned()
+    })
+}
+
+fn describe(env: &mut JNIEnv<'_>, exception: &JThrowable<'_>) -> jni::errors::Result<String> {
+    let text = env
+        .call_method(exception, "toString", "()Ljava/lang/String;", &[])?
+        .l()?;
+    Ok(env.get_string(&JString::from(text))?.into())
+}
+
+fn clear(env: &JNIEnv<'_>) {
+    env.exception_clear()
+        .unwrap_or_else(|_| env.fatal_error("JNI exception clear failed"));
 }
 
 /// Emits native entrypoints whose arguments and returned references belong to the JVM's calling frame.
