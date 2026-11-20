@@ -8,7 +8,6 @@ use std::path::Path;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{quote, quote_spanned};
-use syn::parse_macro_input;
 
 mod parse;
 
@@ -30,7 +29,15 @@ mod parse;
 /// ```
 #[proc_macro]
 pub fn firebase_config(input: TokenStream) -> TokenStream {
-    let literal = parse_macro_input!(input as syn::LitStr);
+    firebase_config_impl(input.into()).into()
+}
+
+/// The expansion of `firebase_config` over `proc-macro2` tokens.
+fn firebase_config_impl(input: TokenStream2) -> TokenStream2 {
+    let literal: syn::LitStr = match syn::parse2(input) {
+        Ok(literal) => literal,
+        Err(error) => return error.to_compile_error(),
+    };
     let span = literal.span();
     let relative = literal.value();
     let Some(manifest_dir) = std::env::var_os("CARGO_MANIFEST_DIR") else {
@@ -79,7 +86,6 @@ pub fn firebase_config(input: TokenStream) -> TokenStream {
             }
         }
     }
-    .into()
 }
 
 /// Mark a free function as the background handler.
@@ -111,15 +117,20 @@ pub fn firebase_config(input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn background_handler(args: TokenStream, item: TokenStream) -> TokenStream {
     let item: TokenStream2 = item.into();
+    background_handler_impl(args.into(), &item).into()
+}
+
+/// The expansion of `background_handler` over `proc-macro2` tokens.
+fn background_handler_impl(args: TokenStream2, item: &TokenStream2) -> TokenStream2 {
     let input: syn::ItemFn = match syn::parse2(item.clone()) {
         Ok(input) => input,
-        Err(error) => return error.to_compile_error().into(),
+        Err(error) => return error.to_compile_error(),
     };
     if !args.is_empty() {
         let span = args
             .into_iter()
             .next()
-            .map_or_else(|| input.sig.ident.span(), |token| token.span().into());
+            .map_or_else(|| input.sig.ident.span(), |token| token.span());
         return error("background_handler", span, "takes no arguments");
     }
     if let Some(message) = validate(&input) {
@@ -180,7 +191,6 @@ pub fn background_handler(args: TokenStream, item: TokenStream) -> TokenStream {
         #[used]
         static __PUSHUPS_ONE_BACKGROUND_HANDLER: u8 = 0;
     }
-    .into()
 }
 
 /// Mark a free function as the rendering handler.
@@ -217,15 +227,20 @@ pub fn background_handler(args: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn rendering_handler(args: TokenStream, item: TokenStream) -> TokenStream {
     let item: TokenStream2 = item.into();
+    rendering_handler_impl(args.into(), &item).into()
+}
+
+/// The expansion of `rendering_handler` over `proc-macro2` tokens.
+fn rendering_handler_impl(args: TokenStream2, item: &TokenStream2) -> TokenStream2 {
     let input: syn::ItemFn = match syn::parse2(item.clone()) {
         Ok(input) => input,
-        Err(error) => return error.to_compile_error().into(),
+        Err(error) => return error.to_compile_error(),
     };
     if !args.is_empty() {
         let span = args
             .into_iter()
             .next()
-            .map_or_else(|| input.sig.ident.span(), |token| token.span().into());
+            .map_or_else(|| input.sig.ident.span(), |token| token.span());
         return error("rendering_handler", span, "takes no arguments");
     }
     if let Some(message) = validate(&input) {
@@ -275,7 +290,6 @@ pub fn rendering_handler(args: TokenStream, item: TokenStream) -> TokenStream {
         #[used]
         static __PUSHUPS_ONE_RENDERING_HANDLER: u8 = 0;
     }
-    .into()
 }
 
 /// The iOS and macOS exports the `rendering_handler` expansion names, with the static that
@@ -406,7 +420,200 @@ fn pushups_path() -> TokenStream2 {
 }
 
 /// Builds the `compile_error!` that a macro failure expands to.
-fn error(macro_name: &str, span: proc_macro2::Span, message: &str) -> TokenStream {
+fn error(macro_name: &str, span: proc_macro2::Span, message: &str) -> TokenStream2 {
     let message = format!("{macro_name}: {message}");
-    quote_spanned!(span => compile_error!(#message);).into()
+    quote_spanned!(span => compile_error!(#message);)
+}
+
+#[cfg(test)]
+mod tests {
+    use core::str::FromStr;
+
+    use crate::TokenStream2;
+
+    use super::{background_handler_impl, firebase_config_impl, rendering_handler_impl};
+
+    /// The message in the `compile_error!` a failure expands to.
+    fn message(expansion: TokenStream2) -> String {
+        let stmt: syn::Stmt = syn::parse2(expansion).expect("the diagnostic is one statement");
+        let syn::Stmt::Macro(call) = stmt else {
+            panic!("the diagnostic is a macro call")
+        };
+        let last = call.mac.path.segments.last().expect("a macro path");
+        assert!(
+            last.ident == "compile_error",
+            "the diagnostic is not a compile_error!"
+        );
+        let message: syn::LitStr =
+            syn::parse2(call.mac.tokens).expect("the diagnostic carries a message");
+        message.value()
+    }
+
+    /// Parses the source a test hands an attribute expansion.
+    fn item(source: &str) -> TokenStream2 {
+        TokenStream2::from_str(source).expect("a token stream")
+    }
+
+    #[test]
+    fn background_handler_rejects_arguments() {
+        let args = item("bogus");
+        let item = item("fn handle() {}");
+        let expansion = background_handler_impl(args, &item);
+        assert_eq!(message(expansion), "background_handler: takes no arguments");
+    }
+
+    #[test]
+    fn rendering_handler_rejects_arguments() {
+        let args = item("bogus");
+        let item = item("fn render() {}");
+        let expansion = rendering_handler_impl(args, &item);
+        assert_eq!(message(expansion), "rendering_handler: takes no arguments");
+    }
+
+    #[test]
+    fn background_handler_rejects_a_non_function() {
+        let item = item("struct NotAFunction;");
+        let expansion = background_handler_impl(TokenStream2::new(), &item);
+        assert_eq!(message(expansion), "expected `fn`");
+    }
+
+    #[test]
+    fn rendering_handler_rejects_a_non_function() {
+        let item = item("struct NotAFunction;");
+        let expansion = rendering_handler_impl(TokenStream2::new(), &item);
+        assert_eq!(message(expansion), "expected `fn`");
+    }
+
+    #[test]
+    fn firebase_config_rejects_a_non_string_input() {
+        let expansion = firebase_config_impl(item("1"));
+        assert_eq!(message(expansion), "expected string literal");
+    }
+
+    #[test]
+    fn background_handler_rejects_invalid_functions() {
+        let cases = [
+            (
+                "async fn handle() {}",
+                "the handler must be a synchronous function",
+            ),
+            ("fn handle<T>() {}", "the handler must not be generic"),
+            ("fn handle(self) {}", "the handler must not take `self`"),
+        ];
+        for (source, expected) in cases {
+            let item = item(source);
+            let expansion = background_handler_impl(TokenStream2::new(), &item);
+            assert_eq!(
+                message(expansion),
+                format!("background_handler: {expected}"),
+                "for {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn rendering_handler_rejects_invalid_functions() {
+        let cases = [
+            (
+                "async fn render() {}",
+                "the handler must be a synchronous function",
+            ),
+            ("fn render<T>() {}", "the handler must not be generic"),
+            ("fn render(self) {}", "the handler must not take `self`"),
+        ];
+        for (source, expected) in cases {
+            let item = item(source);
+            let expansion = rendering_handler_impl(TokenStream2::new(), &item);
+            assert_eq!(
+                message(expansion),
+                format!("rendering_handler: {expected}"),
+                "for {source}"
+            );
+        }
+    }
+
+    const FIREBASE_INPUT: &str = r#""google-services.json""#;
+
+    #[test]
+    fn firebase_config_reports_missing_and_malformed_files() {
+        let input = TokenStream2::from_str(FIREBASE_INPUT).expect("a string literal");
+        let saved = std::env::var_os("CARGO_MANIFEST_DIR");
+
+        // SAFETY: this test is the only one in this binary to touch CARGO_MANIFEST_DIR, and it
+        // restores the saved value before it returns.
+        unsafe { std::env::remove_var("CARGO_MANIFEST_DIR") };
+
+        let expansion = firebase_config_impl(input.clone());
+        assert_eq!(
+            message(expansion),
+            "firebase_config: CARGO_MANIFEST_DIR is not set"
+        );
+
+        let dir = tempfile::tempdir().expect("a directory for the file");
+        // SAFETY: as above.
+        unsafe { std::env::set_var("CARGO_MANIFEST_DIR", dir.path()) };
+        let path = dir.path().join("google-services.json");
+
+        let expansion = firebase_config_impl(input.clone());
+        let unreadable = message(expansion);
+        let expected = format!("firebase_config: cannot read {}: ", path.display());
+        assert!(unreadable.starts_with(&expected), "got {unreadable}");
+
+        std::fs::write(&path, "not JSON").expect("the file");
+        let expansion = firebase_config_impl(input.clone());
+        let invalid_json = message(expansion);
+        let expected = format!(
+            "firebase_config: {path} is not valid JSON: ",
+            path = path.display()
+        );
+        assert!(invalid_json.starts_with(&expected), "got {invalid_json}");
+
+        let malformed = [
+            (
+                r#"{"project_info": {"project_number": "1", "project_id": "demo"}}"#,
+                "the file has no \"client\" array",
+            ),
+            (
+                r#"{"client": [{}]}"#,
+                "the file has no \"project_info\" object",
+            ),
+            (
+                r#"{"project_info": {"project_number": "1", "project_id": "demo"}, "client": [{}]}"#,
+                "client 0 has no \"client_info\" object",
+            ),
+            (
+                r#"{"project_info": {"project_number": "1", "project_id": "demo"}, "client": [{"client_info": {"mobilesdk_app_id": "1:1:android:1"}}]}"#,
+                "client 0 has no \"android_client_info\" object",
+            ),
+            (
+                r#"{"project_info": {"project_number": "1", "project_id": "demo"}, "client": [{"client_info": {"mobilesdk_app_id": "1:1:android:1", "android_client_info": {"package_name": "com.example.demo"}}, "api_key": []}]}"#,
+                "client 0 has an empty \"api_key\" array",
+            ),
+            (
+                r#"{"project_info": {"project_number": true, "project_id": "demo"}, "client": [{}]}"#,
+                "the file has project_info.project_number but it is neither a string nor a number",
+            ),
+            (
+                r#"{"project_info": {"project_number": "1"}, "client": [{}]}"#,
+                "the file has no project_info.project_id",
+            ),
+            (
+                r#"{"project_info": {"project_number": "1", "project_id": "demo"}, "client": [{"client_info": {"mobilesdk_app_id": "1:1:android:1", "android_client_info": {"package_name": true}}, "api_key": [{"current_key": "key"}]}]}"#,
+                "client 0 has client_info.android_client_info.package_name but it is neither a string nor a number",
+            ),
+        ];
+        for (source, expected) in malformed {
+            std::fs::write(&path, source).expect("the file");
+            let expansion = firebase_config_impl(input.clone());
+            assert_eq!(message(expansion), format!("firebase_config: {expected}"));
+        }
+
+        // SAFETY: restores the environment the test started with.
+        unsafe {
+            match saved {
+                Some(value) => std::env::set_var("CARGO_MANIFEST_DIR", value),
+                None => std::env::remove_var("CARGO_MANIFEST_DIR"),
+            }
+        }
+    }
 }
