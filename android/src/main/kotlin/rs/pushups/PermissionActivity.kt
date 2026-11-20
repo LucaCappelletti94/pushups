@@ -19,19 +19,17 @@ import android.util.Log
 class PermissionActivity : Activity() {
 
     private val handler = Handler(Looper.getMainLooper())
-    private var requestId: Long = 0
     private var replied = false
     private var deadline: Long = 0
 
     private val timeout = Runnable {
-        Log.w(TAG, "permission request $requestId timed out, replying with the current state")
+        Log.w(TAG, "the permission prompt timed out, replying with the current state")
         replyWith(currentState())
         finish()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        requestId = intent.getLongExtra(EXTRA_REQUEST_ID, 0)
         if (savedInstanceState == null) {
             deadline = SystemClock.elapsedRealtime() + TIMEOUT_MS
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_CODE)
@@ -74,12 +72,10 @@ class PermissionActivity : Activity() {
     private fun replyWith(granted: Boolean) {
         if (replied) return
         replied = true
-        invokeNative("onPermissionResult") { Native.onPermissionResult(requestId, granted) }
+        Pushups.answerWaiting(granted)
     }
 
     companion object {
-        const val EXTRA_REQUEST_ID = "requestId"
-
         private const val REQUEST_CODE = 1001
 
         private const val KEY_DEADLINE = "rs.pushups.deadline"

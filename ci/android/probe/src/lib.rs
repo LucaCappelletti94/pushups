@@ -5,6 +5,7 @@
 //! back every event as a line of text. It is built with `-Cinstrument-coverage`, and
 //! `Probe.writeCoverage` writes the profile the CI job turns into LCOV.
 
+use std::collections::VecDeque;
 use std::ffi::{CString, c_char, c_int};
 use std::panic::panic_any;
 use std::thread;
@@ -29,8 +30,9 @@ static HANDLED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// Every rendering push, one line each.
 #[cfg(feature = "rendering-handler")]
 static RENDERED: Mutex<Vec<String>> = Mutex::new(Vec::new());
-/// The answer to the last `startPermission`, until `permission` takes it.
-static PERMISSION: Mutex<Option<String>> = Mutex::new(None);
+/// The answers to the requests `startPermission` made, in the order they came, until
+/// `permission` takes them.
+static PERMISSION: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 
 unsafe extern "C" {
     fn __llvm_profile_set_filename(name: *const c_char);
@@ -308,13 +310,13 @@ pushups::__private::android::exports! {
         _env: JNIEnv<'local>,
         _class: JClass<'local>,
     ) -> () {
-        PERMISSION.lock().take();
+        PERMISSION.lock().clear();
         thread::spawn(|| {
             let answer = match futures_executor::block_on(pushups::request_permission()) {
                 Ok(permission) => format!("{permission:?}"),
                 Err(error) => format!("error {error}"),
             };
-            *PERMISSION.lock() = Some(answer);
+            PERMISSION.lock().push_back(answer);
         });
         Ok(())
     }
@@ -332,12 +334,13 @@ pushups::__private::android::exports! {
         java_string(env, Some(answer))
     }
 
-    /// `Probe.permission()`: the answer to `startPermission`, or `null` while it is pending.
+    /// `Probe.permission()`: the oldest answer to `startPermission` not yet taken, or `null`
+    /// while every call is pending.
     fn Java_rs_pushups_ci_Probe_permission<'local>(
         env: JNIEnv<'local>,
         _class: JClass<'local>,
     ) -> jstring {
-        java_string(env, PERMISSION.lock().take())
+        java_string(env, PERMISSION.lock().pop_front())
     }
 
     /// `Probe.permissionStatus()`: the answer of `pushups::permission_status` as `Granted`,
