@@ -6,7 +6,7 @@ use std::process::Command;
 
 /// The line and column a diagnostic of the consumer's `src/lib.rs` must point at.
 fn assert_span(stderr: &str, line: u32, column: u32) {
-    let span = format!("src/lib.rs:{line}:{column}");
+    let span = format!("src{}lib.rs:{line}:{column}", std::path::MAIN_SEPARATOR);
     assert!(stderr.contains(&span), "missing {span} in:\n{stderr}");
 }
 
