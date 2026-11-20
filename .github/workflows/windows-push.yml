@@ -91,6 +91,8 @@ jobs:
           $profdata = Join-Path $work 'pushups.profdata'
           & (Join-Path $tools 'llvm-profdata.exe') merge -sparse @profraw -o $profdata
           $root = $env:GITHUB_WORKSPACE
+          # The probe builds under RUNNER_TEMP, so the checkout has no target directory yet.
+          New-Item -ItemType Directory -Force -Path (Join-Path $root 'target') | Out-Null
           & (Join-Path $tools 'llvm-cov.exe') export -format=lcov -instr-profile $profdata $exe "$root\src" |
             ForEach-Object { $_ -replace '^SF:.*[/\\]src[/\\]', 'SF:src/' } |
             ForEach-Object { $_ -replace '\\', '/' } |
