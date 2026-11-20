@@ -96,7 +96,7 @@ class PresentationRefusalsTest {
 
     @Test
     fun a03b_aDisabledNotificationSettingRefusesAndReportsDenied() {
-        // Below 26 the notification setting is the NOTIFICATIONS app op, which the compat check
+        // Below 26 the notification setting is the POST_NOTIFICATION app op, which the compat check
         // reads. From 26 on the check reads the channel states, which the module keeps at
         // default importance, so the setting never refuses there.
         assumeTrue(Build.VERSION.SDK_INT in 24 until 26)
@@ -105,12 +105,15 @@ class PresentationRefusalsTest {
                 instrumentation.uiAutomation.executeShellCommand(command)
             ).bufferedReader().use { it.readText() }
         }
-        shell("appops set ${context.packageName} NOTIFICATIONS ignore")
+        assertEquals("", shell("appops set ${context.packageName} POST_NOTIFICATION ignore"))
         try {
-            assertEquals("notifications are disabled", Probe.present("pushups disabled", "shown", null, null, null, null))
+            assertEquals(
+                "push service error: notifications are disabled",
+                Probe.present("pushups disabled", "shown", null, null, null, null),
+            )
             assertEquals("Denied", Probe.permissionStatus())
         } finally {
-            shell("appops set ${context.packageName} NOTIFICATIONS allow")
+            shell("appops set ${context.packageName} POST_NOTIFICATION allow")
         }
     }
 }

@@ -61,13 +61,7 @@ class PromptResultTest {
             )
             assertNull(Probe.permission())
             // The system's own result still answers the request, and finishes the Activity.
-            waitFor(UI_MS) {
-                val button = device.findObject(
-                    By.res("com.android.permissioncontroller", "permission_deny_button"),
-                )
-                if (button == null) "dismissed" else { button.click(); null }
-            } ?: error("the permission prompt did not dismiss within ${UI_MS / 1000} s")
-            assertEquals("Denied", awaitPermission())
+            assertEquals("Denied", answerPrompt("permission_deny_button"))
             waitFor(UI_MS) { if (prompt.isFinishing) true else null }
                 ?: error("the prompt Activity did not finish within ${UI_MS / 1000} s")
         } finally {
