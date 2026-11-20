@@ -3,6 +3,7 @@ package rs.pushups.ci
 import android.Manifest
 import android.content.Context
 import android.os.Build
+import android.os.ParcelFileDescriptor
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -16,6 +17,7 @@ import org.junit.FixMethodOrder
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.runners.MethodSorters
+import java.util.regex.Pattern
 
 /**
  * The module's prompt Activity with the edge results the system can hand it. An answer for
@@ -87,6 +89,47 @@ class PromptResultTest {
             runCatching {
                 device.findObject(By.res("com.android.permissioncontroller", "permission_deny_button"))?.click()
             }
+        }
+    }
+
+    @Test
+    fun a03_aPromptActivityRecreatedByAConfigurationChangeKeepsTheRequest() {
+        assumeTrue(Build.VERSION.SDK_INT >= 33)
+        // The step above may leave its system prompt up, in the task a new request would join.
+        waitFor(UI_MS) {
+            if (device.findObject(By.pkg("com.google.android.permissioncontroller")) == null) {
+                true
+            } else {
+                // A second request's prompt names its refusal permission_deny_and_dont_ask_again_button.
+                runCatching {
+                    device.findObject(By.res(Pattern.compile("com.android.permissioncontroller:id/permission_deny.*")))?.click()
+                }
+                null
+            }
+        } ?: error("the earlier system prompt stayed up for ${UI_MS / 1000} s")
+        // The steps above denied the permission twice, after which the system stops asking.
+        val permission = Manifest.permission.POST_NOTIFICATIONS
+        ParcelFileDescriptor.AutoCloseInputStream(
+            instrumentation.uiAutomation.executeShellCommand(
+                "pm clear-permission-flags ${context.packageName} $permission user-set user-fixed"
+            )
+        ).use { it.readBytes() }
+        val monitor = instrumentation.addMonitor("rs.pushups.PermissionActivity", null, false)
+        try {
+            Probe.startPermission()
+            val prompt = waitFor(UI_MS) { monitor.lastActivity }
+                ?: error("no PermissionActivity within ${UI_MS / 1000} s")
+            // A rotation or a theme change rebuilds the Activity while the system prompt is up.
+            instrumentation.runOnMainSync { prompt.recreate() }
+            val rebuilt = waitFor(UI_MS) { monitor.lastActivity?.takeIf { it !== prompt } }
+                ?: error("the PermissionActivity was not rebuilt within ${UI_MS / 1000} s")
+            assertNull(Probe.permission())
+            // The user's answer reaches the rebuilt Activity, which replies with it.
+            assertEquals("Granted", answerPrompt("permission_allow_button"))
+            waitFor(UI_MS) { if (rebuilt.isFinishing) true else null }
+                ?: error("the rebuilt prompt Activity did not finish within ${UI_MS / 1000} s")
+        } finally {
+            instrumentation.removeMonitor(monitor)
         }
     }
 }
