@@ -198,6 +198,18 @@ mod tests {
     }
 
     #[test]
+    fn the_debug_output_names_the_service_and_not_the_secret() {
+        let (_, keys) = key_store();
+        let stored = keys.load_or_create().expect("fresh keys store");
+        let rendered = format!("{keys:?}");
+        assert!(rendered.contains("rs.pushups"), "{rendered}");
+        assert!(
+            !rendered.contains(&format!("{:?}", stored.to_bytes())),
+            "the stored secret must not print: {rendered}"
+        );
+    }
+
+    #[test]
     fn a_store_error_surfaces() {
         let (_, keys) = key_store();
         let entry = keys.entry().expect("the entry builds");

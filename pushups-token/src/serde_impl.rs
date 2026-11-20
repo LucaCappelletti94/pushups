@@ -21,10 +21,10 @@ fn milliseconds<E: serde::ser::Error>(time: SystemTime) -> Result<u64, E> {
         .map_err(|_| E::custom("the time overflows u64 milliseconds"))
 }
 
-fn from_milliseconds<E: serde::de::Error>(milliseconds: u64) -> Result<SystemTime, E> {
-    SystemTime::UNIX_EPOCH
-        .checked_add(Duration::from_millis(milliseconds))
-        .ok_or_else(|| E::custom("the time overflows SystemTime"))
+/// Every `u64` of milliseconds fits `SystemTime` on every supported platform, so this never
+/// fails.
+fn from_milliseconds(milliseconds: u64) -> SystemTime {
+    SystemTime::UNIX_EPOCH + Duration::from_millis(milliseconds)
 }
 
 pub(crate) mod bytes {
@@ -82,7 +82,8 @@ pub(crate) mod time {
     pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<SystemTime, D::Error> {
-        super::from_milliseconds(serde::Deserialize::deserialize(deserializer)?)
+        let milliseconds: u64 = serde::Deserialize::deserialize(deserializer)?;
+        Ok(super::from_milliseconds(milliseconds))
     }
 }
 
@@ -107,7 +108,7 @@ pub(crate) mod optional_time {
         deserializer: D,
     ) -> Result<Option<SystemTime>, D::Error> {
         let milliseconds: Option<u64> = serde::Deserialize::deserialize(deserializer)?;
-        milliseconds.map(super::from_milliseconds).transpose()
+        Ok(milliseconds.map(super::from_milliseconds))
     }
 }
 
@@ -237,6 +238,21 @@ mod tests {
         let error = serde_json::to_value(&token).unwrap_err();
         assert!(
             error.to_string().contains("before the Unix epoch"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_time_beyond_u64_milliseconds_does_not_serialise() {
+        let token = Token::Wns {
+            channel_uri: "c".to_owned(),
+            // The smallest time whose milliseconds since the epoch exceed u64.
+            expires: SystemTime::UNIX_EPOCH + Duration::from_secs(u64::MAX / 1000 + 1),
+            keys: None,
+        };
+        let error = serde_json::to_value(&token).unwrap_err();
+        assert!(
+            error.to_string().contains("overflows u64 milliseconds"),
             "{error}"
         );
     }
