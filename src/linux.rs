@@ -300,20 +300,28 @@ fn take_name(runtime: &Runtime, headless: bool) -> Result<(), Error> {
     } else {
         RequestNameFlags::ReplaceExisting | RequestNameFlags::DoNotQueue
     };
+    // The bus reports a name it will not give with an error or a non-owner reply, and both are
+    // the same message.
+    let taken = || {
+        Error::Platform(format!(
+            "another process of {} owns its bus name",
+            runtime.app_id
+        ))
+    };
     let reply = runtime
         .connection
         .request_name_with_flags(runtime.app_id.as_str(), flags)
-        .map_err(Error::platform)?;
+        .map_err(|error| match error {
+            zbus::Error::NameTaken => taken(),
+            error => Error::platform(error),
+        })?;
     if matches!(
         reply,
         RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner
     ) {
         Ok(())
     } else {
-        Err(Error::Platform(format!(
-            "another process of {} owns its bus name",
-            runtime.app_id
-        )))
+        Err(taken())
     }
 }
 
