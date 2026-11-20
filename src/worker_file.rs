@@ -72,4 +72,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("a temporary directory");
         assert!(write_service_worker(dir.path().join("absent")).is_err());
     }
+
+    #[test]
+    fn a_worker_path_occupied_by_a_directory_is_an_error() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        fs::create_dir(dir.path().join("pushups-sw.js"))
+            .expect("a directory in place of the worker");
+        let error =
+            write_service_worker(dir.path()).expect_err("a directory is not a readable file");
+        assert!(error.kind() != io::ErrorKind::NotFound, "{error}");
+    }
 }

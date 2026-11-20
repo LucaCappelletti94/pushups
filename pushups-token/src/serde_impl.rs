@@ -241,6 +241,46 @@ mod tests {
         );
     }
 
+    /// Windows' `SystemTime` ends before `u64` milliseconds do, so no such time exists there.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_time_beyond_u64_milliseconds_does_not_serialise() {
+        let token = Token::Wns {
+            channel_uri: "c".to_owned(),
+            // The smallest time whose milliseconds since the epoch exceed u64.
+            expires: SystemTime::UNIX_EPOCH + Duration::from_secs(u64::MAX / 1000 + 1),
+            keys: None,
+        };
+        let error = serde_json::to_value(&token).unwrap_err();
+        assert!(
+            error.to_string().contains("overflows u64 milliseconds"),
+            "{error}"
+        );
+    }
+
+    /// The largest `u64` of milliseconds is past the end of Windows' `SystemTime`.
+    #[cfg(windows)]
+    #[test]
+    fn milliseconds_beyond_system_time_do_not_deserialise() {
+        let tokens = [
+            json!({ "transport": "wns", "channel_uri": "c", "expires": u64::MAX, "keys": null }),
+            json!({
+                "transport": "web_push",
+                "endpoint": "e",
+                "p256dh": P256DH_BASE64URL,
+                "auth": AUTH_BASE64URL,
+                "expires": u64::MAX,
+            }),
+        ];
+        for token in tokens {
+            let error = serde_json::from_value::<Token>(token).unwrap_err();
+            assert!(
+                error.to_string().contains("overflows SystemTime"),
+                "{error}"
+            );
+        }
+    }
+
     /// The shape a browser's `PushSubscription.toJSON()` gives, which Web Push servers read.
     #[test]
     fn web_push_subscription_serialises_as_push_subscription_to_json() {

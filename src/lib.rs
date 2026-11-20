@@ -330,3 +330,33 @@ where
 /// by default, from a route of its own server or as a file its build writes. It is the same on
 /// every target, so a server built for the host serves the worker its wasm registers.
 pub const SERVICE_WORKER: &str = include_str!("../js/pushups-sw.js");
+
+#[cfg(all(test, feature = "stream"))]
+mod stream_tests {
+    use super::{Event, Token, events};
+    use crate::dispatch::{DISPATCHER, DISPATCHER_TEST_LOCK};
+
+    fn fcm(token: &str) -> Event {
+        Event::Token(Token::Fcm {
+            token: token.to_owned(),
+            keys: None,
+        })
+    }
+
+    /// The stream the app takes keeps the queue for it, receives the events emitted after it,
+    /// and ends when another handler takes its place, as the docs promise.
+    #[test]
+    fn the_stream_yields_the_queue_and_live_events_and_ends_when_replaced() {
+        let _guard = DISPATCHER_TEST_LOCK.lock();
+        DISPATCHER.enqueue(fcm("queued"));
+        let stream = events();
+        DISPATCHER.emit(fcm("live"));
+        let replacer = events();
+        let received: Vec<Event> = futures_executor::block_on_stream(stream).collect();
+        assert_eq!(received, [fcm("queued"), fcm("live")]);
+        DISPATCHER.emit(fcm("after"));
+        let _last = events();
+        let received: Vec<Event> = futures_executor::block_on_stream(replacer).collect();
+        assert_eq!(received, [fcm("after")]);
+    }
+}

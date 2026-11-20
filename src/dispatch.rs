@@ -13,6 +13,19 @@ pub(crate) type Handler = dyn Fn(Event) + Send + Sync;
 /// The dispatcher every platform backend emits into.
 pub(crate) static DISPATCHER: Dispatcher = Dispatcher::new();
 
+/// Serializes the tests that drive the process-wide dispatcher, which they share across threads.
+#[cfg(all(
+    test,
+    any(
+        feature = "stream",
+        target_os = "android",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos"
+    )
+))]
+pub(crate) static DISPATCHER_TEST_LOCK: Mutex<()> = Mutex::new(());
+
 /// Hands events to the current handler one at a time, in the order they were emitted.
 ///
 /// Events wait in the queue until a handler is set. The thread that finds events queued while

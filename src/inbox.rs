@@ -112,11 +112,13 @@ mod tests {
 
     use super::*;
     use crate::Event;
+    use crate::dispatch::DISPATCHER_TEST_LOCK;
 
     /// A headless process whose handler is set queues to the file, and the UI session that then
     /// begins hands the queue to that handler with no later event needed to deliver it.
     #[test]
     fn a_session_beginning_after_a_headless_handler_delivers_the_queue() {
+        let _guard = DISPATCHER_TEST_LOCK.lock();
         let dir = tempfile::tempdir().unwrap();
         let inbox = Mutex::new(Inbox::headless(dir.path().join("queue")));
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -132,6 +134,95 @@ mod tests {
             "a headless process persists its events"
         );
         session_changed(&inbox, true);
+        assert_eq!(
+            *seen.lock(),
+            vec![Event::Token(crate::Token::Fcm {
+                token: "queued".to_owned(),
+                keys: None
+            })]
+        );
+    }
+
+    /// A bound session hands new events to its handler at once, through the dispatcher.
+    #[test]
+    fn a_bound_session_emits_new_events_to_its_handler() {
+        let _guard = DISPATCHER_TEST_LOCK.lock();
+        let dir = tempfile::tempdir().unwrap();
+        let inbox = Mutex::new(Inbox::headless(dir.path().join("queue")));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        DISPATCHER.set_handler(Arc::new(move |event| sink.lock().push(event)));
+        inbox.lock().handler_set();
+        session_changed(&inbox, true);
+        inbox.lock().receive(Entry::FcmToken {
+            token: "live".to_owned(),
+            keys: None,
+        });
+        DISPATCHER.flush();
+        assert_eq!(
+            *seen.lock(),
+            vec![Event::Token(crate::Token::Fcm {
+                token: "live".to_owned(),
+                keys: None
+            })]
+        );
+    }
+
+    /// An event whose queue cannot be written still reaches the handler of this process.
+    #[test]
+    fn an_event_whose_queue_cannot_be_written_reaches_the_handler() {
+        let _guard = DISPATCHER_TEST_LOCK.lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("queue")).unwrap();
+        let inbox = Mutex::new(Inbox::headless(dir.path().join("queue")));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        DISPATCHER.set_handler(Arc::new(move |event| sink.lock().push(event)));
+        inbox.lock().handler_set();
+        inbox.lock().receive(Entry::FcmToken {
+            token: "live".to_owned(),
+            keys: None,
+        });
+        DISPATCHER.flush();
+        assert_eq!(
+            *seen.lock(),
+            vec![Event::Token(crate::Token::Fcm {
+                token: "live".to_owned(),
+                keys: None
+            })]
+        );
+    }
+
+    /// A queue that cannot be read at a drain is not lost. The session goes unread, the entry
+    /// stays on disk, and the handler set next drains it.
+    #[test]
+    fn a_queue_that_cannot_be_read_stays_for_the_next_handler() {
+        let _guard = DISPATCHER_TEST_LOCK.lock();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("queue");
+        let kept = dir.path().join("queue.kept");
+        let inbox = Mutex::new(Inbox::headless(path.clone()));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        DISPATCHER.set_handler(Arc::new(move |event| sink.lock().push(event)));
+        inbox.lock().handler_set();
+        inbox.lock().receive(Entry::FcmToken {
+            token: "queued".to_owned(),
+            keys: None,
+        });
+        assert!(
+            seen.lock().is_empty(),
+            "a headless process persists its events"
+        );
+        // The queue's path becomes a directory, so the drain cannot read it.
+        std::fs::rename(&path, &kept).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        session_changed(&inbox, true);
+        assert!(seen.lock().is_empty(), "an unreadable queue is not drained");
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::rename(&kept, &path).unwrap();
+        inbox.lock().handler_set();
+        DISPATCHER.flush();
         assert_eq!(
             *seen.lock(),
             vec![Event::Token(crate::Token::Fcm {
