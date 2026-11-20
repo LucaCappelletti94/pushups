@@ -26,11 +26,17 @@ object Probe {
     @JvmStatic
     external fun rotateKeys(): String?
 
-    /** Starts `pushups::request_permission` on a thread of its own. */
+    /**
+     * Starts `pushups::request_permission` on a thread of its own. Answers to earlier calls that
+     * arrived and were not taken are dropped, and answers to calls still pending are kept.
+     */
     @JvmStatic
     external fun startPermission()
 
-    /** The answer to [startPermission], `Granted`, `Denied` or `error ...`, or `null` while pending. */
+    /**
+     * The oldest answer to [startPermission] not yet taken, `Granted`, `Denied` or `error ...`,
+     * or `null` while every call is pending.
+     */
     @JvmStatic
     external fun permission(): String?
 
