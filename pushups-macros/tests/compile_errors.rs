@@ -44,7 +44,7 @@ fn check(consumer: &Path, target: &Path, source: &str, json: Option<&str>) -> St
         std::fs::write(consumer.join("google-services.json"), json).expect("the Firebase file");
     }
     let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
-        .args(["check", "--offline", "--quiet"])
+        .args(["check", "--offline", "--quiet", "--color", "never"])
         .current_dir(consumer)
         .env("CARGO_TARGET_DIR", target)
         .output()
