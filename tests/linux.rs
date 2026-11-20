@@ -49,6 +49,8 @@ mod linux {
     const NAME_TAKEN_HEADLESS: &str = "name-taken-headless";
     /// The process that holds the name for [`NAME_TAKEN_HEADLESS`].
     const NAME_OWNER: &str = "name-owner";
+    /// The bus's policy refuses the app its name.
+    const NAME_DENIED: &str = "name-denied";
     /// A push that names a token the app does not know.
     const FOREIGN_TOKEN: &str = "foreign-token";
     /// The system ships the activation file, which `install` must leave alone.
@@ -84,6 +86,7 @@ mod linux {
             NAME_TAKEN,
             QUEUE_HELD,
             NAME_TAKEN_HEADLESS,
+            NAME_DENIED,
             FOREIGN_TOKEN,
             SYSTEM_SERVICE,
             REREGISTER,
@@ -176,10 +179,31 @@ mod linux {
         }
     }
 
-    /// Starts `dbus-daemon` on a private session bus and returns it with its address.
-    fn start_bus() -> (Reaped, String) {
-        let mut daemon = Command::new("dbus-daemon")
-            .args(["--session", "--nofork", "--print-address=1"])
+    /// Starts `dbus-daemon` on a private session bus and returns it with its address. In the
+    /// [`NAME_DENIED`] scenario the bus's policy refuses the app its name, with the configuration
+    /// written in `data`.
+    fn start_bus(scenario: &str, data: &Path) -> (Reaped, String) {
+        let mut command = Command::new("dbus-daemon");
+        if scenario == NAME_DENIED {
+            let config = data.join("bus.conf");
+            std::fs::write(
+                &config,
+                format!(
+                    "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN\" \
+                     \"http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd\">\n\
+                     <busconfig><type>session</type><listen>unix:tmpdir=/tmp</listen>\
+                     <policy context=\"default\">\
+                     <allow send_destination=\"*\" eavesdrop=\"true\"/><allow eavesdrop=\"true\"/>\
+                     <allow own=\"*\"/><deny own=\"{APP_ID}\"/></policy></busconfig>\n"
+                ),
+            )
+            .expect("the bus configuration is written");
+            command.arg(format!("--config-file={}", config.display()));
+        } else {
+            command.arg("--session");
+        }
+        let mut daemon = command
+            .args(["--nofork", "--print-address=1"])
             .stdout(Stdio::piped())
             .spawn()
             .expect("dbus-daemon starts");
@@ -244,7 +268,8 @@ mod linux {
     }
 
     fn run(scenario: &'static str) {
-        let (_daemon, address) = start_bus();
+        let data = tempfile::tempdir().expect("a temporary data directory");
+        let (_daemon, address) = start_bus(scenario, data.path());
         let calls = Arc::new(AtomicUsize::new(0));
         let _distributor = (scenario != NO_DISTRIBUTOR).then(|| {
             zbus::blocking::connection::Builder::address(address.as_str())
@@ -262,7 +287,6 @@ mod linux {
                 .build()
                 .expect("the distributor connects")
         });
-        let data = tempfile::tempdir().expect("a temporary data directory");
         let mark = data.path().join("register-returned");
         let marks = data.path().join("marks");
         std::fs::create_dir_all(&marks).expect("the marks directory is created");
@@ -341,6 +365,9 @@ mod linux {
 
     /// The app side, run in the child process on the private bus.
     fn child(scenario: &str) {
+        if scenario == NAME_DENIED {
+            return name_denied();
+        }
         if scenario == NAME_TAKEN {
             return name_taken();
         }
@@ -504,6 +531,16 @@ mod linux {
                 .as_str(),
             "the other connection still owns the name"
         );
+    }
+
+    /// The bus's policy refuses the app its name, an error other than another owner's, so
+    /// `install` reports the bus's own reason.
+    fn name_denied() {
+        let installed = pushups::install(config());
+        let Err(Error::Platform(reason)) = installed else {
+            panic!("install under a policy that refuses the name gave {installed:?}");
+        };
+        assert!(reason.contains("not allowed to own"), "{reason}");
     }
 
     /// A stale process that keeps the queue's lock, the way a hung one would until it is killed.
