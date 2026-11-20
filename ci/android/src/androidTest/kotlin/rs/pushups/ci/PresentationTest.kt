@@ -215,4 +215,14 @@ class PresentationTest {
         assertEquals(listOf("message started_app=false $data"), lines(Probe.events()).drop(before))
         assertEquals("", Probe.handled())
     }
+
+    @Test
+    fun a07_aShowWithoutABodyOmitsTheBody() {
+        val tag = "tap-nobody"
+        assertNull(Probe.present("pushups no body", null, null, tag, null, null))
+        val notification = waitFor(UI_MS) {
+            notifications.activeNotifications.firstOrNull { it.tag == tag }?.notification
+        } ?: error("the notification $tag did not settle within ${UI_MS / 1000} s")
+        assertNull(notification.extras.getCharSequence(Notification.EXTRA_TEXT))
+    }
 }

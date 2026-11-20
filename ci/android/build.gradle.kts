@@ -29,6 +29,7 @@ project(":pushups") {
             sourceSets.getByName("androidTest") {
                 manifest.srcFile(ci.file("src/androidTest/manifests/$manifestVariant/AndroidManifest.xml"))
                 java.srcDir(ci.dir("src/androidTest/kotlin"))
+                res.srcDir(ci.dir("src/androidTest/res"))
                 jniLibs.srcDir(ci.dir("$harnessBuildDir/jniLibs"))
             }
         }

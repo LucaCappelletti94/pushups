@@ -18,8 +18,9 @@ import org.unifiedpush.android.connector.UnifiedPush
  */
 object Pushups {
 
+    /** The application context, which the provider sets at process start, before any component. */
     @Volatile
-    var context: Context? = null
+    lateinit var context: Context
 
     /**
      * Asks for a token, which arrives through [Native.onRegistered] for FCM or
@@ -28,7 +29,7 @@ object Pushups {
      */
     @JvmStatic
     fun register(vapid: String?) {
-        val appContext = context ?: return
+        val appContext = context
         if (vapid != null) {
             val saved = UnifiedPush.getAckDistributor(appContext) ?: UnifiedPush.getSavedDistributor(appContext)
             if (saved != null) {
@@ -82,7 +83,7 @@ object Pushups {
      */
     @JvmStatic
     fun requestPermission(requestId: Long) {
-        val appContext = context ?: return
+        val appContext = context
         if (Build.VERSION.SDK_INT < 33) {
             invokeNative("onPermissionResult") {
                 Native.onPermissionResult(
@@ -110,7 +111,7 @@ object Pushups {
      */
     @JvmStatic
     fun permissionStatus(): Int {
-        val appContext = context ?: return STATUS_NOT_DETERMINED
+        val appContext = context
         if (Build.VERSION.SDK_INT < 33) {
             return if (enabled(appContext)) STATUS_GRANTED else STATUS_DENIED
         }
@@ -133,7 +134,7 @@ object Pushups {
         icon: String?,
         data: String?,
     ): String? {
-        val appContext = context ?: return "the module has no application context"
+        val appContext = context
         return Presentation.present(appContext, title, body, navigate, tag, icon, data)
     }
 
@@ -143,7 +144,7 @@ object Pushups {
      */
     @JvmStatic
     fun openNotificationSettings(): String? {
-        val appContext = context ?: return "the module has no application context"
+        val appContext = context
         val intent = if (Build.VERSION.SDK_INT >= 26) {
             Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
                 .putExtra(Settings.EXTRA_APP_PACKAGE, appContext.packageName)
@@ -162,7 +163,7 @@ object Pushups {
 
     /** Reports the transport this app's pushes come through, which Rust's key rotation reads. */
     @JvmStatic
-    fun transport(): String = context?.let { Transport.get(it) } ?: Transport.FCM
+    fun transport(): String = Transport.get(context)
 
     private fun enabled(context: Context): Boolean =
         NotificationManagerCompat.from(context).areNotificationsEnabled()

@@ -4,6 +4,10 @@ import android.os.SystemClock
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.BySelector
+import androidx.test.uiautomator.StaleObjectException
+import androidx.test.uiautomator.UiDevice
 import org.junit.Assert.assertTrue
 import java.io.File
 
@@ -30,6 +34,27 @@ fun awaitLine(source: () -> String, needle: String, boundMs: Long = DELIVERY_MS)
 
 /** How long the UI may take to open or close, or a prompt to show. */
 const val UI_MS = 30_000L
+
+/**
+ * Clicks what [selector] finds until [outcome] returns non-null, within [boundMs]. On a slow
+ * device a click can land while the screen redraws and be lost, so it is repeated.
+ */
+fun <T> clickUntil(selector: BySelector, boundMs: Long, outcome: () -> T?): T? =
+    waitFor(boundMs) {
+        outcome() ?: run {
+            try {
+                UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).findObject(selector)?.click()
+            } catch (e: StaleObjectException) {
+                // Found again on the next poll.
+            }
+            null
+        }
+    }
+
+/** Answers the system prompt with the button whose resource id ends in [button], and returns the answer. */
+fun answerPrompt(button: String): String =
+    clickUntil(By.res("com.android.permissioncontroller", button), UI_MS) { Probe.permission() }
+        ?: error("no answer after pressing $button for ${UI_MS / 1000} s")
 
 /**
  * Waits until no Activity of the process lives, which ends the UI session. The session lasts while

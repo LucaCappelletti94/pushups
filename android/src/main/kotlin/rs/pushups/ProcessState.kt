@@ -97,8 +97,8 @@ object ProcessState : Application.ActivityLifecycleCallbacks {
     private fun tapStartedApp(firstActivity: Boolean): Boolean =
         firstActivity && synchronized(lock) { pushesSeen == 0 }
 
-    private fun handleTap(context: Context, intent: Intent?, firstActivity: Boolean) {
-        val extras = intent?.extras ?: return
+    private fun handleTap(context: Context, intent: Intent, firstActivity: Boolean) {
+        val extras = intent.extras ?: return
         val tapId = extras.getString(Presentation.TAP_ID)
         val id = tapId ?: extras.getString(MSG_ID) ?: return
         val data = extras.getByteArray(Presentation.TAP_DATA)
@@ -129,7 +129,6 @@ object ProcessState : Application.ActivityLifecycleCallbacks {
     }
 
     private fun loadDelivered(prefs: SharedPreferences) {
-        if (idsLoaded) return
         synchronized(lock) {
             if (idsLoaded) return
             try {
