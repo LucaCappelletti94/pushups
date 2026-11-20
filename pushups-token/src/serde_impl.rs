@@ -21,10 +21,10 @@ fn milliseconds<E: serde::ser::Error>(time: SystemTime) -> Result<u64, E> {
         .map_err(|_| E::custom("the time overflows u64 milliseconds"))
 }
 
-/// Every `u64` of milliseconds fits `SystemTime` on every supported platform, so this never
-/// fails.
-fn from_milliseconds(milliseconds: u64) -> SystemTime {
-    SystemTime::UNIX_EPOCH + Duration::from_millis(milliseconds)
+fn from_milliseconds<E: serde::de::Error>(milliseconds: u64) -> Result<SystemTime, E> {
+    SystemTime::UNIX_EPOCH
+        .checked_add(Duration::from_millis(milliseconds))
+        .ok_or_else(|| E::custom("the time overflows SystemTime"))
 }
 
 pub(crate) mod bytes {
@@ -82,8 +82,7 @@ pub(crate) mod time {
     pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<SystemTime, D::Error> {
-        let milliseconds: u64 = serde::Deserialize::deserialize(deserializer)?;
-        Ok(super::from_milliseconds(milliseconds))
+        super::from_milliseconds(serde::Deserialize::deserialize(deserializer)?)
     }
 }
 
@@ -108,7 +107,7 @@ pub(crate) mod optional_time {
         deserializer: D,
     ) -> Result<Option<SystemTime>, D::Error> {
         let milliseconds: Option<u64> = serde::Deserialize::deserialize(deserializer)?;
-        Ok(milliseconds.map(super::from_milliseconds))
+        milliseconds.map(super::from_milliseconds).transpose()
     }
 }
 
@@ -242,6 +241,8 @@ mod tests {
         );
     }
 
+    /// Windows' `SystemTime` ends before `u64` milliseconds do, so no such time exists there.
+    #[cfg(not(windows))]
     #[test]
     fn a_time_beyond_u64_milliseconds_does_not_serialise() {
         let token = Token::Wns {
@@ -255,6 +256,29 @@ mod tests {
             error.to_string().contains("overflows u64 milliseconds"),
             "{error}"
         );
+    }
+
+    /// The largest `u64` of milliseconds is past the end of Windows' `SystemTime`.
+    #[cfg(windows)]
+    #[test]
+    fn milliseconds_beyond_system_time_do_not_deserialise() {
+        let tokens = [
+            json!({ "transport": "wns", "channel_uri": "c", "expires": u64::MAX, "keys": null }),
+            json!({
+                "transport": "web_push",
+                "endpoint": "e",
+                "p256dh": P256DH_BASE64URL,
+                "auth": AUTH_BASE64URL,
+                "expires": u64::MAX,
+            }),
+        ];
+        for token in tokens {
+            let error = serde_json::from_value::<Token>(token).unwrap_err();
+            assert!(
+                error.to_string().contains("overflows SystemTime"),
+                "{error}"
+            );
+        }
     }
 
     /// The shape a browser's `PushSubscription.toJSON()` gives, which Web Push servers read.
