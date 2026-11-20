@@ -454,4 +454,23 @@ mod tests {
             Permission::Denied
         );
     }
+
+    // `install` is the only writer of `STATE` and no test runs it, so the state stays unset no
+    // matter which of the parallel tests runs when.
+    #[test]
+    fn a_backend_not_installed_answers_not_configured() {
+        assert_eq!(Apple::register(), Err(Error::NotConfigured));
+        assert_eq!(
+            futures_executor::block_on(Apple::request_permission()),
+            Err(Error::NotConfigured)
+        );
+        assert_eq!(
+            futures_executor::block_on(Apple::permission_status()),
+            Err(Error::NotConfigured)
+        );
+        assert_eq!(
+            Apple::open_notification_settings(),
+            Err(Error::NotConfigured)
+        );
+    }
 }
