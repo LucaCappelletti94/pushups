@@ -85,7 +85,28 @@ fi
 adb uninstall "$package" >/dev/null 2>&1 || true
 python3 "$ci/send.py" "$key" --webpush-sender "$root/ci/linux/probe/target/debug/send" --vapid "$out/vapid.pem" --fcm-sealer "$root/ci/linux/probe/target/debug/seal" &
 sender=$!
-trap 'kill $sender 2>/dev/null || true; adb shell pm enable io.heckel.ntfy >/dev/null 2>&1 || true; adb shell svc power stayon false || true' EXIT
+
+# What the device shows once adb reaches it again after a failed step, on standard error. Its
+# uptime and adbd's age tell a restarted guest or daemon from a dropped connection, and adbd's own
+# lines, the crash buffer and the adb server's log name the side that closed it.
+report() {
+  if timeout 60 adb wait-for-device; then
+    adb shell 'cat /proc/uptime; ps -A -o PID,ETIME,NAME | grep -E " (adbd|system_server)$"' >&2 || true
+    adb logcat -d -v time -s adbd:V init:V | tail -100 >&2 || true
+    adb logcat -d -v time -b crash >&2 || true
+  else
+    echo "adb reaches no device within 60 s of the failure" >&2
+  fi
+  tail -50 "${TMPDIR:-/tmp}/adb.$(id -u).log" >&2 || true
+}
+finish() {
+  local status=$?
+  kill "$sender" 2>/dev/null || true
+  [ "$status" -eq 0 ] || report
+  adb shell pm enable io.heckel.ntfy >/dev/null 2>&1 || true
+  adb shell svc power stayon false || true
+}
+trap finish EXIT
 
 # What the device shows when a step gives no answer: the focused window naming a dialog that
 # waits on a tap, the busiest processes, any install or compile still running, and the system's
