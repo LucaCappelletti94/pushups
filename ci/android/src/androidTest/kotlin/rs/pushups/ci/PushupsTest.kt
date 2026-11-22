@@ -13,8 +13,6 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.By
-import androidx.test.uiautomator.BySelector
-import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import com.google.android.gms.tasks.Tasks
 import com.google.firebase.messaging.FirebaseMessaging
@@ -114,27 +112,6 @@ class PushupsTest {
 
         private fun awaitPermission(): String =
             waitFor(UI_MS) { Probe.permission() } ?: error("no permission answer within ${UI_MS / 1000} s")
-
-        /**
-         * Clicks what [selector] finds until [outcome] returns non-null, within [boundMs]. On a
-         * slow device a click can land while the screen redraws and be lost, so it is repeated.
-         */
-        private fun <T> clickUntil(selector: BySelector, boundMs: Long, outcome: () -> T?): T? =
-            waitFor(boundMs) {
-                outcome() ?: run {
-                    try {
-                        device.findObject(selector)?.click()
-                    } catch (e: StaleObjectException) {
-                        // Found again on the next poll.
-                    }
-                    null
-                }
-            }
-
-        /** Answers the system prompt with the button whose resource id ends in [button], and returns the answer. */
-        private fun answerPrompt(button: String): String =
-            clickUntil(By.res("com.android.permissioncontroller", button), UI_MS) { Probe.permission() }
-                ?: error("no answer after pressing $button for ${UI_MS / 1000} s")
     }
 
     @Test
