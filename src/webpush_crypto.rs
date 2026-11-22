@@ -358,6 +358,24 @@ mod tests {
     }
 
     #[test]
+    fn the_debug_output_shows_the_public_key_and_not_the_secret() {
+        let keys = appendix_keys();
+        let rendered = format!("{keys:?}");
+        assert!(
+            rendered.contains(&format!("{:?}", keys.public_key())),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&format!("{:?}", keys.secret.to_bytes())),
+            "the secret scalar must not print: {rendered}"
+        );
+        assert!(
+            !rendered.contains(&format!("{:?}", keys.auth)),
+            "the auth secret must not print: {rendered}"
+        );
+    }
+
+    #[test]
     fn generated_keys_decrypt_rfc8291_body() {
         let ua = Keys::generate().unwrap();
         let sender = random_secret();
@@ -388,6 +406,10 @@ mod tests {
         let keys = appendix_keys();
         let body = appendix_body();
         assert_eq!(keys.decrypt(&body[..10]), Err(DecryptError::HeaderTooShort));
+        // The salt is there, the record size is cut off.
+        assert_eq!(keys.decrypt(&body[..18]), Err(DecryptError::HeaderTooShort));
+        // The salt and the record size are there, `idlen` is cut off.
+        assert_eq!(keys.decrypt(&body[..20]), Err(DecryptError::HeaderTooShort));
         assert_eq!(
             keys.decrypt(&body[..HEADER_LEN - 1]),
             Err(DecryptError::HeaderTooShort)
@@ -416,6 +438,10 @@ mod tests {
     #[test]
     fn invalid_sender_key_fails() {
         let keys = appendix_keys();
+        let mut body = appendix_body();
+        // A `keyid` that is not an uncompressed point.
+        *body.get_mut(MIN_HEADER_LEN).unwrap() = 0x05;
+        assert_eq!(keys.decrypt(&body), Err(DecryptError::InvalidSenderKey));
         let mut body = appendix_body();
         let mut point = [0u8; KEYID_LEN];
         let (prefix, coordinates) = point.split_first_mut().unwrap();

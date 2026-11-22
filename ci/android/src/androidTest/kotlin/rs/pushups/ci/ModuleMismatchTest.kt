@@ -4,8 +4,12 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.AfterClass
 import org.junit.Assert.assertEquals
+import org.junit.FixMethodOrder
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.junit.runners.MethodSorters
+import rs.pushups.Native
+import java.util.UUID
 
 /**
  * An app whose Kotlin module is another version than its Rust crate, as an AAR of one release
@@ -14,6 +18,7 @@ import org.junit.runner.RunWith
  * `crate`.
  */
 @RunWith(AndroidJUnit4::class)
+@FixMethodOrder(MethodSorters.NAME_ASCENDING)
 class ModuleMismatchTest {
 
     companion object {
@@ -29,5 +34,14 @@ class ModuleMismatchTest {
             "the pushups Android module is version 0.0.0-mismatch, but the app's pushups crate is $crate",
             Probe.install(),
         )
+    }
+
+    @Test
+    fun zPushStillReachesTheHandlerWithoutTheRuntime() {
+        val id = "mismatch-${UUID.randomUUID()}"
+        Probe.setHandler()
+        // The handshake established no runtime, so the push goes straight to the dispatcher.
+        Native.onMessage(id.toByteArray(Charsets.UTF_8), false)
+        assertEquals("message started_app=false $id", awaitLine(Probe::events, id, UI_MS))
     }
 }

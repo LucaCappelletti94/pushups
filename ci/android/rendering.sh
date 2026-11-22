@@ -62,6 +62,10 @@ run presentation PresentationRefusalsTest refusals-with-launcher
 run presentation PresentationTest presentation
 run presentation HeadlessPresentationTest headless
 run default ContextTest context
+# The tap's delivered-ids history, seeded full, so a new process reads and trims it.
+run default TapHistoryTest tap-history
+# An app icon the presentation uses as the small icon.
+run presentation-icon IconTest icon
 
 tools=$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin
 "$tools/llvm-profdata" merge -sparse "$out"/*.profraw -o "$out/pushups.profdata"

@@ -57,4 +57,10 @@ mod tests {
             Err(Error::Unsupported)
         );
     }
+
+    #[cfg(feature = "encryption")]
+    #[test]
+    fn a_target_without_a_backend_refuses_key_rotation() {
+        assert_eq!(Unsupported::rotate_keys(), Err(Error::Unsupported));
+    }
 }

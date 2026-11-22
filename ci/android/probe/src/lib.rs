@@ -40,6 +40,9 @@ unsafe extern "C" {
 #[cfg(feature = "background-handler")]
 #[pushups::background_handler]
 fn on_push(context: pushups::Context<'_>, message: Message) {
+    if let Some(id) = fixture_id(&message.payload, "panic-bg") {
+        panic!("the background handler panics on {id}");
+    }
     HANDLED.lock().push(describe_message(&message));
     if let Some(notification) = fixture_notification(&message.payload) {
         // Exercise `JavaVM` attachment without capturing the callback's `Context`.
@@ -64,6 +67,9 @@ fn on_render(
     _context: pushups::RenderingContext,
     message: Message,
 ) -> Result<pushups::Rendering, pushups::Error> {
+    if let Some(id) = fixture_id(&message.payload, "panic-render") {
+        panic!("the rendering handler panics on {id}");
+    }
     RENDERED.lock().push(describe_message(&message));
     Ok(rendering_notification(&message.payload).into())
 }
@@ -311,6 +317,19 @@ pushups::__private::android::exports! {
             *PERMISSION.lock() = Some(answer);
         });
         Ok(())
+    }
+
+    /// `Probe.requestPermissionNow()`: the answer of `pushups::request_permission`, asked on
+    /// the calling thread: `Granted`, `Denied` or `error ...`.
+    fn Java_rs_pushups_ci_Probe_requestPermissionNow<'local>(
+        env: JNIEnv<'local>,
+        _class: JClass<'local>,
+    ) -> jstring {
+        let answer = match futures_executor::block_on(pushups::request_permission()) {
+            Ok(permission) => format!("{permission:?}"),
+            Err(error) => format!("error {error}"),
+        };
+        java_string(env, Some(answer))
     }
 
     /// `Probe.permission()`: the answer to `startPermission`, or `null` while it is pending.

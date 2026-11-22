@@ -85,7 +85,28 @@ fi
 adb uninstall "$package" >/dev/null 2>&1 || true
 python3 "$ci/send.py" "$key" --webpush-sender "$root/ci/linux/probe/target/debug/send" --vapid "$out/vapid.pem" --fcm-sealer "$root/ci/linux/probe/target/debug/seal" &
 sender=$!
-trap 'kill $sender 2>/dev/null || true; adb shell pm enable io.heckel.ntfy >/dev/null 2>&1 || true; adb shell svc power stayon false || true' EXIT
+
+# What the device shows once adb reaches it again after a failed step, on standard error. Its
+# uptime and adbd's age tell a restarted guest or daemon from a dropped connection, and adbd's own
+# lines, the crash buffer and the adb server's log name the side that closed it.
+report() {
+  if timeout 60 adb wait-for-device; then
+    adb shell 'cat /proc/uptime; ps -A -o PID,ETIME,NAME | grep -E " (adbd|system_server)$"' >&2 || true
+    adb logcat -d -v time -s adbd:V init:V | tail -100 >&2 || true
+    adb logcat -d -v time -b crash >&2 || true
+  else
+    echo "adb reaches no device within 60 s of the failure" >&2
+  fi
+  tail -50 "${TMPDIR:-/tmp}/adb.$(id -u).log" >&2 || true
+}
+finish() {
+  local status=$?
+  kill "$sender" 2>/dev/null || true
+  [ "$status" -eq 0 ] || report
+  adb shell pm enable io.heckel.ntfy >/dev/null 2>&1 || true
+  adb shell svc power stayon false || true
+}
+trap finish EXIT
 
 # What the device shows when a step gives no answer: the focused window naming a dialog that
 # waits on a tap, the busiest processes, any install or compile still running, and the system's
@@ -156,6 +177,10 @@ run_variant jni-session "" default PanicBoundaryTest panicCase session
 # The generated export's failure policy, in a fresh install.
 run_variant jni-boundary "config-real" default NativeBoundaryTest
 run_variant full "config-real background-handler" default PushupsTest
+# The prompt Activity's edge results, in a fresh process where each request starts ungranted.
+run_variant prompt-result "config-real background-handler" default PromptResultTest
+# The request's own refusal when the manifest lacks the module's permission Activity.
+run_variant permission-activity-missing "config-real background-handler" permission-activity-missing PermissionActivityMissingTest
 run_variant fallback-name config-real fallback-name FallbackNameTest
 run_variant no-background-handler config-real default NoBackgroundHandlerTest
 # The rendering handler presents through the launcher activity, which only the presentation manifest declares.
@@ -180,6 +205,19 @@ run_variant open-settings "" default NotificationSettingsTest
 run_variant module-mismatch config-real module-mismatch ModuleMismatchTest crate "$("$ci/../crate-version.sh")"
 # A library without the handshake, as one built with a crate older than the module.
 run_variant no-handshake config-real no-handshake LibraryWithoutPushupsTest
+# The probe's handlers panic on their marker payloads, and the other handler and the queue keep going.
+run_variant handler-panic "config-real background-handler rendering-handler" presentation HandlerPanicTest
+# The distributor chooser reached by a stale or refused intent. The refusal needs no distributor
+# usable at the moment, so the one run.sh installed stays disabled while it runs.
+if $unified_push; then
+  adb shell pm disable-user --user 0 io.heckel.ntfy >/dev/null
+fi
+run_variant distributor-refusal "config-real background-handler" default DistributorRefusalTest vapid "$vapid_b64url"
+if $unified_push; then
+  adb shell pm enable io.heckel.ntfy >/dev/null
+fi
+# Key rotation on a UnifiedPush transport, which keeps the trait's refusal since the distributor owns the keys.
+run_variant rotate-refused "config-real encryption background-handler" default RotateRefusedTest
 
 # Rust: every variant's profile against its own library, kept to the crate's own sources, with
 # paths relative to the repository.

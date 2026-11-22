@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application>
+        <!-- The library PushupsProvider loads, as an app names its own. -->
+        <meta-data
+            android:name="pushups.lib_name"
+            android:value="pushups_probe" />
+
+        <!-- The module's permission Activity, removed so the request's own answer is the missing one. -->
+        <activity
+            android:name="rs.pushups.PermissionActivity"
+            tools:node="remove" />
+
+        <!-- Opened by a tap on a notification whose click_action is rs.pushups.ci.TAP. -->
+        <activity
+            android:name="rs.pushups.ci.TapActivity"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="rs.pushups.ci.TAP" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- Takes the package out of the stopped state `am instrument` leaves it in. -->
+        <receiver
+            android:name="rs.pushups.ci.UnstoppedReceiver"
+            android:exported="false" />
+    </application>
+</manifest>

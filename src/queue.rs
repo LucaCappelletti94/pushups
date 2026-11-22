@@ -563,6 +563,16 @@ mod tests {
     }
 
     #[test]
+    fn a_message_with_an_unknown_started_app_byte_ends_the_readable_part() {
+        let mut bytes = encoded(&[Entry::MessagesDropped]);
+        bytes.push(MESSAGE);
+        bytes.push(2); // The `started_app` byte is neither 0 nor 1.
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(b"abc");
+        assert_eq!(decode(&bytes), [Entry::MessagesDropped]);
+    }
+
+    #[test]
     fn a_token_that_is_not_utf8_ends_the_readable_part() {
         let mut bytes = encoded(&[Entry::MessagesDropped]);
         fcm_token("xx", None).encode(&mut bytes).unwrap();
@@ -681,6 +691,31 @@ mod tests {
                 "cut at {cut}"
             );
         }
+    }
+
+    #[test]
+    fn a_queue_path_occupied_by_a_directory_is_an_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue");
+        std::fs::create_dir(&path).unwrap();
+        let queue = QueueFile::new(path);
+        let error = queue.append(&Entry::MessagesDropped).unwrap_err();
+        assert!(
+            error.kind() != io::ErrorKind::NotFound,
+            "the directory is not an absent queue: {error}"
+        );
+    }
+
+    #[test]
+    fn a_queue_replaced_by_a_directory_after_claim_is_an_error_on_take() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue");
+        let queue = QueueFile::new(path.clone());
+        queue.append(&Entry::MessagesDropped).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let error = queue.take_all().unwrap_err();
+        assert!(error.kind() != io::ErrorKind::NotFound, "{error}");
     }
 
     #[cfg(unix)]
