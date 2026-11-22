@@ -77,9 +77,13 @@ object Pushups {
         }
     }
 
+    /** The ids of the requests waiting on the prompt up, which all get its answer. */
+    private val waiting = mutableListOf<Long>()
+
     /**
      * Requests `POST_NOTIFICATIONS`. The answer arrives through [Native.onPermissionResult]
-     * with the same [requestId].
+     * with the same [requestId]. A request made while a prompt is up waits on that prompt,
+     * since the system shows one at a time.
      */
     @JvmStatic
     fun requestPermission(requestId: Long) {
@@ -99,10 +103,31 @@ object Pushups {
             invokeNative("onPermissionResult") { Native.onPermissionResult(requestId, true) }
             return
         }
-        val intent = Intent(appContext, PermissionActivity::class.java)
-        intent.putExtra(PermissionActivity.EXTRA_REQUEST_ID, requestId)
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        appContext.startActivity(intent)
+        // The lock spans the start, so a request made meanwhile either joins a prompt that
+        // started or, when the start failed, starts its own.
+        synchronized(waiting) {
+            waiting.add(requestId)
+            if (waiting.size > 1) return
+            // The request id as data makes each prompt's intent distinct, so a task an earlier
+            // prompt left behind, its system prompt still up, never absorbs this one.
+            val intent = Intent(appContext, PermissionActivity::class.java)
+                .setData(Uri.fromParts("pushups-permission", requestId.toString(), null))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                appContext.startActivity(intent)
+            } catch (error: RuntimeException) {
+                waiting.remove(requestId)
+                throw error
+            }
+        }
+    }
+
+    /** Hands the prompt's answer to every request waiting on it. */
+    internal fun answerWaiting(granted: Boolean) {
+        val ids = synchronized(waiting) { waiting.toList().also { waiting.clear() } }
+        for (id in ids) {
+            invokeNative("onPermissionResult") { Native.onPermissionResult(id, granted) }
+        }
     }
 
     /**
