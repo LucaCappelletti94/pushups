@@ -15,6 +15,8 @@ ci=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$ci/../.." && pwd)
 # shellcheck source=ci/vapid.sh
 . "$ci/../vapid.sh"
+# shellcheck source=ci/android/adb.sh
+. "$ci/adb.sh"
 build=$ci/build
 out=$build/runs
 package=rs.pushups.example
@@ -164,10 +166,13 @@ run_variant() {
     -e coverage true -e coverageFile "$files/jacoco.ec" "$package/androidx.test.runner.AndroidJUnitRunner" \
     | tee "$out/$variant.txt" || true
   # The device's side of a failure, which the runner's report does not show, by tag, since system lines naming the package and UiDevice's polls for a title would fill the tail.
-  grep -q '^OK (' "$out/$variant.txt" || adb logcat -d -v time -s pushups:V FirebaseMessaging:V FirebaseApp:V \
-    NotificationService:V ActivityManager:V ActivityTaskManager:V AndroidRuntime:V TestRunner:V | tail -300
-  bounded 120 adb exec-out run-as "$package" cat files/pushups.profraw > "$out/$variant.profraw"
-  bounded 120 adb exec-out run-as "$package" cat files/jacoco.ec > "$out/$variant.ec"
+  if ! grep -q '^OK (' "$out/$variant.txt"; then
+    reconnecting "$out/$variant.logcat" adb logcat -d -v time -s pushups:V FirebaseMessaging:V FirebaseApp:V \
+      NotificationService:V ActivityManager:V ActivityTaskManager:V AndroidRuntime:V TestRunner:V
+    tail -300 "$out/$variant.logcat"
+  fi
+  reconnecting "$out/$variant.profraw" bounded 120 adb exec-out run-as "$package" cat files/pushups.profraw
+  reconnecting "$out/$variant.ec" bounded 120 adb exec-out run-as "$package" cat files/jacoco.ec
 }
 
 run_variant jni-registered "" default PanicBoundaryTest panicCase registered

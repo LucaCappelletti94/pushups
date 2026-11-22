@@ -6,6 +6,8 @@ abi=$1
 report=${2:-rendering}
 ci=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$ci/../.." && pwd)
+# shellcheck source=ci/android/adb.sh
+. "$ci/adb.sh"
 build=$ci/build-rendering
 out=$build/runs
 package=rs.pushups.example
@@ -49,11 +51,12 @@ run() {
   grep -q '^OK (' "$out/$name.txt" || {
     echo "rendering: $class failed" >&2
     # Native failures can bypass the instrumentation report.
-    adb logcat -d -v time -s pushups:V FirebaseApp:V AndroidRuntime:V TestRunner:V | tail -30 >&2
+    reconnecting "$out/$name.logcat" adb logcat -d -v time -s pushups:V FirebaseApp:V AndroidRuntime:V TestRunner:V
+    tail -30 "$out/$name.logcat" >&2
     exit 1
   }
-  adb exec-out run-as "$package" cat files/pushups.profraw > "$out/$name.profraw"
-  adb exec-out run-as "$package" cat files/jacoco.ec > "$out/$name.ec"
+  reconnecting "$out/$name.profraw" adb exec-out run-as "$package" cat files/pushups.profraw
+  reconnecting "$out/$name.ec" adb exec-out run-as "$package" cat files/jacoco.ec
 }
 
 # Fresh processes isolate first-launch attribution and disabled-channel settings.
